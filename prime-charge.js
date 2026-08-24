@@ -84,8 +84,11 @@
   tryP=async function(){
     if(busy||done)return;if(!prime(n))return baseTryP();factorInput.blur();busy=1;D.innerHTML='';msg('PRIME!','y');
     const{w,h}=sz(),k=n,layout=primeLayout(k,w,h),total=k<=30?Math.min(1500,330+45*k):Math.min(2400,650+k*2.1),tt=sequenceTimes(k,total),tail=Math.min(k<=5?1:k<=12?2:k<=30?3:5,k-1),t0=performance.now();
+    const batch=k>180?Math.ceil(Math.max(1,k-tail)/180):1;
     for(let i=0;i<k;i++){
-      const dt=tt[i]-(performance.now()-t0);if(dt>0)await sl(dt);const d=dots[i];setPrimeDotSize(d,layout.z);pos(d,layout.p[i][0],layout.p[i][1],1);
+      const shouldWait=i>=k-tail||i%batch===0;
+      if(shouldWait){const dt=tt[i]-(performance.now()-t0);if(dt>0)await sl(dt)}
+      const d=dots[i];setPrimeDotSize(d,layout.z);pos(d,layout.p[i][0],layout.p[i][1],1);
       if(k<=140||i>=k-tail||i%Math.max(2,Math.ceil(k/80))===0)d.el.animate([{filter:'brightness(1)'},{filter:'brightness(2.15)'},{filter:'brightness(1.12)'}],{duration:190});
       if(k<=12||i>=k-4||i%Math.max(2,Math.ceil(k/14))===0)primeTone(i,k)
     }
