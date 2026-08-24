@@ -16,8 +16,8 @@
       if(rows>maxRows)continue;
       if(f.length===2&&f[0]===f[1]){if(smallest>=11)p.square.push(x);continue}
       if(f.length===2){if(smallest>=(which==='expert'?11:13))p.semiprime.push(x);continue}
-      p.multi.push(x);
-      if(smallest<=7&&f[f.length-1]>=11)p.small.push(x)
+      const isSmall=smallest<=7&&f[f.length-1]>=11;
+      p[isSmall?'small':'multi'].push(x)
     }
     return p
   }
