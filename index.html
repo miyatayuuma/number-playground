@@ -105,18 +105,18 @@
     if($('#prime').classList.contains('active')&&!locked){for(const d of primeDots){if(d.locked)continue;d.phase+=dt*.0014;d.vx+=Math.cos(d.phase)*.0009;d.vy+=Math.sin(d.phase*1.17)*.0009;const sp=Math.hypot(d.vx,d.vy)||1,max=.085;if(sp>max){d.vx=d.vx/sp*max;d.vy=d.vy/sp*max}d.x+=d.vx*dt;d.y+=d.vy*dt;if(d.x<8){d.x=8;d.vx=Math.abs(d.vx)}if(d.x>w-21){d.x=w-21;d.vx=-Math.abs(d.vx)}if(d.y<8){d.y=8;d.vy=Math.abs(d.vy)}if(d.y>h-21){d.y=h-21;d.vy=-Math.abs(d.vy)}d.el.style.transform=`translate3d(${d.x}px,${d.y}px,0)`}}
     animId=requestAnimationFrame(animatePrime)
   }
-  function alignOne(){if(locked||hintCount>=target)return;const pts=targetPositions(),d=primeDots[hintCount];d.locked=true;setDotXY(d,pts[hintCount][0],pts[hintCount][1],true);hintCount++;updatePrimeMeter();if(hintCount===target)finishAlignment()}
-  function alignAll(){while(hintCount<target)alignOne()}
+  function alignOne(force=false){if((locked&&!force)||hintCount>=target)return;const pts=targetPositions(),d=primeDots[hintCount];d.locked=true;setDotXY(d,pts[hintCount][0],pts[hintCount][1],true);hintCount++;updatePrimeMeter();if(hintCount===target)finishAlignment()}
+  function alignAll(){while(hintCount<target)alignOne(true)}
   function finishAlignment(){
-    if(isPrime(target)){setTimeout(()=>{if(hintCount!==target)return;burstMode=true;const pts=circlePositions(),ripple=$('#primeRipple'),rect=cloud.getBoundingClientRect();ripple.style.left=(rect.width/2)+'px';ripple.style.top=(rect.height/2)+'px';ripple.classList.remove('go');void ripple.offsetWidth;ripple.classList.add('go');primeDots.forEach((d,i)=>{d.el.classList.remove('settling');d.el.classList.add('bursting');d.el.animate([{transform:d.el.style.transform,filter:'brightness(1)'},{transform:d.el.style.transform,filter:'brightness(1.8)'},{filter:'brightness(1)'}],{duration:620,easing:'ease-out'});d.x=pts[i][0];d.y=pts[i][1];d.el.style.transform=`translate3d(${d.x}px,${d.y}px,0)`});$('#factorLine').textContent=`${target}個は1列にしかならない → 素数`},380)}else{const pair=closestPair(target);if(pair)$('#factorLine').textContent=`${pair[0]} × ${pair[1]} の長方形になった → 合成数`}
+    if(isPrime(target)){setTimeout(()=>{if(hintCount!==target)return;burstMode=true;const pts=circlePositions(),ripple=$('#primeRipple'),rect=cloud.getBoundingClientRect();ripple.style.left=(rect.width/2)+'px';ripple.style.top=(rect.height/2)+'px';ripple.classList.remove('go');void ripple.offsetWidth;ripple.classList.add('go');primeDots.forEach((d,i)=>{d.el.classList.remove('settling');d.el.classList.add('bursting');d.el.animate([{filter:'brightness(1)'},{filter:'brightness(1.9)'},{filter:'brightness(1)'}],{duration:620,easing:'ease-out'});d.x=pts[i][0];d.y=pts[i][1];d.el.style.transform=`translate3d(${d.x}px,${d.y}px,0)`});$('#factorLine').textContent=`${target}個は1列にしかならない → 素数`},380)}else{const pair=closestPair(target);if(pair)$('#factorLine').textContent=`${pair[0]} × ${pair[1]} の長方形になった → 合成数`}
   }
   function newPrime(){
     target=2+Math.floor(Math.random()*78);locked=false;hintCount=0;swipeCarry=0;pointerDown=false;$('#primeNumber').textContent=target;$('#feedback').textContent='';$('#feedback').className='feedback';$('#factorLine').textContent='動く点を観察。迷ったら枠内をスワイプ。';$('#nextPrime').hidden=true;$$('.answer').forEach(b=>b.disabled=false);cloud.classList.remove('done','has-hint','dragging');updatePrimeMeter();requestAnimationFrame(createPrimeDots)
   }
   function awardAnswer(btn){
-    if(locked)return;locked=true;const prime=isPrime(target),guessed=btn.dataset.answer==='prime',ok=prime===guessed,earned=potentialPoints();
+    if(locked)return;const prime=isPrime(target),guessed=btn.dataset.answer==='prime',ok=prime===guessed,earned=potentialPoints();locked=true;
     if(ok){streak++;score+=earned;$('#feedback').textContent=`正解 ＋${earned}点`;$('#feedback').className='feedback good'}else{streak=0;$('#feedback').textContent='ちがう';$('#feedback').className='feedback bad'}
-    $('#score').textContent=score;$('#streak').textContent=streak;$$('.answer').forEach(b=>b.disabled=true);alignAll();const pair=closestPair(target);if(!prime&&pair)$('#factorLine').textContent=`${pair[0]} × ${pair[1]} に並べられる → 合成数`;if(prime&&hintCount===target&&!burstMode)finishAlignment();$('#nextPrime').hidden=false
+    $('#score').textContent=score;$('#streak').textContent=streak;$$('.answer').forEach(b=>b.disabled=true);alignAll();const pair=closestPair(target);if(!prime&&pair)$('#factorLine').textContent=`${pair[0]} × ${pair[1]} に並べられる → 合成数`;$('#nextPrime').hidden=false
   }
   $$('.answer').forEach(btn=>btn.onclick=()=>awardAnswer(btn));$('#nextPrime').onclick=newPrime;
 
