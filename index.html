@@ -7,128 +7,126 @@
   <title>Number Playground</title>
   <style>
     :root{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#f6f7fb;background:#111318;--panel:#1a1d24;--panel2:#222630;--muted:#9ea7b8;--line:#303644;--accent:#7dd3fc;--accent2:#c4b5fd;--good:#86efac;--bad:#fca5a5}
-    *{box-sizing:border-box} body{margin:0;min-height:100vh;background:radial-gradient(circle at 20% 0%,#20283a 0,transparent 34%),#111318;color:#f6f7fb}
-    button,input{font:inherit} button{border:0;color:inherit;cursor:pointer;touch-action:manipulation}
-    .app{width:min(100%,980px);margin:0 auto;padding:20px 16px 42px}
-    header{display:flex;align-items:end;justify-content:space-between;gap:16px;margin-bottom:18px}
-    h1{font-size:clamp(24px,4vw,38px);letter-spacing:-.03em;margin:0}.sub{color:var(--muted);font-size:13px;margin-top:5px}
-    .tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;position:sticky;top:8px;z-index:5;background:#111318cc;backdrop-filter:blur(12px);padding:8px;border:1px solid #222733;border-radius:18px;margin-bottom:14px}
-    .tab{padding:11px 8px;border-radius:12px;background:transparent;color:var(--muted);font-weight:800}.tab.active{background:#f6f7fb;color:#111318}
-    .panel{display:none;background:linear-gradient(180deg,#1b1e26,#171a21);border:1px solid #2a2f3b;border-radius:24px;padding:18px;box-shadow:0 16px 50px #0004}.panel.active{display:block}
-    .topline{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.title{font-size:18px;font-weight:900}.hint{font-size:12px;color:var(--muted)}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 20% 0%,#20283a 0,transparent 34%),#111318;color:#f6f7fb}button,input{font:inherit}button{border:0;color:inherit;cursor:pointer;touch-action:manipulation}
+    .app{width:min(100%,980px);margin:0 auto;padding:20px 16px 42px}header{display:flex;align-items:end;justify-content:space-between;gap:16px;margin-bottom:18px}h1{font-size:clamp(24px,4vw,38px);letter-spacing:-.03em;margin:0}.sub{color:var(--muted);font-size:13px;margin-top:5px}
+    .tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;position:sticky;top:8px;z-index:5;background:#111318cc;backdrop-filter:blur(12px);padding:8px;border:1px solid #222733;border-radius:18px;margin-bottom:14px}.tab{padding:11px 8px;border-radius:12px;background:transparent;color:var(--muted);font-weight:800}.tab.active{background:#f6f7fb;color:#111318}
+    .panel{display:none;background:linear-gradient(180deg,#1b1e26,#171a21);border:1px solid #2a2f3b;border-radius:24px;padding:18px;box-shadow:0 16px 50px #0004}.panel.active{display:block}.topline{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.title{font-size:18px;font-weight:900}.hint{font-size:12px;color:var(--muted)}
     .controlrow{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:15px 0}.pill,.opbtn,.answer{background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:10px 14px;font-weight:800}.pill.active,.opbtn.active{background:#f6f7fb;color:#111318}.pill.primary{background:#dff7ff;color:#10202a;border-color:#dff7ff}.pill.danger{color:#ffcdcd}
     .big-number{font-size:clamp(44px,10vw,86px);font-weight:950;line-height:1;letter-spacing:-.06em;margin:16px 0 3px}.radix{font-variant-numeric:tabular-nums;color:var(--accent);font-weight:900;font-size:20px}.equation{font-size:clamp(26px,6vw,48px);font-weight:950;letter-spacing:-.04em;margin:16px 0}
     .basebar{display:flex;gap:7px;overflow-x:auto;padding:2px 0 8px;scrollbar-width:none}.basebar::-webkit-scrollbar{display:none}.basebtn{min-width:46px;height:46px;border-radius:13px;background:var(--panel2);border:1px solid var(--line);font-weight:900}.basebtn.active{background:var(--accent);color:#0e2029;border-color:var(--accent)}
     .place-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-top:14px}.place{min-height:132px;border-radius:18px;background:#13161c;border:1px solid #292e39;padding:12px;display:flex;flex-direction:column}.place-label{font-size:12px;color:var(--muted);font-weight:800}.place-value{font-size:28px;font-weight:950;margin:4px 0 10px}.tokens{display:flex;flex-wrap:wrap;gap:7px;align-content:flex-start}.token{width:28px;height:28px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px #7dd3fc18}.token.bundle{border-radius:8px;background:var(--accent2);position:relative}.token.bundle::after{content:"";position:absolute;inset:6px;border:1px solid #1116;border-radius:4px}.token.super{background:#fde68a;border-radius:6px;transform:rotate(45deg)}
-    .rawtray{margin-top:12px;padding:14px;min-height:92px;border-radius:18px;background:#101219;border:1px dashed #3a4251;display:flex;flex-wrap:wrap;gap:6px;align-content:flex-start}.dot{width:12px;height:12px;border-radius:50%;background:#e5e7eb;animation:pop .18s ease-out}.dot.dim{opacity:.2}.dot.cut{background:var(--bad);position:relative}.dot.cut::after{content:"";position:absolute;width:16px;height:2px;background:#111;left:-2px;top:5px;transform:rotate(-35deg)}
-    @keyframes pop{from{transform:scale(.4);opacity:.2}to{transform:scale(1);opacity:1}}
-    .math-grid{display:grid;grid-template-columns:repeat(var(--cols,4),18px);gap:7px;justify-content:center;align-content:center;min-height:220px;padding:22px;border-radius:20px;background:#101219;border:1px solid #292e39;overflow:auto}.math-grid .dot{width:18px;height:18px}.groups{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;min-height:220px;align-items:center;padding:14px}.group{padding:11px;border:1px solid #394152;border-radius:16px;display:grid;grid-template-columns:repeat(var(--qcols,4),14px);gap:6px}.group .dot{width:14px;height:14px}
-    .stepper{display:flex;align-items:center;gap:8px}.stepper button{width:42px;height:42px;border-radius:50%;background:var(--panel2);border:1px solid var(--line);font-size:20px}.stepper strong{min-width:36px;text-align:center;font-size:20px}
-    .prime-head{display:flex;justify-content:space-between;gap:12px;align-items:center}.score{font-weight:900;color:#fde68a}.prime-number{text-align:center;font-size:clamp(70px,18vw,140px);font-weight:950;line-height:1;margin:20px 0 10px}.prime-cloud{position:relative;height:260px;border-radius:22px;background:#101219;border:1px solid #292e39;overflow:hidden}.prime-cloud .p-dot{position:absolute;width:14px;height:14px;border-radius:50%;background:#f6f7fb;transition:left .55s cubic-bezier(.2,.8,.2,1),top .55s cubic-bezier(.2,.8,.2,1),background .25s}.answers{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.answer{border-radius:16px;padding:16px;font-size:18px}.answer.prime{background:#dff7ff;color:#10202a}.answer.comp{background:#ede9fe;color:#23173d}.feedback{min-height:48px;margin-top:12px;font-weight:850;text-align:center;font-size:17px}.feedback.good{color:var(--good)}.feedback.bad{color:var(--bad)}
-    .factor-line{text-align:center;color:var(--muted);font-size:14px;min-height:22px}.next{display:block;margin:10px auto 0;background:#f6f7fb;color:#111318;border-radius:999px;padding:12px 18px;font-weight:900}
+    .rawtray{margin-top:12px;padding:14px;min-height:92px;border-radius:18px;background:#101219;border:1px dashed #3a4251;display:flex;flex-wrap:wrap;gap:6px;align-content:flex-start}.dot{width:12px;height:12px;border-radius:50%;background:#e5e7eb;animation:pop .18s ease-out}.dot.cut{background:var(--bad);position:relative}.dot.cut::after{content:"";position:absolute;width:16px;height:2px;background:#111;left:-2px;top:5px;transform:rotate(-35deg)}@keyframes pop{from{transform:scale(.4);opacity:.2}to{transform:scale(1);opacity:1}}
+    .math-grid{display:grid;grid-template-columns:repeat(var(--cols,4),18px);gap:7px;justify-content:center;align-content:center;min-height:220px;padding:22px;border-radius:20px;background:#101219;border:1px solid #292e39;overflow:auto}.math-grid .dot{width:18px;height:18px}.groups{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;min-height:220px;align-items:center;padding:14px}.group{padding:11px;border:1px solid #394152;border-radius:16px;display:grid;grid-template-columns:repeat(var(--qcols,4),14px);gap:6px}.group .dot{width:14px;height:14px}.stepper{display:flex;align-items:center;gap:8px}.stepper button{width:42px;height:42px;border-radius:50%;background:var(--panel2);border:1px solid var(--line);font-size:20px}.stepper strong{min-width:36px;text-align:center;font-size:20px}
+
+    .prime-head{display:flex;justify-content:space-between;gap:12px;align-items:center}.score{font-weight:900;color:#fde68a;font-variant-numeric:tabular-nums}.prime-number{text-align:center;font-size:clamp(70px,18vw,140px);font-weight:950;line-height:1;margin:20px 0 8px}.factor-line{text-align:center;color:var(--muted);font-size:14px;min-height:22px;margin-bottom:9px}
+    .prime-cloud{position:relative;height:290px;border-radius:22px;background:radial-gradient(circle at 50% 50%,#18202b 0,#101219 66%);border:1px solid #303746;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none;cursor:grab}.prime-cloud.dragging{cursor:grabbing}.prime-cloud::before{content:"SWIPE TO ALIGN";position:absolute;left:50%;bottom:12px;transform:translateX(-50%);z-index:1;font-size:10px;font-weight:900;letter-spacing:.15em;color:#8290a6;pointer-events:none;transition:opacity .25s}.prime-cloud.has-hint::before{opacity:.28}.prime-cloud.done::before{opacity:0}
+    .prime-cloud .p-dot{position:absolute;left:0;top:0;width:13px;height:13px;border-radius:50%;will-change:transform;box-shadow:0 0 11px color-mix(in srgb,currentColor 60%,transparent);pointer-events:none}.prime-cloud .p-dot.settling{transition:transform .42s cubic-bezier(.18,.78,.22,1),width .35s,height .35s,box-shadow .35s}.prime-cloud .p-dot.bursting{transition:transform .72s cubic-bezier(.16,1.38,.34,1),width .5s,height .5s,box-shadow .5s}
+    .prime-ripple{position:absolute;width:18px;height:18px;border:2px solid #fff8;border-radius:50%;pointer-events:none;transform:translate(-50%,-50%) scale(.2);opacity:0}.prime-ripple.go{animation:ripple .72s ease-out}@keyframes ripple{0%{opacity:.85;transform:translate(-50%,-50%) scale(.2)}100%{opacity:0;transform:translate(-50%,-50%) scale(13)}}
+    .prime-meter{display:grid;grid-template-columns:auto 1fr auto;gap:9px;align-items:center;margin:10px 2px 2px;color:var(--muted);font-size:12px;font-weight:800}.meter-track{height:6px;border-radius:99px;background:#2a303c;overflow:hidden}.meter-fill{display:block;height:100%;width:0;background:linear-gradient(90deg,#67e8f9,#a78bfa,#fb7185);border-radius:inherit;transition:width .16s}.potential{color:#f6f7fb;font-variant-numeric:tabular-nums;min-width:48px;text-align:right}.answers{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.answer{border-radius:16px;padding:16px;font-size:18px}.answer.prime{background:#dff7ff;color:#10202a}.answer.comp{background:#ede9fe;color:#23173d}.answer:disabled{opacity:.45;cursor:default}.feedback{min-height:48px;margin-top:12px;font-weight:850;text-align:center;font-size:17px}.feedback.good{color:var(--good)}.feedback.bad{color:var(--bad)}.next{display:block;margin:10px auto 0;background:#f6f7fb;color:#111318;border-radius:999px;padding:12px 18px;font-weight:900}
     .footer-note{text-align:center;color:#778195;font-size:11px;margin-top:15px}
-    @media(max-width:620px){.app{padding:14px 11px 34px}header{align-items:start}.panel{padding:14px;border-radius:20px}.tabs{top:4px}.place-grid{grid-template-columns:repeat(3,1fr)}.place{min-height:112px;padding:9px}.place-value{font-size:23px}.token{width:22px;height:22px}.math-grid{min-height:190px}.prime-cloud{height:230px}}
+    @media(max-width:620px){.app{padding:14px 11px 34px}header{align-items:start}.panel{padding:14px;border-radius:20px}.tabs{top:4px}.place-grid{grid-template-columns:repeat(3,1fr)}.place{min-height:112px;padding:9px}.place-value{font-size:23px}.token{width:22px;height:22px}.math-grid{min-height:190px}.prime-cloud{height:265px}}
+    @media(prefers-reduced-motion:reduce){.prime-cloud .p-dot{transition:none!important}.prime-ripple.go{animation:none}}
   </style>
 </head>
 <body>
   <main class="app">
     <header><div><h1>Number Playground</h1><div class="sub">数を、記号より先に触ってみる。</div></div></header>
-
-    <nav class="tabs" aria-label="モード">
-      <button class="tab active" data-tab="bundle">たばねる</button>
-      <button class="tab" data-tab="arithmetic">ならべる</button>
-      <button class="tab" data-tab="prime">そすう</button>
-    </nav>
+    <nav class="tabs" aria-label="モード"><button class="tab active" data-tab="bundle">たばねる</button><button class="tab" data-tab="arithmetic">ならべる</button><button class="tab" data-tab="prime">そすう</button></nav>
 
     <section id="bundle" class="panel active">
       <div class="topline"><div class="title">いくつで1たば？</div><div class="hint">進法を変えると、同じ数の見え方が変わる</div></div>
-      <div id="basebar" class="basebar"></div>
-      <div class="big-number" id="bundleDecimal">12</div>
-      <div class="radix" id="bundleRadix">12₁₀</div>
-      <div class="controlrow">
-        <button class="pill" data-delta="-1">−1</button>
-        <button class="pill primary" data-delta="1">＋1</button>
-        <button class="pill" id="addBase">＋1たば</button>
-        <button class="pill danger" id="bundleReset">0にする</button>
-      </div>
-      <div id="placeGrid" class="place-grid"></div>
-      <div id="rawTray" class="rawtray" aria-label="同じ数を点で表示"></div>
+      <div id="basebar" class="basebar"></div><div class="big-number" id="bundleDecimal">12</div><div class="radix" id="bundleRadix">12₍10₎</div>
+      <div class="controlrow"><button class="pill" data-delta="-1">−1</button><button class="pill primary" data-delta="1">＋1</button><button class="pill" id="addBase">＋1たば</button><button class="pill danger" id="bundleReset">0にする</button></div>
+      <div id="placeGrid" class="place-grid"></div><div id="rawTray" class="rawtray" aria-label="同じ数を点で表示"></div>
     </section>
 
     <section id="arithmetic" class="panel">
       <div class="topline"><div class="title">ならべると、式が見える</div><div class="hint">同じ点を、演算ごとに並べ替える</div></div>
-      <div class="controlrow" id="ops">
-        <button class="opbtn active" data-op="add">＋</button><button class="opbtn" data-op="sub">−</button><button class="opbtn" data-op="mul">×</button><button class="opbtn" data-op="div">÷</button>
-      </div>
-      <div class="controlrow">
-        <div class="stepper"><button id="aMinus">−</button><strong id="aVal">7</strong><button id="aPlus">＋</button></div>
-        <span id="opSymbol" style="font-size:28px;font-weight:950">＋</span>
-        <div class="stepper"><button id="bMinus">−</button><strong id="bVal">5</strong><button id="bPlus">＋</button></div>
-      </div>
-      <div class="equation" id="equation">7 + 5 = 12</div>
-      <div id="arithmeticViz"></div>
+      <div class="controlrow" id="ops"><button class="opbtn active" data-op="add">＋</button><button class="opbtn" data-op="sub">−</button><button class="opbtn" data-op="mul">×</button><button class="opbtn" data-op="div">÷</button></div>
+      <div class="controlrow"><div class="stepper"><button id="aMinus">−</button><strong id="aVal">7</strong><button id="aPlus">＋</button></div><span id="opSymbol" style="font-size:28px;font-weight:950">＋</span><div class="stepper"><button id="bMinus">−</button><strong id="bVal">5</strong><button id="bPlus">＋</button></div></div>
+      <div class="equation" id="equation">7 + 5 = 12</div><div id="arithmeticViz"></div>
     </section>
 
     <section id="prime" class="panel">
       <div class="prime-head"><div class="title">素数ハンター</div><div class="score">SCORE <span id="score">0</span> · <span id="streak">0</span>連続</div></div>
       <div class="prime-number" id="primeNumber">29</div>
-      <div class="factor-line" id="factorLine">点を見て、長方形に分けられるか考える</div>
-      <div class="prime-cloud" id="primeCloud"></div>
+      <div class="factor-line" id="factorLine">動く点を観察。迷ったら枠内をスワイプ。</div>
+      <div class="prime-cloud" id="primeCloud"><span class="prime-ripple" id="primeRipple"></span></div>
+      <div class="prime-meter"><span>整列ヒント</span><span class="meter-track"><i class="meter-fill" id="primeMeterFill"></i></span><span class="potential">＋<b id="primePotential">100</b>点</span></div>
       <div class="answers"><button class="answer prime" data-answer="prime">素数</button><button class="answer comp" data-answer="composite">合成数</button></div>
-      <div class="feedback" id="feedback"></div>
-      <button class="next" id="nextPrime" hidden>つぎの数</button>
+      <div class="feedback" id="feedback"></div><button class="next" id="nextPrime" hidden>つぎの数</button>
     </section>
-    <div class="footer-note">Prototype 0.1 · すべて端末内で動作します</div>
+    <div class="footer-note">Prototype 0.2 · すべて端末内で動作します</div>
   </main>
 
 <script>
   const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
-  $$('.tab').forEach(btn=>btn.addEventListener('click',()=>{ $$('.tab').forEach(x=>x.classList.toggle('active',x===btn)); $$('.panel').forEach(p=>p.classList.toggle('active',p.id===btn.dataset.tab)); }));
+  $$('.tab').forEach(btn=>btn.addEventListener('click',()=>{$$('.tab').forEach(x=>x.classList.toggle('active',x===btn));$$('.panel').forEach(p=>p.classList.toggle('active',p.id===btn.dataset.tab));}));
 
-  let base=10, bundleValue=12;
-  const digits='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-  function toBase(n,b){ if(n===0)return '0'; let out=''; while(n){out=digits[n%b]+out;n=Math.floor(n/b)} return out; }
-  function places(n,b){ const arr=[]; if(n===0)return [0]; while(n){arr.push(n%b);n=Math.floor(n/b)} return arr; }
-  function renderBaseButtons(){ const bar=$('#basebar'); bar.innerHTML=''; for(let b=2;b<=10;b++){const x=document.createElement('button');x.className='basebtn'+(b===base?' active':'');x.textContent=b+'進';x.onclick=()=>{base=b;renderBundle()};bar.appendChild(x)} }
+  let base=10,bundleValue=12;const digits='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  function toBase(n,b){if(n===0)return'0';let out='';while(n){out=digits[n%b]+out;n=Math.floor(n/b)}return out}
+  function places(n,b){const arr=[];if(n===0)return[0];while(n){arr.push(n%b);n=Math.floor(n/b)}return arr}
+  function renderBaseButtons(){const bar=$('#basebar');bar.innerHTML='';for(let b=2;b<=10;b++){const x=document.createElement('button');x.className='basebtn'+(b===base?' active':'');x.textContent=b+'進';x.onclick=()=>{base=b;renderBundle()};bar.appendChild(x)}}
   function tokenClass(exp){return exp===0?'token':exp===1?'token bundle':'token super'}
-  function renderBundle(){
-    renderBaseButtons(); $('#bundleDecimal').textContent=bundleValue; $('#bundleRadix').textContent=toBase(bundleValue,base)+'₍'+base+'₎';
-    const ps=places(bundleValue,base); const grid=$('#placeGrid'); grid.innerHTML='';
-    const maxExp=Math.max(2,ps.length-1);
-    for(let exp=maxExp;exp>=0;exp--){ const digit=ps[exp]||0; const value=base**exp; const card=document.createElement('div'); card.className='place'; const tokens=Array.from({length:digit},()=>`<span class="${tokenClass(exp)}"></span>`).join(''); card.innerHTML=`<div class="place-label">${exp===0?'1':base+'^'+exp} の場所</div><div class="place-value">${digit}</div><div class="tokens">${tokens}</div>`; grid.appendChild(card); }
-    const tray=$('#rawTray'); tray.innerHTML=''; const shown=Math.min(bundleValue,120); for(let i=0;i<shown;i++){const d=document.createElement('span');d.className='dot';tray.appendChild(d)} if(bundleValue>120){const more=document.createElement('span');more.style.cssText='color:#9ea7b8;font-weight:800;margin-left:6px';more.textContent='… +'+(bundleValue-120);tray.appendChild(more)}
-  }
-  $$('[data-delta]').forEach(b=>b.onclick=()=>{bundleValue=Math.max(0,Math.min(999,bundleValue+Number(b.dataset.delta)));renderBundle()});
-  $('#addBase').onclick=()=>{bundleValue=Math.min(999,bundleValue+base);renderBundle()}; $('#bundleReset').onclick=()=>{bundleValue=0;renderBundle()};
+  function renderBundle(){renderBaseButtons();$('#bundleDecimal').textContent=bundleValue;$('#bundleRadix').textContent=toBase(bundleValue,base)+'₍'+base+'₎';const ps=places(bundleValue,base),grid=$('#placeGrid');grid.innerHTML='';const maxExp=Math.max(2,ps.length-1);for(let exp=maxExp;exp>=0;exp--){const digit=ps[exp]||0,card=document.createElement('div');card.className='place';const tokens=Array.from({length:digit},()=>`<span class="${tokenClass(exp)}"></span>`).join('');card.innerHTML=`<div class="place-label">${exp===0?'1':base+'^'+exp} の場所</div><div class="place-value">${digit}</div><div class="tokens">${tokens}</div>`;grid.appendChild(card)}const tray=$('#rawTray');tray.innerHTML='';const shown=Math.min(bundleValue,120);for(let i=0;i<shown;i++){const d=document.createElement('span');d.className='dot';tray.appendChild(d)}if(bundleValue>120){const more=document.createElement('span');more.style.cssText='color:#9ea7b8;font-weight:800;margin-left:6px';more.textContent='… +'+(bundleValue-120);tray.appendChild(more)}}
+  $$('[data-delta]').forEach(btn=>btn.onclick=()=>{bundleValue=Math.max(0,Math.min(999,bundleValue+Number(btn.dataset.delta)));renderBundle()});$('#addBase').onclick=()=>{bundleValue=Math.min(999,bundleValue+base);renderBundle()};$('#bundleReset').onclick=()=>{bundleValue=0;renderBundle()};
 
-  let op='add', a=7,b=5;
-  const symbols={add:'＋',sub:'−',mul:'×',div:'÷'};
+  let op='add',a=7,b=5;const symbols={add:'＋',sub:'−',mul:'×',div:'÷'};
   $$('.opbtn').forEach(x=>x.onclick=()=>{op=x.dataset.op;$$('.opbtn').forEach(y=>y.classList.toggle('active',y===x));renderArithmetic()});
-  function clampAB(){a=Math.max(1,Math.min(24,a));b=Math.max(1,Math.min(12,b))}
-  $('#aMinus').onclick=()=>{a--;clampAB();renderArithmetic()}; $('#aPlus').onclick=()=>{a++;clampAB();renderArithmetic()}; $('#bMinus').onclick=()=>{b--;clampAB();renderArithmetic()}; $('#bPlus').onclick=()=>{b++;clampAB();renderArithmetic()};
+  function clampAB(){a=Math.max(1,Math.min(24,a));b=Math.max(1,Math.min(12,b))}$('#aMinus').onclick=()=>{a--;clampAB();renderArithmetic()};$('#aPlus').onclick=()=>{a++;clampAB();renderArithmetic()};$('#bMinus').onclick=()=>{b--;clampAB();renderArithmetic()};$('#bPlus').onclick=()=>{b++;clampAB();renderArithmetic()};
   function dots(n,cutFrom=Infinity){return Array.from({length:n},(_,i)=>`<span class="dot ${i>=cutFrom?'cut':''}"></span>`).join('')}
   function renderArithmetic(){
-    $('#aVal').textContent=a;$('#bVal').textContent=b;$('#opSymbol').textContent=symbols[op]; const viz=$('#arithmeticViz');
-    if(op==='add'){ const r=a+b; $('#equation').textContent=`${a} + ${b} = ${r}`; viz.innerHTML=`<div class="rawtray">${dots(a)}<span style="width:18px"></span>${dots(b)}</div>`; }
-    if(op==='sub'){ const take=Math.min(a,b),r=a-b; $('#equation').textContent=`${a} − ${b} = ${r}`; viz.innerHTML=`<div class="rawtray">${dots(a,a-take)}</div>${b>a?'<div class="hint" style="margin-top:8px">まだ '+(b-a)+' こ取る必要がある</div>':''}`; }
-    if(op==='mul'){ const r=a*b; $('#equation').textContent=`${a} × ${b} = ${r}`; viz.innerHTML=`<div class="math-grid" style="--cols:${b}">${dots(r)}</div>`; }
-    if(op==='div'){ const q=Math.floor(a/b),rem=a%b; $('#equation').textContent=`${a} ÷ ${b} = ${q}${rem?' あまり '+rem:''}`; let groups=''; for(let g=0;g<b;g++){ const count=q+(g<rem?1:0); groups+=`<div class="group" style="--qcols:${Math.min(4,Math.max(1,count))}">${dots(count)}</div>` } viz.innerHTML=`<div class="groups">${groups}</div>`; }
+    $('#aVal').textContent=a;$('#bVal').textContent=b;$('#opSymbol').textContent=symbols[op];const viz=$('#arithmeticViz');
+    if(op==='add'){const r=a+b;$('#equation').textContent=`${a} + ${b} = ${r}`;viz.innerHTML=`<div class="rawtray">${dots(a)}<span style="width:18px"></span>${dots(b)}</div>`}
+    if(op==='sub'){const take=Math.min(a,b),r=a-b;$('#equation').textContent=`${a} − ${b} = ${r}`;viz.innerHTML=`<div class="rawtray">${dots(a,a-take)}</div>${b>a?'<div class="hint" style="margin-top:8px">まだ '+(b-a)+' こ取る必要がある</div>':''}`}
+    if(op==='mul'){const r=a*b;$('#equation').textContent=`${a} × ${b} = ${r}`;viz.innerHTML=`<div class="math-grid" style="--cols:${b}">${dots(r)}</div>`}
+    if(op==='div'){const q=Math.floor(a/b),rem=a%b;$('#equation').textContent=`${a} ÷ ${b} = ${q}${rem?' あまり '+rem:''}`;let groups='';for(let g=0;g<b;g++){const count=q+(g<rem?1:0);groups+=`<div class="group" style="--qcols:${Math.min(4,Math.max(1,count))}">${dots(count)}</div>`}viz.innerHTML=`<div class="groups">${groups}</div>`}
   }
 
-  let target=29,score=0,streak=0,locked=false;
+  const cloud=$('#primeCloud');
+  let target=29,score=0,streak=0,locked=false,hintCount=0,primeDots=[],animId=0,lastFrame=0,swipeCarry=0,pointerDown=false,lastPX=0,lastPY=0,burstMode=false;
   function isPrime(n){if(n<2)return false;for(let i=2;i*i<=n;i++)if(n%i===0)return false;return true}
-  function closestPair(n){for(let r=Math.floor(Math.sqrt(n));r>=2;r--)if(n%r===0)return [r,n/r];return null}
-  function setPrimeDots(mode='cloud'){
-    const box=$('#primeCloud'); box.innerHTML=''; const rect=box.getBoundingClientRect(); const w=rect.width||500,h=rect.height||250; const pair=closestPair(target); const pts=[];
-    if(mode==='factor'&&pair){ const [rows,cols]=pair, gap=Math.min(28,(w-50)/cols,(h-44)/rows); const ox=(w-gap*(cols-1))/2,oy=(h-gap*(rows-1))/2; for(let r=0;r<rows;r++)for(let c=0;c<cols;c++)pts.push([ox+c*gap,oy+r*gap]); }
-    else { const golden=2.399963; const R=Math.min(w,h)*.37; for(let i=0;i<target;i++){const t=i*golden;const rr=R*Math.sqrt((i+.5)/target);pts.push([w/2+Math.cos(t)*rr,h/2+Math.sin(t)*rr])} }
-    pts.forEach(([x,y],i)=>{const d=document.createElement('span');d.className='p-dot';d.style.left=(x-7)+'px';d.style.top=(y-7)+'px';if(mode==='factor'&&pair)d.style.background='#c4b5fd';box.appendChild(d)});
+  function closestPair(n){for(let r=Math.floor(Math.sqrt(n));r>=2;r--)if(n%r===0)return[r,n/r];return null}
+  function potentialPoints(){const p=target?hintCount/target:0;return Math.max(10,Math.round(100-90*p*p))}
+  function updatePrimeMeter(){const p=target?hintCount/target:0;$('#primeMeterFill').style.width=(p*100)+'%';$('#primePotential').textContent=potentialPoints();cloud.classList.toggle('has-hint',hintCount>0);cloud.classList.toggle('done',hintCount>=target)}
+  function setDotXY(dot,x,y,transition=false){dot.x=x;dot.y=y;dot.el.classList.toggle('settling',transition);dot.el.style.transform=`translate3d(${x}px,${y}px,0)`}
+  function targetPositions(){
+    const rect=cloud.getBoundingClientRect(),w=rect.width||500,h=rect.height||280,pair=closestPair(target),pad=28,pts=[];
+    if(pair){const [rows,cols]=pair;const gap=Math.min(27,(w-pad*2)/Math.max(1,cols-1),(h-pad*2)/Math.max(1,rows-1));const spanX=gap*(cols-1),spanY=gap*(rows-1),ox=(w-spanX)/2-6.5,oy=(h-spanY)/2-6.5;for(let r=0;r<rows;r++)for(let c=0;c<cols;c++)pts.push([ox+c*gap,oy+r*gap]);return pts}
+    const usable=w-pad*2-13,step=target<=1?0:usable/(target-1),y=h/2-6.5;for(let i=0;i<target;i++)pts.push([pad+i*step,y]);return pts
   }
-  function newPrime(){target=2+Math.floor(Math.random()*78);locked=false;$('#primeNumber').textContent=target;$('#feedback').textContent='';$('#feedback').className='feedback';$('#factorLine').textContent='点を見て、長方形に分けられるか考える';$('#nextPrime').hidden=true;setTimeout(()=>setPrimeDots('cloud'),0)}
-  $$('.answer').forEach(btn=>btn.onclick=()=>{if(locked)return;locked=true;const prime=isPrime(target);const guessed=btn.dataset.answer==='prime';const ok=prime===guessed;if(ok){streak++;score+=10+Math.min(20,streak*2);$('#feedback').textContent='正解';$('#feedback').className='feedback good'}else{streak=0;$('#feedback').textContent='ちがう';$('#feedback').className='feedback bad'} $('#score').textContent=score;$('#streak').textContent=streak; const pair=closestPair(target); if(pair){$('#factorLine').textContent=`${pair[0]} × ${pair[1]} に並べられる → 合成数`;setPrimeDots('factor')}else{$('#factorLine').textContent=`1 × ${target} 以外の長方形が作れない → 素数`;setPrimeDots('cloud')} $('#nextPrime').hidden=false;});
-  $('#nextPrime').onclick=newPrime; window.addEventListener('resize',()=>{if($('#prime').classList.contains('active'))setPrimeDots(locked&&closestPair(target)?'factor':'cloud')});
+  function circlePositions(){const rect=cloud.getBoundingClientRect(),w=rect.width||500,h=rect.height||280,cx=w/2-6.5,cy=h/2-6.5,r=Math.min(w,h)*.34,pts=[];for(let i=0;i<target;i++){const t=-Math.PI/2+i*Math.PI*2/target;pts.push([cx+Math.cos(t)*r,cy+Math.sin(t)*r])}return pts}
+  function createPrimeDots(){
+    primeDots.forEach(d=>d.el.remove());primeDots=[];burstMode=false;const rect=cloud.getBoundingClientRect(),w=rect.width||500,h=rect.height||280;
+    for(let i=0;i<target;i++){const el=document.createElement('span');el.className='p-dot';const t=target===1?0:i/(target-1),hue=190+155*t;el.style.background=`hsl(${hue} 88% 68%)`;el.style.color=`hsl(${hue} 88% 68%)`;const x=18+Math.random()*Math.max(1,w-49),y=18+Math.random()*Math.max(1,h-49),speed=.035+Math.random()*.045,ang=Math.random()*Math.PI*2;const dot={el,x,y,vx:Math.cos(ang)*speed,vy:Math.sin(ang)*speed,locked:false,phase:Math.random()*Math.PI*2};setDotXY(dot,x,y);cloud.appendChild(el);primeDots.push(dot)}
+  }
+  function animatePrime(ts){
+    const dt=Math.min(34,ts-(lastFrame||ts));lastFrame=ts;const rect=cloud.getBoundingClientRect(),w=rect.width||500,h=rect.height||280;
+    if($('#prime').classList.contains('active')&&!locked){for(const d of primeDots){if(d.locked)continue;d.phase+=dt*.0014;d.vx+=Math.cos(d.phase)*.0009;d.vy+=Math.sin(d.phase*1.17)*.0009;const sp=Math.hypot(d.vx,d.vy)||1,max=.085;if(sp>max){d.vx=d.vx/sp*max;d.vy=d.vy/sp*max}d.x+=d.vx*dt;d.y+=d.vy*dt;if(d.x<8){d.x=8;d.vx=Math.abs(d.vx)}if(d.x>w-21){d.x=w-21;d.vx=-Math.abs(d.vx)}if(d.y<8){d.y=8;d.vy=Math.abs(d.vy)}if(d.y>h-21){d.y=h-21;d.vy=-Math.abs(d.vy)}d.el.style.transform=`translate3d(${d.x}px,${d.y}px,0)`}}
+    animId=requestAnimationFrame(animatePrime)
+  }
+  function alignOne(){if(locked||hintCount>=target)return;const pts=targetPositions(),d=primeDots[hintCount];d.locked=true;setDotXY(d,pts[hintCount][0],pts[hintCount][1],true);hintCount++;updatePrimeMeter();if(hintCount===target)finishAlignment()}
+  function alignAll(){while(hintCount<target)alignOne()}
+  function finishAlignment(){
+    if(isPrime(target)){setTimeout(()=>{if(hintCount!==target)return;burstMode=true;const pts=circlePositions(),ripple=$('#primeRipple'),rect=cloud.getBoundingClientRect();ripple.style.left=(rect.width/2)+'px';ripple.style.top=(rect.height/2)+'px';ripple.classList.remove('go');void ripple.offsetWidth;ripple.classList.add('go');primeDots.forEach((d,i)=>{d.el.classList.remove('settling');d.el.classList.add('bursting');d.el.animate([{transform:d.el.style.transform,filter:'brightness(1)'},{transform:d.el.style.transform,filter:'brightness(1.8)'},{filter:'brightness(1)'}],{duration:620,easing:'ease-out'});d.x=pts[i][0];d.y=pts[i][1];d.el.style.transform=`translate3d(${d.x}px,${d.y}px,0)`});$('#factorLine').textContent=`${target}個は1列にしかならない → 素数`},380)}else{const pair=closestPair(target);if(pair)$('#factorLine').textContent=`${pair[0]} × ${pair[1]} の長方形になった → 合成数`}
+  }
+  function newPrime(){
+    target=2+Math.floor(Math.random()*78);locked=false;hintCount=0;swipeCarry=0;pointerDown=false;$('#primeNumber').textContent=target;$('#feedback').textContent='';$('#feedback').className='feedback';$('#factorLine').textContent='動く点を観察。迷ったら枠内をスワイプ。';$('#nextPrime').hidden=true;$$('.answer').forEach(b=>b.disabled=false);cloud.classList.remove('done','has-hint','dragging');updatePrimeMeter();requestAnimationFrame(createPrimeDots)
+  }
+  function awardAnswer(btn){
+    if(locked)return;locked=true;const prime=isPrime(target),guessed=btn.dataset.answer==='prime',ok=prime===guessed,earned=potentialPoints();
+    if(ok){streak++;score+=earned;$('#feedback').textContent=`正解 ＋${earned}点`;$('#feedback').className='feedback good'}else{streak=0;$('#feedback').textContent='ちがう';$('#feedback').className='feedback bad'}
+    $('#score').textContent=score;$('#streak').textContent=streak;$$('.answer').forEach(b=>b.disabled=true);alignAll();const pair=closestPair(target);if(!prime&&pair)$('#factorLine').textContent=`${pair[0]} × ${pair[1]} に並べられる → 合成数`;if(prime&&hintCount===target&&!burstMode)finishAlignment();$('#nextPrime').hidden=false
+  }
+  $$('.answer').forEach(btn=>btn.onclick=()=>awardAnswer(btn));$('#nextPrime').onclick=newPrime;
 
-  renderBundle();renderArithmetic();newPrime();
+  cloud.addEventListener('pointerdown',e=>{if(locked)return;pointerDown=true;lastPX=e.clientX;lastPY=e.clientY;swipeCarry=0;cloud.classList.add('dragging');cloud.setPointerCapture?.(e.pointerId)});
+  cloud.addEventListener('pointermove',e=>{if(!pointerDown||locked)return;const dx=e.clientX-lastPX,dy=e.clientY-lastPY;lastPX=e.clientX;lastPY=e.clientY;swipeCarry+=Math.hypot(dx,dy);const threshold=12;while(swipeCarry>=threshold&&hintCount<target){swipeCarry-=threshold;alignOne()}});
+  function endSwipe(e){pointerDown=false;cloud.classList.remove('dragging');try{cloud.releasePointerCapture?.(e.pointerId)}catch{}}
+  cloud.addEventListener('pointerup',endSwipe);cloud.addEventListener('pointercancel',endSwipe);
+  window.addEventListener('resize',()=>{if(!primeDots.length)return;if(burstMode){const pts=circlePositions();primeDots.forEach((d,i)=>setDotXY(d,pts[i][0],pts[i][1],false))}else if(hintCount){const pts=targetPositions();for(let i=0;i<hintCount;i++)setDotXY(primeDots[i],pts[i][0],pts[i][1],false)}});
+
+  renderBundle();renderArithmetic();newPrime();cancelAnimationFrame(animId);animId=requestAnimationFrame(animatePrime);
 </script>
 </body>
 </html>
