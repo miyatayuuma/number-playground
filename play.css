@@ -203,27 +203,7 @@ a {
   letter-spacing: 0.06em;
   margin: 10px 0 15px;
 }
-.stage-choices {
-  display: flex;
-  justify-content: center;
-  gap: 9px;
-}
-.stage-choices button {
-  width: 36px;
-  height: 36px;
-  border: 1px solid #9eb3cc36;
-  background: #ffffff06;
-  border-radius: 10px;
-  font-size: 13px;
-  color: var(--tile);
-}
-.stage-choices button.cleared {
-  border-color: var(--tile);
-  background: color-mix(in srgb, var(--tile) 14%, transparent);
-}
-.stage-choices button:hover {
-  background: #ffffff18;
-}
+
 .panel-footer {
   margin-top: 24px;
   display: flex;
@@ -367,13 +347,7 @@ button svg {
   .area-glyph svg {
     height: 58px;
   }
-  .stage-choices {
-    gap: 6px;
-  }
-  .stage-choices button {
-    width: 33px;
-    height: 35px;
-  }
+
   .panel-header {
     margin-bottom: 20px;
   }
@@ -398,13 +372,7 @@ button svg {
     font-size: 12px;
     margin: 5px 0 10px;
   }
-  .stage-choices {
-    gap: 3px;
-  }
-  .stage-choices button {
-    width: 27px;
-    height: 30px;
-  }
+
   .panel-header {
     margin-bottom: 12px;
   }
@@ -497,5 +465,32 @@ canvas:focus {
   }
   .area-glyph svg {
     height: 58px;
+  }
+}
+
+/* Three distinct rule entrances, with no empty fourth slot. */
+.area-grid {
+  grid-template-columns: 1fr;
+}
+.rule-choice {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 26px;
+  padding: 8px 20px;
+}
+.rule-choice .area-title {
+  margin: 0;
+}
+@media (min-width: 640px), (orientation: landscape) {
+  .area-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .rule-choice {
+    display: block;
+    padding: 12px;
+  }
+  .rule-choice .area-title {
+    margin-top: 8px;
   }
 }

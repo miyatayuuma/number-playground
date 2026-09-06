@@ -19,6 +19,7 @@ export async function instrument(context) {
   });
 }
 export function driver(page, base) {
+  let navigation = 0;
   const read = () =>
     page.evaluate(async () => (await import("./src/game.mjs")).inspect());
   async function settled() {
@@ -27,7 +28,7 @@ export function driver(page, base) {
     });
     await page.waitForFunction(() => {
       const s = window.__readFlow();
-      return !s.busy && s.width > 0 && s.status === "play";
+      return !s.busy && !s.moving && s.width > 0 && s.status === "play";
     });
     return read();
   }
@@ -41,24 +42,27 @@ export function driver(page, base) {
     while (seed < 100000 && !predicate(generateProblem(rule, d, `${seed}-0`)))
       seed++;
     assert.ok(seed < 100000, "seed found");
-    await page.goto(`${base}/?fixtureSeed=${seed}&difficulty=${d}#${rule}`);
+    await page.goto(
+      `${base}/?fixtureSeed=${seed}&difficulty=${d}&navigation=${++navigation}#${rule}`,
+    );
     return settled();
   }
   async function audit() {
     const s = await read(),
-      ids = [...s.pieces.flatMap((p) => p.ids), ...s.loaded, ...s.spent];
+      ids = [...s.pieces.flatMap((p) => p.ids), ...s.spent];
     assert.equal(ids.length, s.total);
     assert.equal(new Set(ids).size, s.total);
     if (!s.busy)
       assert.equal(
         new Set(s.visibleIds).size,
-        s.pieces.flatMap((p) => p.ids).length + s.loaded.length,
+        s.pieces.flatMap((p) => p.ids).length,
       );
     return s;
   }
   async function drag(from, to, n = from.n, wait = true) {
     const b = await page.locator("#world").boundingBox();
-    await page.mouse.move(b.x + from.x, b.y + from.y);
+    const start = from.grip || from;
+    await page.mouse.move(b.x + start.x, b.y + start.y);
     await page.mouse.down();
     if (n !== undefined)
       assert.equal((await read()).dragIds.length, n, `selected ${n}`);
@@ -122,48 +126,51 @@ export function driver(page, base) {
           s.pieces.find((q) => q.id === p.id),
           s.targets[i],
         );
-      } else if (s.family === "square") {
-        const p = s.pieces[0],
-          t = s.targets[0],
-          w = p.width,
-          h = p.n / w;
-        let cell;
-        for (let row = 0; row <= t.side - h && !cell; row++)
-          for (let col = 0; col <= t.side - w; col++)
-            if (
-              p.ids.every(
-                (_, i) =>
-                  t.cells[
-                    (row + Math.floor(i / w)) * t.side + col + (i % w)
-                  ] === null,
-              )
-            ) {
-              cell = { row, col };
-              break;
-            }
-        assert.ok(cell);
-        await drag(p, {
-          x: t.x + (cell.col + (w - t.side) / 2) * t.pitch,
-          y: t.y + (cell.row + (h - t.side) / 2) * t.pitch,
-        });
-      } else {
-        const i = s.targets.findIndex((t) => t.active && !t.complete),
-          t = s.targets[i],
-          p = s.pieces.find((p) => p.n === t.n);
-        if (t.kind === "rectangle") {
-          const f = Array.from({ length: p.n - 2 }, (_, i) => i + 2).find(
-            (f) => p.n % f === 0,
-          );
-          await width(p.id, f);
-        } else await width(p.id, 0);
-        s = await read();
-        await drag(
-          s.pieces.find((q) => q.id === p.id),
-          s.targets[i],
-        );
       }
     }
     throw new Error(`No automatic next problem: ${id}`);
   }
   return { read, settled, route, audit, drag, width, solveCurrent };
+}
+// Native Chromium touch events, with explicit event times for repeatable velocities.
+export async function touchPeel(
+  context,
+  page,
+  from,
+  dx,
+  dy,
+  { fast = true, cancel = false } = {},
+) {
+  const cdp = await context.newCDPSession(page),
+    box = await page.locator("#world").boundingBox();
+  const start = Date.now() / 1000,
+    steps = fast ? 2 : 8,
+    duration = fast ? 0.032 : 0.2;
+  const read = () =>
+    page.evaluate(async () => (await import("./src/game.mjs")).inspect());
+  await cdp.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    timestamp: start,
+    touchPoints: [{ x: box.x + from.x, y: box.y + from.y }],
+  });
+  const initial = (await read()).dragIds;
+  for (let i = 1; i <= steps; i++)
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      timestamp: start + (duration * i) / steps,
+      touchPoints: [
+        {
+          x: box.x + from.x + (dx * i) / steps,
+          y: box.y + from.y + (dy * i) / steps,
+        },
+      ],
+    });
+  const picked = (await read()).dragIds;
+  await cdp.send("Input.dispatchTouchEvent", {
+    type: cancel ? "touchCancel" : "touchEnd",
+    timestamp: start + duration + 0.005,
+    touchPoints: [],
+  });
+  await cdp.detach();
+  return { initial, picked };
 }

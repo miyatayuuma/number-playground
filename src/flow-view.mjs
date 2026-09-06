@@ -1,6 +1,6 @@
 import { World } from "./view.mjs";
 import { shape, arrayShape } from "./shapes.mjs";
-import { activeTargets, gateFactor } from "./model.mjs";
+import { activeTargets } from "./model.mjs";
 export class FlowWorld extends World {
   pieceShape(p) {
     if (p.width) {
@@ -22,22 +22,7 @@ export class FlowWorld extends World {
     return super.pieceShape(p);
   }
   targetShape(t, radius) {
-    if (t.kind === "mosaic") return arrayShape(t.n, t.side, radius);
     if (t.kind === "divide") return arrayShape(t.input, t.width, radius);
-    if (t.kind === "rectangle") {
-      const preview = this.run.pieces.find((p) => p.ids.length === t.n)?.width;
-      const f =
-        (preview > 1 && preview < t.n && t.n % preview === 0
-          ? preview
-          : null) ||
-        Array.from({ length: t.n - 2 }, (_, i) => i + 2)
-          .filter((f) => t.n % f === 0)
-          .sort(
-            (a, b) =>
-              Math.abs(a - Math.sqrt(t.n)) - Math.abs(b - Math.sqrt(t.n)),
-          )[0];
-      return arrayShape(t.n, f, radius);
-    }
     if (t.kind === "gear") return arrayShape(6, 3, radius);
     return shape(t.n, radius);
   }
@@ -45,12 +30,6 @@ export class FlowWorld extends World {
     const t = this.run.targets[i];
     if (t.kind === "gear")
       return { x: this.w / 2, y: this.h * 0.29, radius: 80 };
-    if (t.kind === "mosaic")
-      return {
-        x: this.w / 2,
-        y: this.h * 0.29,
-        radius: Math.min(115, this.w * 0.3, this.h * 0.2),
-      };
     if (this.run.stage.area === "link") {
       const active = activeTargets(this.run),
         on = active.includes(i),
@@ -115,10 +94,8 @@ export class FlowWorld extends World {
     r.targets.forEach((t, i) => {
       const source = this.run.targets[i];
       t.kind = source.kind;
-      t.side = source.side;
       t.width = source.width;
       t.input = source.input;
-      t.cells = [...source.cells];
       const s = this.targetShape(source, t.radius * 0.78);
       t.dots = s.dots.map((d) => ({ x: t.x + d.x, y: t.y + d.y }));
       t.pitch = s.pitch;
@@ -134,18 +111,6 @@ export class FlowWorld extends World {
     }
     return hit;
   }
-  placement(index, x, y) {
-    const t = this.run.targets[index],
-      p = this.run.pieces.find((p) => p.id === this.drag?.pieceId);
-    if (t?.kind !== "mosaic" || !p?.width) return null;
-    const pos = this.targetPoint(index),
-      s = this.targetShape(t, pos.radius * 0.78),
-      rows = p.ids.length / p.width;
-    return {
-      col: Math.round((x - pos.x) / s.pitch + (t.side - p.width) / 2),
-      row: Math.round((y - pos.y) / s.pitch + (t.side - rows) / 2),
-    };
-  }
   dropTarget(x, y) {
     for (const i of activeTargets(this.run)) {
       const t = this.run.targets[i],
@@ -157,7 +122,6 @@ export class FlowWorld extends World {
         return {
           kind: t.kind === "divide" ? "gate" : "target",
           index: i,
-          cell: this.placement(i, x, y),
         };
     }
     if (this.run.stage.area === "gear") return { kind: "cancel" };
@@ -231,7 +195,7 @@ export class FlowWorld extends World {
           c.shadowBlur = 0;
         }
       } else {
-        if (["mosaic", "rectangle", "divide"].includes(t.kind)) {
+        if (t.kind === "divide") {
           const xs = s.dots.filter((d) => !d.remainder).map((d) => d.x),
             ys = s.dots.filter((d) => !d.remainder).map((d) => d.y);
           c.strokeRect(
@@ -246,10 +210,9 @@ export class FlowWorld extends World {
             p.y,
             p.radius + 10,
             this.color + (hot ? "ff" : "77"),
-            t.kind === "prime" ? 2 : 1,
+            1,
           );
         s.dots.forEach((d, j) => {
-          if (t.kind === "mosaic" && t.cells[j] !== null) return;
           this.circle(
             p.x + d.x,
             p.y + d.y,
@@ -267,33 +230,6 @@ export class FlowWorld extends World {
             );
           }
         });
-        if (t.kind === "mosaic" && hot && this.drag) {
-          const cell = this.hover.cell,
-            src = this.run.pieces.find((p) => p.id === this.drag.pieceId);
-          if (cell && src.width) {
-            const w = src.width,
-              h = src.ids.length / w;
-            const valid =
-              Number.isInteger(h) &&
-              cell.col >= 0 &&
-              cell.row >= 0 &&
-              cell.col + w <= t.side &&
-              cell.row + h <= t.side &&
-              !src.ids.some(
-                (_, j) =>
-                  t.cells[
-                    (cell.row + Math.floor(j / w)) * t.side + cell.col + (j % w)
-                  ] !== null,
-              );
-            c.fillStyle = valid ? this.color + "38" : "#ff8e9730";
-            c.fillRect(
-              p.x + (cell.col - t.side / 2) * s.pitch,
-              p.y + (cell.row - t.side / 2) * s.pitch,
-              w * s.pitch,
-              h * s.pitch,
-            );
-          }
-        }
         this.label(
           t.kind === "divide" ? t.input : t.n,
           p.x,
@@ -452,37 +388,6 @@ export class FlowWorld extends World {
         if (token !== this.token) return;
         group.forEach((id) => (this.units.get(id).visible = false));
         impact(enemy, 0.4 + group.length * 0.12);
-      }
-    } else if (result.type === "mosaic") {
-      const t = this.run.targets[result.targetIndex],
-        s = this.targetShape(t, target.radius * 0.78);
-      await this.tween(
-        result.inputIds,
-        result.slots.map((j) => ({
-          x: target.x + s.dots[j].x,
-          y: target.y + s.dots[j].y,
-        })),
-        260,
-        token,
-      );
-      if (token !== this.token) return;
-      impact(target, 0.6);
-      if (result.complete) {
-        await this.tween([], [], 250, token);
-        if (token !== this.token) return;
-        for (const id of result.ids) this.units.get(id).flight = true;
-        await this.tween(
-          result.ids,
-          result.ids.map((id) => {
-            const j = t.cells.indexOf(id);
-            return {
-              x: enemy.x + s.dots[j].x * 0.3,
-              y: enemy.y + s.dots[j].y * 0.3,
-            };
-          }),
-          400,
-          token,
-        );
       }
     } else {
       for (const id of result.ids) this.units.get(id).flight = true;

@@ -2,14 +2,7 @@ export const AREAS = [
   { id: "spark", name: "スパーク", color: "#ffc977", glyph: "✦" },
   { id: "link", name: "リンク", color: "#75ead2", glyph: "⠿" },
   { id: "gear", name: "ギア", color: "#8bbcff", glyph: "◈" },
-  { id: "core", name: "コア", color: "#c5a0ff", glyph: "◇" },
 ];
-export const isPrime = (n) =>
-  n >= 2 &&
-  Array.from(
-    { length: Math.max(0, Math.floor(Math.sqrt(n)) - 1) },
-    (_, i) => i + 2,
-  ).every((f) => n % f);
 export const divisors = (n) =>
   Array.from({ length: n - 1 }, (_, i) => i + 2).filter((f) => n % f === 0);
 const target = (n, extra = {}) => ({ n, phase: 0, origin: null, ...extra });
@@ -95,47 +88,6 @@ for (let a = 4; a <= 36; a++)
         common.length > 2 ? 1 : 0,
       );
   }
-for (let n = 4; n <= 36; n++)
-  if (!isPrime(n)) {
-    add("core", {
-      ammo: [n],
-      targets: [target(n, { kind: "rectangle" })],
-      family: "rectangle",
-    });
-    for (let p = 2; p <= 31; p++)
-      if (isPrime(p))
-        add(
-          "core",
-          {
-            ammo: [p, n],
-            targets: [
-              target(p, { kind: "prime" }),
-              target(n, { kind: "rectangle" }),
-            ],
-            family: "contrast",
-          },
-          n <= 9 && p <= 7 ? 0 : 1,
-        );
-  }
-for (let side = 2; side <= 6; side++)
-  for (let x = 1; x < side; x++)
-    for (let y = 1; y < side; y++) {
-      add(
-        "core",
-        {
-          ammo: [
-            x * y,
-            (side - x) * y,
-            x * (side - y),
-            (side - x) * (side - y),
-          ],
-          widths: [x, side - x, x, side - x],
-          targets: [target(side * side, { kind: "mosaic", side })],
-          family: "square",
-        },
-        side > 4 ? 2 : side > 3 ? 1 : 0,
-      );
-    }
 export const PROBLEM_BANK = bank;
 export function generateProblem(
   ruleId,
@@ -146,7 +98,6 @@ export function generateProblem(
   if (!bank[ruleId]) throw new RangeError("Unknown rule");
   difficulty = Math.max(1, Math.min(5, Math.trunc(difficulty) || 1));
   const candidates = bank[ruleId].filter((p) => p.difficulty === difficulty);
-  // Low-level shape play also needs small square and contrast examples.
   const pool = candidates.length
     ? candidates
     : bank[ruleId].filter(

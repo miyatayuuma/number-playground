@@ -1,7 +1,7 @@
 import { chromium } from "playwright";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
-import { instrument, driver } from "../tests/play-driver.mjs";
+import { instrument, driver, touchPeel } from "../tests/play-driver.mjs";
 const dir = resolve(import.meta.dirname, "../artifacts");
 await mkdir(dir, { recursive: true });
 const browser = await chromium.launch(),
@@ -17,20 +17,34 @@ const base = (process.env.CORE_BREAK_URL || "http://127.0.0.1:4173").replace(
   /\/$/,
   "",
 );
-const { read, route, drag, width, solveCurrent } = driver(page, base);
+const { read, route, settled, drag, width, solveCurrent } = driver(page, base);
 try {
   await page.goto(base);
   await page.waitForTimeout(2200);
   await page.screenshot({ path: resolve(dir, "flow-menu.png") });
+  await route("spark", (p) => p.ammo[0] === 4 && p.ammo[1] === 32);
+  let small = (await read()).pieces.find((p) => p.n === 4);
+  await page.waitForTimeout(600);
+  await page.screenshot({ path: resolve(dir, "peel-four.png") });
+  await touchPeel(context, page, small, 32, 0, { fast: false });
+  await settled();
+  await page.waitForTimeout(500);
+  await route("spark", (p) => p.ammo[0] === 4 && p.ammo[1] === 32);
+  small = (await read()).pieces.find((p) => p.n === 4);
+  const pair = await touchPeel(context, page, small, 32, 0);
+  await settled();
+  await page.waitForTimeout(600);
+  await page.screenshot({ path: resolve(dir, "peel-two.png") });
+  const p = (await read()).pieces.find((p) =>
+    p.ids.every((id) => pair.picked.includes(id)),
+  );
+  await touchPeel(context, page, p, 0, -32);
+  await settled();
+  await page.waitForTimeout(600);
+  await page.screenshot({ path: resolve(dir, "peel-one.png") });
   for (const [rule, predicate, factor] of [
     ["link", (p) => p.ammo[0] === 14 && p.gates[0] === 3, 3],
     ["gear", (p) => p.ammo[0] === 12 && p.ammo[1] === 20, 4],
-    [
-      "core",
-      (p) => p.family === "contrast" && p.ammo[0] === 7 && p.ammo[1] === 9,
-      0,
-    ],
-    ["core", (p) => p.family === "square" && p.ammo.every((n) => n === 9), 0],
   ]) {
     let s = await route(rule, predicate);
     await page.waitForTimeout(600);
@@ -55,8 +69,8 @@ try {
   if (errors.length) throw new Error(errors.join("\n"));
   const video = page.video();
   await context.close();
-  await video.saveAs(resolve(dir, "flow-play.webm"));
-  console.log("Recorded real gestures: artifacts/flow-play.webm");
+  await video.saveAs(resolve(dir, "peel-play.webm"));
+  console.log("Recorded real gestures: artifacts/peel-play.webm");
 } finally {
   await browser.close();
 }

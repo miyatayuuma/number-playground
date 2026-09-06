@@ -10,6 +10,7 @@ import {
   setWidth,
 } from "./model.mjs";
 import { shape, arrayShape } from "./shapes.mjs";
+import { PeelGesture, finerSelection } from "./gestures.mjs";
 import { FlowWorld as World } from "./flow-view.mjs";
 import {
   SAVE_KEY,
@@ -24,6 +25,7 @@ const world = new World(canvas),
 let progress = freshProgress(),
   ruleId = null,
   widthPointer = null,
+  peel = null,
   serial = 0,
   sound = true,
   audio,
@@ -156,6 +158,7 @@ function closeMenu() {
 }
 function openPanel(html, kind) {
   pointer = null;
+  peel = null;
   widthPointer = null;
   selected = null;
   if (!world.busy) world.cancel();
@@ -201,19 +204,8 @@ function areaGlyph(rule) {
           y = (Math.floor(i / 4) - (n / 4 - 1) / 2) * 6;
         dots.push({ x: p.x + cx, y: p.y, mx: x, my: y, ex: x, ey: y - 20 });
       });
-  } else {
-    for (let block = 0; block < 4; block++)
-      for (let i = 0; i < 9; i++) {
-        const col = block % 2,
-          row = Math.floor(block / 2),
-          x = (col - 0.5) * 40 + ((i % 3) - 1) * 6,
-          y = (row - 0.5) * 40 + (Math.floor(i / 3) - 1) * 6;
-        const eX = (col * 3 + (i % 3) - 2.5) * 6,
-          eY = (row * 3 + Math.floor(i / 3) - 2.5) * 6;
-        dots.push({ x, y, mx: eX, my: eY, ex: eX, ey: eY - 8 });
-      }
   }
-  return `<svg viewBox="-55 -48 110 96" aria-hidden="true">${dots.map((d, i) => `<circle class="demo-dot" cx="${d.x}" cy="${d.y}" r="${rule === "core" || rule === "gear" ? 1.7 : 2.5}" style="--mx:${d.mx - d.x}px;--my:${d.my - d.y}px;--dx:${d.ex - d.x}px;--dy:${d.ey - d.y}px;animation-delay:${Math.floor(i / 4) * 25}ms"/>`).join("")}</svg>`;
+  return `<svg viewBox="-55 -48 110 96" aria-hidden="true">${dots.map((d, i) => `<circle class="demo-dot" cx="${d.x}" cy="${d.y}" r="${rule === "gear" ? 1.7 : 2.5}" style="--mx:${d.mx - d.x}px;--my:${d.my - d.y}px;--dx:${d.ex - d.x}px;--dy:${d.ey - d.y}px;animation-delay:${Math.floor(i / 4) * 25}ms"/>`).join("")}</svg>`;
 }
 function areaMenu() {
   document.body.classList.toggle("entrance", !ruleId);
@@ -233,6 +225,7 @@ function start(id, changeHash = true) {
   epoch++;
   world.token = epoch;
   pointer = null;
+  peel = null;
   widthPointer = null;
   selected = null;
   ruleId = id;
@@ -274,7 +267,10 @@ async function drop(destination) {
   if (destination.kind === "space") {
     const result = split(run, pieceId, ids);
     if (result.ok) {
-      world.positions.set(result.pieceId, world.bound({ x, y }));
+      world.placeApart(result.pieceId, {
+        x: x + drag.offsets.reduce((v, o) => v + o.x, 0) / ids.length,
+        y: y + drag.offsets.reduce((v, o) => v + o.y, 0) / ids.length,
+      });
       tone(result.type === "split" ? "split" : "pick", ids.length);
       if (result.type === "split") world.burst(x, y, world.color, 0.35);
     }
@@ -305,7 +301,7 @@ async function drop(destination) {
   const result =
     destination.kind === "gate"
       ? divide(run, pieceId, ids)
-      : fire(run, pieceId, ids, destination.index, destination.cell);
+      : fire(run, pieceId, ids, destination.index);
   result.targetPoint = targetPosition;
   tone(result.ok ? "hit" : "miss");
   if (run.status === "won") {
@@ -352,8 +348,34 @@ canvas.addEventListener("pointerdown", (e) => {
   canvas.setPointerCapture(pointer);
   tone("pick", hit.ids.length);
   world.begin(hit, p.x, p.y);
+  peel =
+    run.stage.area === "spark" && hit.kind !== "grip"
+      ? {
+          gesture: new PeelGesture(p.x, p.y, e.timeStamp),
+          normal: hit,
+          x: p.x,
+          y: p.y,
+        }
+      : null;
   selected = hit;
 });
+function updatePeel(p, time) {
+  if (peel && peel.gesture.update(p.x, p.y, time)) {
+    const finer = finerSelection(
+      peel.normal,
+      peel.x,
+      peel.y,
+      p.x - peel.x,
+      p.y - peel.y,
+    );
+    if (finer) {
+      world.retarget(finer);
+      selected = finer;
+      tone("split");
+      world.burst(finer.anchor.x, finer.anchor.y, world.color, 0.3);
+    }
+  }
+}
 canvas.addEventListener("pointermove", (e) => {
   if (e.pointerId !== pointer) return;
   const p = point(e);
@@ -374,11 +396,14 @@ canvas.addEventListener("pointermove", (e) => {
     }
     return;
   }
+  updatePeel(p, e.timeStamp);
   world.move(p.x, p.y);
 });
 canvas.addEventListener("pointerup", (e) => {
   if (e.pointerId !== pointer) return;
   const p = point(e);
+  updatePeel(p, e.timeStamp);
+  peel = null;
   pointer = null;
   if (widthPointer) {
     widthPointer = null;
@@ -403,6 +428,7 @@ canvas.addEventListener("pointerup", (e) => {
   drop(world.dropTarget(p.x, p.y)).catch(failSafe);
 });
 function cancelPointer() {
+  peel = null;
   if (pointer !== null) {
     pointer = null;
     if (widthPointer) {
@@ -464,24 +490,6 @@ overlay.addEventListener("click", (e) => {
     if (sound) tone("merge");
   }
 });
-function firstCell(index) {
-  const t = run.targets[index],
-    p = run.pieces.find((p) => p.id === selected?.pieceId);
-  if (t.kind !== "mosaic" || !p?.width) return null;
-  const w = p.width,
-    h = p.ids.length / w;
-  for (let row = 0; row <= t.side - h; row++)
-    for (let col = 0; col <= t.side - w; col++)
-      if (
-        p.ids.every(
-          (_, i) =>
-            t.cells[(row + Math.floor(i / w)) * t.side + col + (i % w)] ===
-            null,
-        )
-      )
-        return { row, col };
-  return null;
-}
 document.querySelector("#keyboard-controls").addEventListener("click", (e) => {
   if (world.busy || world.paused) return;
   const b = e.target.closest("button");
@@ -521,7 +529,6 @@ document.querySelector("#keyboard-controls").addEventListener("click", (e) => {
             ? "gate"
             : "target",
         index: Number(b.dataset.target),
-        cell: firstCell(Number(b.dataset.target)),
       });
     else if (b.dataset.gate) drop({ kind: "gate" });
     else if (b.dataset.release) {
@@ -551,6 +558,8 @@ function route() {
   const id = location.hash.slice(1).split("/")[0];
   if (AREAS.some((a) => a.id === id)) start(id, false);
   else {
+    if (id === "core")
+      history.replaceState(null, "", location.pathname + location.search);
     if (!run) {
       run = createRun(generateProblem("spark", 1, 0));
       world.setRun(run);
@@ -578,7 +587,6 @@ export function inspect() {
       .map((d) => d.id),
     dragIds: world.drag?.ids || [],
     spent: [...run.spent],
-    loaded: run.targets.flatMap((t) => t.loaded),
     total: run.dots.length,
   };
 }

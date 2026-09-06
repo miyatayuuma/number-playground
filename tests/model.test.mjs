@@ -10,12 +10,7 @@ import {
   setWidth,
   accountedIds,
 } from "../src/model.mjs";
-import {
-  PROBLEM_BANK,
-  generateProblem,
-  divisors,
-  isPrime,
-} from "../src/stages.mjs";
+import { PROBLEM_BANK, generateProblem, divisors } from "../src/stages.mjs";
 import { shape, factors, arrayShape } from "../src/shapes.mjs";
 import {
   freshProgress,
@@ -75,37 +70,6 @@ export function solve(problem) {
     const f = divisors(problem.ammo[0]).find((f) => problem.ammo[1] % f === 0);
     setWidth(run, run.pieces[0].id, f);
     shoot(run, run.pieces[0], 0);
-  } else if (problem.family === "square") {
-    const t = run.targets[0];
-    for (const p of [...run.pieces]) {
-      const w = p.width,
-        h = p.ids.length / w;
-      let cell;
-      for (let row = 0; row <= t.side - h && !cell; row++)
-        for (let col = 0; col <= t.side - w; col++)
-          if (
-            p.ids.every(
-              (_, i) =>
-                t.cells[(row + Math.floor(i / w)) * t.side + col + (i % w)] ===
-                null,
-            )
-          ) {
-            cell = { row, col };
-            break;
-          }
-      shoot(run, p, 0, cell);
-    }
-  } else {
-    for (let i = 0; i < run.targets.length; i++) {
-      const p = run.pieces.find((p) => p.ids.length === run.targets[i].n);
-      if (run.targets[i].kind === "rectangle")
-        setWidth(
-          run,
-          p.id,
-          divisors(p.ids.length).find((f) => f < p.ids.length),
-        );
-      shoot(run, p, i);
-    }
   }
   assert.equal(run.status, "won");
   assert.equal(run.spent.length, run.dots.length);
@@ -161,51 +125,6 @@ test("14 in three columns shoots eight, keeps four, and sets two aside", () => {
   assert.deepEqual(out.rest, [12, 13]);
   assert.equal(out.ids.length, 8);
   audit(r);
-});
-test("square accepts spatial tiles and whole-square alternative, rejects overlap and boundaries", () => {
-  const problem = PROBLEM_BANK.core.find(
-    (p) =>
-      p.family === "square" &&
-      p.targets[0].n === 36 &&
-      p.ammo.every((n) => n === 9),
-  );
-  const r = createRun(problem);
-  shoot(r, r.pieces[0], 0, { row: 0, col: 0 });
-  const before = structuredClone(r);
-  assert.equal(fire(r, 1, r.pieces[0].ids, 0, { row: 0, col: 0 }).ok, false);
-  assert.equal(fire(r, 1, r.pieces[0].ids, 0, { row: 5, col: 5 }).ok, false);
-  assert.deepEqual(r, before);
-  for (const cell of [
-    { row: 0, col: 3 },
-    { row: 3, col: 0 },
-    { row: 3, col: 3 },
-  ])
-    shoot(r, r.pieces[0], 0, cell);
-  assert.equal(r.status, "won");
-  const alt = createRun(problem),
-    p = combineAll(alt);
-  setWidth(alt, p.id, 6);
-  shoot(alt, p, 0, { row: 0, col: 0 });
-  assert.equal(alt.status, "won");
-});
-test("prime and rectangle armour require their actual shapes", () => {
-  assert.equal(isPrime(1), false);
-  assert.equal(isPrime(2), true);
-  const r = createRun(
-    PROBLEM_BANK.core.find(
-      (p) => p.family === "contrast" && p.ammo[0] === 7 && p.ammo[1] === 9,
-    ),
-  );
-  assert.equal(fire(r, 1, r.pieces[1].ids, 1).ok, false);
-  setWidth(r, 1, 2);
-  assert.equal(fire(r, 1, r.pieces[1].ids, 1).ok, false);
-  setWidth(r, 1, 3);
-  shoot(r, r.pieces[1], 1);
-  setWidth(r, 0, 2);
-  assert.equal(fire(r, 0, r.pieces[0].ids, 0).ok, false);
-  setWidth(r, 0, 0);
-  shoot(r, r.pieces[0], 0);
-  assert.equal(r.status, "won");
 });
 test("shapes 1–36 do not overlap; paired polygons have radial symmetry", () => {
   for (let n = 1; n <= 36; n++) {
@@ -264,10 +183,8 @@ test("difficulty adapts only to completed problems or deliberate reissues; resto
 });
 
 test("rule-specific objects cannot be merged into an unsolvable paired gun or division", () => {
-  for (const rule of ["gear", "core"]) {
-    const problem = PROBLEM_BANK[rule].find(
-      (p) => p.ammo.length === 2 && p.family !== "square",
-    );
+  for (const rule of ["gear"]) {
+    const problem = PROBLEM_BANK[rule].find((p) => p.ammo.length === 2);
     const r = createRun(problem),
       before = structuredClone(r);
     assert.equal(merge(r, 0, [...r.pieces[0].ids], 1).ok, false);

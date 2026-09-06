@@ -1,4 +1,4 @@
-import { shape, intrinsic } from "./shapes.mjs";
+import { shape, intrinsic, hierarchy } from "./shapes.mjs";
 import { AREAS } from "./stages.mjs";
 import { activeTargets, gateFactor } from "./model.mjs";
 const TAU = Math.PI * 2;
@@ -79,7 +79,11 @@ export class World {
     );
   }
   pieceShape(p) {
-    return shape(p.ids.length, intrinsic(p.ids.length).radius * this.unitSize);
+    const unit =
+      this.run.stage.area === "spark" && p.ids.length <= 4
+        ? Math.max(this.unitSize, 6 / 0.82)
+        : this.unitSize;
+    return shape(p.ids.length, intrinsic(p.ids.length).radius * unit);
   }
   targetPoint(i) {
     const n = this.run.targets.length;
@@ -141,51 +145,96 @@ export class World {
         this.units.set(id, unit);
       });
     });
-    this.run.targets.forEach((t, i) => {
-      const pos = this.targetPoint(i),
-        s = this.targetShape
-          ? this.targetShape(t, pos.radius * 0.78)
-          : shape(t.n, pos.radius * 0.78);
-      t.loaded.forEach((id, j) => {
-        live.add(id);
-        const d = this.units.get(id);
-        Object.assign(d, {
-          tx: pos.x + s.dots[j].x,
-          ty: pos.y + s.dots[j].y,
-          r: Math.min(5, s.dotRadius),
-          visible: true,
-        });
-      });
-    });
     for (const [id, d] of this.units) if (!live.has(id)) d.visible = false;
+  }
+  displayGeometry(p) {
+    const s = this.pieceShape(p),
+      fallback = this.positions.get(p.id) || { x: 0, y: 0 };
+    const dots = p.ids.map((id, i) => {
+      const d = this.units.get(id);
+      return {
+        id,
+        x: d?.x ?? fallback.x + s.dots[i].x,
+        y: d?.y ?? fallback.y + s.dots[i].y,
+        r: d?.r ?? s.dotRadius,
+      };
+    });
+    const nodes = (s.nodes || hierarchy(p.ids.length, s.groups)).map((node) => {
+      const ds = node.indices.map((i) => dots[i]),
+        x = ds.reduce((sum, d) => sum + d.x, 0) / ds.length,
+        y = ds.reduce((sum, d) => sum + d.y, 0) / ds.length;
+      return {
+        ...node,
+        ids: ds.map((d) => d.id),
+        anchor: { x, y },
+        radius: Math.max(...ds.map((d) => Math.hypot(d.x - x, d.y - y) + d.r)),
+      };
+    });
+    const root = nodes[0],
+      center = root.anchor,
+      radius = root.radius;
+    return {
+      ...s,
+      dots,
+      nodes,
+      center,
+      radius,
+      grip: { x: center.x + Math.max(23, radius + 12), y: center.y },
+      groups: s.groups.map((g) => {
+        const n = nodes.find((n) => n.id === g.indices.join("."));
+        return {
+          ...g,
+          x: n.anchor.x - center.x,
+          y: n.anchor.y - center.y,
+          radius: n.radius,
+        };
+      }),
+    };
+  }
+  selection(p, g, node, kind = node.indices.length === 1 ? "unit" : "group") {
+    return {
+      pieceId: p.id,
+      ids: [...node.ids],
+      nodeId: node.id,
+      kind,
+      anchor: { ...node.anchor },
+      children:
+        kind === "grip"
+          ? []
+          : node.children.map((id) =>
+              this.selection(
+                p,
+                g,
+                g.nodes.find((n) => n.id === id),
+              ),
+            ),
+    };
   }
   read() {
     return {
       width: this.w,
       height: this.h,
       busy: this.busy,
-      pieces: this.run.pieces.map((p, i) => {
-        const center =
-            this.positions.get(p.id) ||
-            this.homePoint(i, this.run.pieces.length),
-          s = this.pieceShape(p);
+      moving: [...this.units.values()].some(
+        (d) => d.visible && Math.hypot(d.x - d.tx, d.y - d.ty) > 1,
+      ),
+      pieces: this.run.pieces.map((p) => {
+        const g = this.displayGeometry(p);
         return {
           id: p.id,
           n: p.ids.length,
           ids: [...p.ids],
-          ...center,
-          radius: s.radius,
-          parts: s.groups.map((g) => ({
-            n: g.indices.length,
-            ids: g.indices.map((i) => p.ids[i]),
-            x: center.x + g.x,
-            y: center.y + g.y,
-          })),
-          dots: p.ids.map((id, i) => ({
-            id,
-            x: center.x + s.dots[i].x,
-            y: center.y + s.dots[i].y,
-          })),
+          ...g.center,
+          radius: g.radius,
+          grip: g.grip,
+          parts: g.nodes
+            .filter((n) => n.indices.length < p.ids.length)
+            .map((n) => ({
+              n: n.indices.length,
+              ids: [...n.ids],
+              ...n.anchor,
+            })),
+          dots: g.dots,
         };
       }),
       targets: this.run.targets.map((t, i) => ({
@@ -200,41 +249,102 @@ export class World {
     };
   }
   hit(x, y) {
-    for (const p of [...this.run.pieces].reverse()) {
-      const c = this.positions.get(p.id),
-        s = this.pieceShape(p),
-        dx = x - c.x,
-        dy = y - c.y;
-      if (Math.hypot(dx, dy) > Math.max(26, s.radius + 15)) continue;
-      if (Math.hypot(dx, dy) < 11 || Math.hypot(dx, dy) > s.radius + 2)
-        return { pieceId: p.id, ids: [...p.ids], anchor: c };
-      const group = [...s.groups]
-        .sort((a, b) => b.depth - a.depth)
+    const candidates = [...this.run.pieces]
+      .reverse()
+      .map((p) => ({ p, g: this.displayGeometry(p) }));
+    // Visible ink on a small piece takes precedence over neighbouring grip rings.
+    for (const { p, g } of candidates)
+      if (p.ids.length <= 4) {
+        const leaf = g.nodes
+          .filter((n) => n.ids.length === 1)
+          .sort(
+            (a, b) =>
+              Math.hypot(x - a.anchor.x, y - a.anchor.y) -
+              Math.hypot(x - b.anchor.x, y - b.anchor.y),
+          )
+          .find(
+            (n) =>
+              Math.hypot(x - n.anchor.x, y - n.anchor.y) <= n.radius + 0.25,
+          );
+        if (leaf) return this.selection(p, g, leaf);
+      }
+    for (const { p, g } of candidates) {
+      const distance = Math.hypot(x - g.center.x, y - g.center.y),
+        ring = Math.max(23, g.radius + 12);
+      if (distance > ring + 8) continue;
+      if (distance >= ring - 7) return this.selection(p, g, g.nodes[0], "grip");
+      if (distance < (p.ids.length <= 4 ? 5 : 11))
+        return this.selection(p, g, g.nodes[0]);
+      const group = g.nodes
+        .filter((n) => n.ids.length > 1 && n.ids.length < p.ids.length)
+        .sort((a, b) => a.ids.length - b.ids.length)
         .find(
-          (g) => Math.hypot(dx - g.x, dy - g.y) < Math.max(10, g.radius * 0.62),
+          (n) =>
+            Math.hypot(x - n.anchor.x, y - n.anchor.y) <
+            Math.max(7, n.radius * 0.62),
         );
-      if (group)
-        return {
-          pieceId: p.id,
-          ids: group.indices.map((i) => p.ids[i]),
-          anchor: { x: c.x + group.x, y: c.y + group.y },
-        };
-      const leaf = s.dots.findIndex(
-        (d) => Math.hypot(dx - d.x, dy - d.y) < s.dotRadius + 5,
-      );
-      if (leaf >= 0)
-        return {
-          pieceId: p.id,
-          ids: [p.ids[leaf]],
-          anchor: { x: c.x + s.dots[leaf].x, y: c.y + s.dots[leaf].y },
-        };
-      return { pieceId: p.id, ids: [...p.ids], anchor: c };
+      if (group) return this.selection(p, g, group);
+      const leaf = g.nodes
+        .filter((n) => n.ids.length === 1)
+        .sort(
+          (a, b) =>
+            Math.hypot(x - a.anchor.x, y - a.anchor.y) -
+            Math.hypot(x - b.anchor.x, y - b.anchor.y),
+        )
+        .find((n) => Math.hypot(x - n.anchor.x, y - n.anchor.y) < n.radius + 5);
+      if (leaf) return this.selection(p, g, leaf);
+      return this.selection(p, g, g.nodes[0]);
     }
     return null;
   }
+  placeApart(pieceId, point) {
+    const p = this.run.pieces.find((p) => p.id === pieceId),
+      radius = Math.max(23, this.pieceShape(p).radius + 12);
+    const origin = this.bound(point, radius);
+    const obstacles = this.run.pieces
+      .filter((q) => q.id !== pieceId)
+      .map((q) => ({
+        ...this.positions.get(q.id),
+        radius: Math.max(23, this.pieceShape(q).radius + 12),
+      }));
+    const overlap = (c) =>
+      obstacles.reduce(
+        (sum, o) =>
+          sum +
+          Math.max(0, radius + o.radius + 8 - Math.hypot(c.x - o.x, c.y - o.y)),
+        0,
+      );
+    let best = origin,
+      penalty = overlap(origin);
+    // Search nearest free landing first; only the released piece moves.
+    for (let distance = 0; distance < Math.max(this.w, this.h); distance += 8) {
+      for (let i = 0; i < 24; i++) {
+        const a = (i * Math.PI) / 12,
+          c = this.bound(
+            {
+              x: origin.x + Math.cos(a) * distance,
+              y: origin.y + Math.sin(a) * distance,
+            },
+            radius,
+          ),
+          score = overlap(c);
+        if (score < penalty) {
+          best = c;
+          penalty = score;
+        }
+        if (score < 0.1) {
+          this.positions.set(pieceId, c);
+          return;
+        }
+      }
+    }
+    this.positions.set(pieceId, best);
+  }
   begin(selection, x, y) {
+    const p = this.run.pieces.find((p) => p.id === selection.pieceId);
     this.drag = {
       ...selection,
+      outline: this.displayGeometry(p),
       startX: x,
       startY: y,
       x,
@@ -244,6 +354,17 @@ export class World {
         return { id, x: d.x - x, y: d.y - y };
       }),
     };
+  }
+  retarget(selection) {
+    if (!this.drag) return;
+    const previous = this.drag;
+    this.sync();
+    this.drag = {
+      ...previous,
+      ...selection,
+      offsets: previous.offsets.filter((o) => selection.ids.includes(o.id)),
+    };
+    this.move(previous.x, previous.y);
   }
   move(x, y) {
     if (!this.drag) return;
@@ -270,9 +391,9 @@ export class World {
     }
     for (const p of this.run.pieces) {
       if (p.id === this.drag?.pieceId) continue;
-      const c = this.positions.get(p.id),
-        s = this.pieceShape(p);
-      if (Math.hypot(x - c.x, y - c.y) < Math.max(28, s.radius + 12))
+      const s = this.displayGeometry(p),
+        c = s.center;
+      if (Math.hypot(x - c.x, y - c.y) < Math.max(12, s.radius + 4))
         return { kind: "merge", pieceId: p.id };
     }
     return y > this.h * 0.55 && x > 8 && x < this.w - 8 && y < this.h - 8
@@ -418,9 +539,9 @@ export class World {
   drawPieces() {
     const c = this.ctx;
     for (const p of this.run.pieces) {
-      const center = this.positions.get(p.id),
-        s = this.pieceShape(p),
-        selected = this.drag?.pieceId === p.id;
+      const selected = this.drag?.pieceId === p.id,
+        s = selected ? this.drag.outline : this.displayGeometry(p),
+        center = s.center;
       c.save();
       c.globalAlpha = selected ? 0.42 : 1;
       const glow = c.createRadialGradient(
@@ -446,15 +567,33 @@ export class World {
         Math.max(23, s.radius + 12),
         this.hover?.pieceId === p.id ? this.color + "d0" : this.color + "27",
       );
-      for (const g of (p.width ? [] : s.groups).filter((g) => g.depth === 1)) {
-        c.setLineDash([2, 4]);
-        this.circle(
-          center.x + g.x,
-          center.y + g.y,
-          g.radius + 3,
-          this.color + "28",
-        );
-        c.setLineDash([]);
+      for (const g of (p.width ? [] : s.groups).filter(
+        (g) => g.depth === 1 || g.indices.length === 2,
+      )) {
+        if (g.indices.length === 2) {
+          const [a, b] = g.indices.map((i) => s.dots[i]);
+          const angle = Math.atan2(b.y - a.y, b.x - a.x),
+            length = Math.hypot(b.x - a.x, b.y - a.y),
+            r = s.dotRadius + 3;
+          c.save();
+          c.translate((a.x + b.x) / 2, (a.y + b.y) / 2);
+          c.rotate(angle);
+          c.strokeStyle = this.color + "48";
+          c.lineWidth = 1;
+          c.beginPath();
+          c.roundRect(-length / 2 - r, -r, length + 2 * r, 2 * r, r);
+          c.stroke();
+          c.restore();
+        } else {
+          c.setLineDash([2, 4]);
+          this.circle(
+            center.x + g.x,
+            center.y + g.y,
+            g.radius + 3,
+            this.color + "28",
+          );
+          c.setLineDash([]);
+        }
       }
       if (p.ids.length > 1) {
         this.circle(center.x, center.y, 4, this.color + "91");
