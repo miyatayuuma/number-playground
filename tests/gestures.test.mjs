@@ -56,33 +56,30 @@ test("four contains two vertical pairs, including fours nested in larger shapes"
       );
     }
 });
-test("deliberate slow movement peels once while normal flicks, jitter and holds do not", () => {
-  const slow = new PeelGesture(0, 0, 0);
-  assert.equal(slow.update(4, 0, 40), false);
-  assert.equal(slow.update(8, 0, 100), false);
-  assert.equal(slow.update(12, 0, 160), true);
-  assert.equal(slow.update(24, 0, 260), false);
+test("precision peel requires a 550ms hold within 5px before dragging", () => {
+  const held = new PeelGesture(0, 0, 0);
+  assert.equal(held.update(2, 1, 250), false);
+  assert.equal(held.update(4, 0, 540), false);
+  assert.equal(held.update(12, 0, 560), true);
+  assert.equal(held.update(24, 0, 620), false);
 
-  for (const dt of [8, 16, 33]) {
-    const fast = new PeelGesture(0, 0, 0);
-    assert.equal(fast.update(30, 0, dt), false);
-    assert.equal(fast.update(32, 0, dt + 150), false);
-  }
+  const movedEarly = new PeelGesture(0, 0, 0);
+  assert.equal(movedEarly.update(6, 0, 100), false);
+  assert.equal(movedEarly.update(20, 0, 700), false);
 
-  const ordinary = new PeelGesture(0, 0, 0);
-  assert.equal(ordinary.update(6, 0, 30), false);
-  assert.equal(ordinary.update(14, 0, 70), false);
-  assert.equal(ordinary.update(24, 0, 110), false);
-  assert.equal(ordinary.update(26, 0, 260), false);
+  const boundary = new PeelGesture(0, 0, 0);
+  assert.equal(boundary.update(5, 0, 300), false);
+  assert.equal(boundary.update(5, 0, 550), false);
+  assert.equal(boundary.update(12, 0, 570), true);
 
-  const tap = new PeelGesture(0, 0, 0);
-  for (let t = 10; t < 220; t += 10)
-    assert.equal(tap.update(t % 4, 0, t), false);
+  const tooShort = new PeelGesture(0, 0, 0);
+  assert.equal(tooShort.update(4, 0, 500), false);
+  assert.equal(tooShort.update(12, 0, 520), false);
 
-  const hold = new PeelGesture(0, 0, 0);
-  assert.equal(hold.update(0, 0, 500), false);
-  assert.equal(hold.update(4, 0, 540), false);
-  assert.equal(hold.update(12, 0, 680), true);
+  const holdOnly = new PeelGesture(0, 0, 0);
+  assert.equal(holdOnly.update(0, 0, 700), false);
+  assert.equal(holdOnly.update(8, 0, 720), false);
+  assert.equal(holdOnly.update(12, 0, 740), true);
 });
 test("peel direction selects a direct child without skipping another level; grip is exempt", () => {
   const w = world([4]),
