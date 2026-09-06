@@ -1,0 +1,19 @@
+{
+  "name": "CORE BREAK",
+  "short_name": "CORE BREAK",
+  "description": "数の塊をつかんで分け、組み替えるタクタイル数遊び。",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#080d17",
+  "theme_color": "#080d17",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
