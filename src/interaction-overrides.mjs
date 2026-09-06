@@ -47,7 +47,8 @@ function flowDragBounds(world, x, y) {
 
 function sameHover(hover, candidate) {
   if (!hover || hover.kind !== candidate.kind) return false;
-  if (candidate.kind === "target") return hover.index === candidate.index;
+  if (candidate.kind === "target" || candidate.kind === "gate")
+    return hover.index === candidate.index;
   if (candidate.kind === "merge") return hover.pieceId === candidate.pieceId;
   return true;
 }
@@ -124,15 +125,13 @@ FlowWorld.prototype.dropTarget = function dropTarget(x, y) {
   if (!this.drag) return { kind: "cancel" };
   const dragged = flowDragBounds(this, x, y),
     candidates = activeTargets(this.run).map((i) => {
-      const target = this.run.targets[i];
+      const target = this.run.targets[i],
+        kind = target.kind === "divide" ? "gate" : "target";
       return {
-        kind: "target",
+        kind,
         index: i,
         bounds: flowTargetBounds(this, target, i),
-        result: {
-          kind: target.kind === "divide" ? "gate" : "target",
-          index: i,
-        },
+        result: { kind, index: i },
       };
     });
 
