@@ -56,21 +56,24 @@ test("four contains two vertical pairs, including fours nested in larger shapes"
       );
     }
 });
-test("precision peel requires a 550ms hold within 5px before dragging", () => {
+test("precision peel requires a 550ms hold, then 25px from the armed position", () => {
   const held = new PeelGesture(0, 0, 0);
   assert.equal(held.update(2, 1, 250), false);
   assert.equal(held.update(4, 0, 540), false);
-  assert.equal(held.update(12, 0, 560), true);
-  assert.equal(held.update(24, 0, 620), false);
+  assert.equal(held.update(5, 0, 560), false);
+  assert.equal(held.update(20, 0, 580), false);
+  assert.equal(held.update(29, 0, 600), true);
+  assert.equal(held.update(40, 0, 620), false);
 
   const movedEarly = new PeelGesture(0, 0, 0);
   assert.equal(movedEarly.update(6, 0, 100), false);
-  assert.equal(movedEarly.update(20, 0, 700), false);
+  assert.equal(movedEarly.update(40, 0, 700), false);
 
-  const boundary = new PeelGesture(0, 0, 0);
-  assert.equal(boundary.update(5, 0, 300), false);
-  assert.equal(boundary.update(5, 0, 550), false);
-  assert.equal(boundary.update(12, 0, 570), true);
+  const holdJitterDoesNotCount = new PeelGesture(0, 0, 0);
+  assert.equal(holdJitterDoesNotCount.update(5, 0, 300), false);
+  assert.equal(holdJitterDoesNotCount.update(5, 0, 550), false);
+  assert.equal(holdJitterDoesNotCount.update(20, 0, 570), false);
+  assert.equal(holdJitterDoesNotCount.update(30, 0, 590), true);
 
   const tooShort = new PeelGesture(0, 0, 0);
   assert.equal(tooShort.update(4, 0, 500), false);
@@ -78,8 +81,8 @@ test("precision peel requires a 550ms hold within 5px before dragging", () => {
 
   const holdOnly = new PeelGesture(0, 0, 0);
   assert.equal(holdOnly.update(0, 0, 700), false);
-  assert.equal(holdOnly.update(8, 0, 720), false);
-  assert.equal(holdOnly.update(12, 0, 740), true);
+  assert.equal(holdOnly.update(24, 0, 720), false);
+  assert.equal(holdOnly.update(25, 0, 740), true);
 });
 test("peel direction selects a direct child without skipping another level; grip is exempt", () => {
   const w = world([4]),
