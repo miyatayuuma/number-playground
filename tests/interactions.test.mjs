@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { boundsFromDots, circle, overlaps, rect } from "../src/interactions.mjs";
+import {
+  boundsFromDots,
+  circle,
+  compound,
+  overlaps,
+  rect,
+} from "../src/interactions.mjs";
 
 test("circle contact becomes true when visible edges touch", () => {
   assert.equal(overlaps(circle(0, 0, 10), circle(20, 0, 10)), true);
@@ -18,6 +24,12 @@ test("padding supplies release hysteresis without changing entry threshold", () 
     target = circle(25, 0, 10);
   assert.equal(overlaps(dragged, target), false);
   assert.equal(overlaps(dragged, target, 5), true);
+});
+
+test("compound geometry does not make empty gaps interactive", () => {
+  const pair = compound([rect(0, 0, 10, 10), rect(30, 0, 40, 10)]);
+  assert.equal(overlaps(pair, circle(20, 5, 4)), false);
+  assert.equal(overlaps(pair, circle(14, 5, 4)), true);
 });
 
 test("dot bounds include visible dot radius", () => {
