@@ -1,4 +1,4 @@
-// Four is a square motif; reversed factor order gives each integer one identity.
+// Four stays a 2×2 motif, with two visibly separated vertical pairs.
 export function factors(n) {
   if (!Number.isInteger(n) || n < 1 || n > 36)
     throw new RangeError("Shape must contain 1–36 dots");
@@ -23,6 +23,21 @@ function geometry(n) {
   function build(depth, orientation = 0) {
     if (depth === fs.length)
       return { radius: 1, dots: [{ x: 0, y: 0, branch: 0 }], groups: [] };
+    if (fs[depth] === 4 && depth === fs.length - 1) {
+      return {
+        radius: Math.hypot(1.8, 1) + 1,
+        dots: [-1.8, 1.8].flatMap((x, branch) =>
+          [-1, 1].map((y) => ({ x, y, branch })),
+        ),
+        groups: [-1.8, 1.8].map((x, i) => ({
+          x,
+          y: 0,
+          radius: 2,
+          depth: depth + 1,
+          indices: [i * 2, i * 2 + 1],
+        })),
+      };
+    }
     const f = fs[depth],
       children = Array.from({ length: f }, (_, i) => {
         const angle =
@@ -70,7 +85,42 @@ function geometry(n) {
     });
     return { dots, groups, radius: distance + cr };
   }
-  return build(0);
+  const result = build(0);
+  result.nodes = hierarchy(n, result.groups);
+  return result;
+}
+// Nodes partition their parent: a fast peel can descend exactly one edge.
+export function hierarchy(n, groups) {
+  const entries = [
+    Array.from({ length: n }, (_, i) => i),
+    ...groups.map((g) => g.indices),
+    ...Array.from({ length: n }, (_, i) => [i]),
+  ];
+  const nodes = [
+    ...new Map(
+      entries.map((indices) => [
+        indices.join("."),
+        {
+          id: indices.join("."),
+          indices: [...indices],
+          children: [],
+          parent: null,
+        },
+      ]),
+    ).values(),
+  ];
+  for (const node of nodes.slice(1)) {
+    const parent = nodes
+      .filter(
+        (p) =>
+          p.indices.length > node.indices.length &&
+          node.indices.every((i) => p.indices.includes(i)),
+      )
+      .sort((a, b) => a.indices.length - b.indices.length)[0];
+    node.parent = parent.id;
+    parent.children.push(node.id);
+  }
+  return nodes;
 }
 const shapes = new Map();
 export function intrinsic(n) {
@@ -88,6 +138,7 @@ export function shape(n, radius = 54) {
       y: g.y * scale,
       radius: g.radius * scale,
     })),
+    nodes: base.nodes,
     dotRadius: scale * 0.82,
     radius,
   };

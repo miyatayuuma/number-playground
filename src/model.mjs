@@ -1,4 +1,3 @@
-import { isPrime } from "./stages.mjs";
 export function createRun(stage) {
   if (!stage) throw new RangeError("Unknown stage");
   let unit = 0;
@@ -9,7 +8,7 @@ export function createRun(stage) {
         dots.push({ id, origin });
         return id;
       });
-      return { id: origin, ids, width: stage.widths?.[origin] || 0 };
+      return { id: origin, ids, width: 0 };
     });
   return {
     width: 0,
@@ -20,8 +19,6 @@ export function createRun(stage) {
     targets: stage.targets.map((t) => ({
       ...t,
       complete: false,
-      loaded: [],
-      cells: Array(t.n).fill(null),
     })),
     spent: [],
     misses: 0,
@@ -71,8 +68,7 @@ export function split(run, pieceId, ids) {
   return { ok: true, pieceId: add(run, ids), type: "split" };
 }
 export function merge(run, sourceId, ids, targetId) {
-  if (run.stage.area !== "spark" && run.stage.family !== "square")
-    return { ok: false };
+  if (run.stage.area !== "spark") return { ok: false };
   const t = run.pieces.find((p) => p.id === targetId);
   if (
     sourceId === targetId ||
@@ -108,11 +104,7 @@ function accepts(run, targetIndex, ids, width = 0) {
   const t = run.targets[targetIndex];
   if (!t || !activeTargets(run).includes(targetIndex) || ids.length !== t.n)
     return false;
-  if (t.kind === "divide" || t.kind === "gear" || t.kind === "mosaic")
-    return false;
-  if (t.kind === "prime") return isPrime(ids.length) && width === 0;
-  if (t.kind === "rectangle")
-    return width > 1 && width < ids.length && ids.length % width === 0;
+  if (t.kind === "divide" || t.kind === "gear") return false;
   return true;
 }
 function fill(run, targetIndex, ids) {
@@ -129,7 +121,7 @@ function fill(run, targetIndex, ids) {
     complete: run.status === "won",
   };
 }
-export function fire(run, pieceId, ids, targetIndex, cell) {
+export function fire(run, pieceId, ids, targetIndex) {
   if (!validSelection(run, pieceId, ids)) return { ok: false, ignored: true };
   const p = run.pieces.find((p) => p.id === pieceId),
     t = run.targets[targetIndex];
@@ -159,45 +151,6 @@ export function fire(run, pieceId, ids, targetIndex, cell) {
       groups,
       targetIndex,
       complete: true,
-    };
-  }
-  if (t.kind === "mosaic") {
-    const width = ids.length === p.ids.length ? p.width : 0,
-      height = ids.length / width;
-    if (
-      !width ||
-      !Number.isInteger(height) ||
-      !cell ||
-      cell.col < 0 ||
-      cell.row < 0 ||
-      cell.col + width > t.side ||
-      cell.row + height > t.side
-    )
-      return reject(run);
-    const slots = ids.map(
-      (_, i) =>
-        (cell.row + Math.floor(i / width)) * t.side + cell.col + (i % width),
-    );
-    if (slots.some((i) => t.cells[i] !== null)) return reject(run);
-    take(run, pieceId, ids);
-    slots.forEach((slot, i) => (t.cells[slot] = ids[i]));
-    t.loaded.push(...ids);
-    const complete = t.loaded.length === t.n;
-    const all = [...t.loaded];
-    if (complete) {
-      t.complete = true;
-      run.spent.push(...all);
-      t.loaded = [];
-      run.status = "won";
-    }
-    return {
-      ok: true,
-      type: "mosaic",
-      ids: complete ? all : [...ids],
-      inputIds: [...ids],
-      slots,
-      targetIndex,
-      complete,
     };
   }
   if (
@@ -245,9 +198,5 @@ export function divide(run, pieceId, ids) {
   };
 }
 export function accountedIds(run) {
-  return [
-    ...run.pieces.flatMap((p) => p.ids),
-    ...run.targets.flatMap((t) => t.loaded),
-    ...run.spent,
-  ];
+  return [...run.pieces.flatMap((p) => p.ids), ...run.spent];
 }
