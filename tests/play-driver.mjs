@@ -60,13 +60,25 @@ export function driver(page, base) {
     return s;
   }
   async function drag(from, to, n = from.n, wait = true) {
-    const b = await page.locator("#world").boundingBox();
-    const start = from.grip || from;
+    const b = await page.locator("#world").boundingBox(),
+      s = await read(),
+      start = from.grip || from,
+      anchor =
+        s.rule === "gear"
+          ? {
+              x: s.pieces.reduce((sum, p) => sum + p.x, 0) / s.pieces.length,
+              y: s.pieces.reduce((sum, p) => sum + p.y, 0) / s.pieces.length,
+            }
+          : { x: from.x, y: from.y },
+      end = {
+        x: to.x + start.x - anchor.x,
+        y: to.y + start.y - anchor.y,
+      };
     await page.mouse.move(b.x + start.x, b.y + start.y);
     await page.mouse.down();
     if (n !== undefined)
       assert.equal((await read()).dragIds.length, n, `selected ${n}`);
-    await page.mouse.move(b.x + to.x, b.y + to.y, { steps: 12 });
+    await page.mouse.move(b.x + end.x, b.y + end.y, { steps: 12 });
     await page.mouse.up();
     if (wait) {
       await settled();
