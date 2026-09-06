@@ -2,9 +2,11 @@ import { FlowWorld } from "./flow-view.mjs";
 
 const baseAnimate = FlowWorld.prototype.animate;
 
-function waveIndex(index, count) {
-  if (count <= 1) return 0;
-  return Math.min(2, Math.floor((index * 3) / count));
+function volleyGap(groupCount) {
+  if (groupCount <= 1) return 0;
+  // Keep small volleys legible. Only compress dense attacks enough to cap
+  // the launch span, instead of forcing every attack into the same fast tempo.
+  return Math.min(150, 820 / (groupCount - 1));
 }
 
 FlowWorld.prototype.animate = async function animate(result) {
@@ -16,11 +18,11 @@ FlowWorld.prototype.animate = async function animate(result) {
   const token = this.token,
     enemy = this.enemyPoint(),
     ids = [...result.ids],
-    groupIndex = new Map();
+    groupIndex = new Map(),
+    gap = volleyGap(result.groups.length);
 
   result.groups.forEach((group, i) => {
-    const wave = waveIndex(i, result.groups.length);
-    group.forEach((id) => groupIndex.set(id, wave));
+    group.forEach((id) => groupIndex.set(id, i));
   });
 
   const home = new Map();
@@ -40,25 +42,32 @@ FlowWorld.prototype.animate = async function animate(result) {
     ids.map((id, i) => ({
       x: enemy.x + ((i % 11) - 5) * 4.2,
       y: enemy.y + (Math.floor(i / 11) - 1) * 4.2,
-      delay: (groupIndex.get(id) || 0) * 65,
+      delay: (groupIndex.get(id) || 0) * gap,
     })),
-    190,
+    230,
     token,
   );
   if (token !== this.token) return;
 
-  this.burst(enemy.x, enemy.y, this.color, result.outcome === "win" ? 2 : 1.15);
+  this.burst(enemy.x, enemy.y, this.color, result.outcome === "win" ? 2 : 1.25);
   this.onCue?.("hit");
 
   if (result.outcome === "repel") {
+    // Let the impact register before the volley is visibly pushed back.
+    await this.tween([], [], 180, token);
+    if (token !== this.token) return;
+    this.burst(enemy.x, enemy.y, this.color, 0.9);
     this.onCue?.("miss");
+    const returnSpan = Math.min(120, Math.max(0, (result.groups.length - 1) * 28)),
+      returnGap =
+        result.groups.length <= 1 ? 0 : returnSpan / (result.groups.length - 1);
     await this.tween(
       ids,
       ids.map((id) => ({
         ...home.get(id),
-        delay: (2 - (groupIndex.get(id) || 0)) * 45,
+        delay: (result.groups.length - 1 - (groupIndex.get(id) || 0)) * returnGap,
       })),
-      210,
+      300,
       token,
     );
     if (token !== this.token) return;
@@ -82,6 +91,6 @@ FlowWorld.prototype.animate = async function animate(result) {
     this.onCue?.("hit");
   }
 
-  await this.tween([], [], result.complete ? 420 : 90, token);
+  await this.tween([], [], result.complete ? 420 : 120, token);
   if (token === this.token) this.busy = false;
 };
