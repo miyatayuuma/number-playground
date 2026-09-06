@@ -6,12 +6,18 @@ export function rect(left, top, right, bottom) {
   return { kind: "rect", left, top, right, bottom };
 }
 
+export function compound(shapes) {
+  return { kind: "compound", shapes };
+}
+
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
 export function expand(shape, padding = 0) {
   if (!padding) return shape;
+  if (shape.kind === "compound")
+    return compound(shape.shapes.map((part) => expand(part, padding)));
   if (shape.kind === "circle")
     return { ...shape, radius: shape.radius + padding };
   return {
@@ -25,6 +31,9 @@ export function expand(shape, padding = 0) {
 
 export function overlaps(a, b, padding = 0) {
   b = expand(b, padding);
+  if (a.kind === "compound") return a.shapes.some((part) => overlaps(part, b));
+  if (b.kind === "compound") return b.shapes.some((part) => overlaps(a, part));
+
   if (a.kind === "circle" && b.kind === "circle")
     return Math.hypot(a.x - b.x, a.y - b.y) <= a.radius + b.radius;
 
