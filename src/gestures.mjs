@@ -2,13 +2,14 @@
 export const PEEL = Object.freeze({
   holdDuration: 550,
   holdSlop: 5,
-  peelDistance: 12,
+  peelDistance: 25,
 });
 export class PeelGesture {
   constructor(x, y, time) {
     this.origin = { x, y };
     this.last = { x, y, time };
     this.startedAt = time;
+    this.armedAt = null;
     this.armed = false;
     this.done = false;
   }
@@ -23,10 +24,12 @@ export class PeelGesture {
     const elapsed = time - this.startedAt;
 
     // Holding nearly still for long enough explicitly arms the precision peel.
-    // Check the previous known position first so the first movement after a
-    // successful hold can both arm and begin the peel in one pointer event.
-    if (!this.armed && elapsed >= PEEL.holdDuration && previousDistance <= PEEL.holdSlop)
+    // When it arms, reset the peel origin to the held position so hold jitter
+    // does not count toward the actual pull distance.
+    if (!this.armed && elapsed >= PEEL.holdDuration && previousDistance <= PEEL.holdSlop) {
       this.armed = true;
+      this.armedAt = { x: this.last.x, y: this.last.y };
+    }
 
     // Any meaningful movement before the hold completes commits to a normal drag.
     if (!this.armed && distance > PEEL.holdSlop) {
@@ -37,8 +40,9 @@ export class PeelGesture {
     this.last = { x, y, time };
     if (!this.armed) return false;
 
+    const peelDistance = Math.hypot(x - this.armedAt.x, y - this.armedAt.y);
     // Once armed, direction chooses exactly one direct child; speed no longer matters.
-    if (distance >= PEEL.peelDistance) {
+    if (peelDistance >= PEEL.peelDistance) {
       this.done = true;
       return true;
     }
