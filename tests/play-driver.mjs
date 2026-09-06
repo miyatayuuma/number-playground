@@ -145,14 +145,14 @@ export function driver(page, base) {
   }
   return { read, settled, route, audit, drag, width, solveCurrent };
 }
-// Native Chromium touch events, with explicit event times for repeatable velocities.
+// Native Chromium touch input. A deliberate peel holds for 600ms before moving.
 export async function touchPeel(
   context,
   page,
   from,
   dx,
   dy,
-  { fast = true, cancel = false } = {},
+  { fast = true, cancel = false, hold = fast ? 0.6 : 0 } = {},
 ) {
   const cdp = await context.newCDPSession(page),
     box = await page.locator("#world").boundingBox();
@@ -170,7 +170,7 @@ export async function touchPeel(
   for (let i = 1; i <= steps; i++)
     await cdp.send("Input.dispatchTouchEvent", {
       type: "touchMove",
-      timestamp: start + (duration * i) / steps,
+      timestamp: start + hold + (duration * i) / steps,
       touchPoints: [
         {
           x: box.x + from.x + (dx * i) / steps,
@@ -181,7 +181,7 @@ export async function touchPeel(
   const picked = (await read()).dragIds;
   await cdp.send("Input.dispatchTouchEvent", {
     type: cancel ? "touchCancel" : "touchEnd",
-    timestamp: start + duration + 0.005,
+    timestamp: start + hold + duration + 0.005,
     touchPoints: [],
   });
   await cdp.detach();
