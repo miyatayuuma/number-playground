@@ -60,13 +60,25 @@ export function driver(page, base) {
     return s;
   }
   async function drag(from, to, n = from.n, wait = true) {
-    const b = await page.locator("#world").boundingBox();
-    const start = from.grip || from;
+    const b = await page.locator("#world").boundingBox(),
+      s = await read(),
+      start = from.grip || from,
+      anchor =
+        s.rule === "gear"
+          ? {
+              x: s.pieces.reduce((sum, p) => sum + p.x, 0) / s.pieces.length,
+              y: s.pieces.reduce((sum, p) => sum + p.y, 0) / s.pieces.length,
+            }
+          : { x: from.x, y: from.y },
+      end = {
+        x: to.x + start.x - anchor.x,
+        y: to.y + start.y - anchor.y,
+      };
     await page.mouse.move(b.x + start.x, b.y + start.y);
     await page.mouse.down();
     if (n !== undefined)
       assert.equal((await read()).dragIds.length, n, `selected ${n}`);
-    await page.mouse.move(b.x + to.x, b.y + to.y, { steps: 12 });
+    await page.mouse.move(b.x + end.x, b.y + end.y, { steps: 12 });
     await page.mouse.up();
     if (wait) {
       await settled();
@@ -106,10 +118,11 @@ export function driver(page, base) {
         assert.equal(s.targets.length, 1, "browser join fixture");
         await drag(s.pieces[0], s.targets[0]);
       } else if (s.rule === "gear") {
-        const f = Array.from(
-          { length: s.pieces[0].n - 1 },
-          (_, i) => i + 2,
-        ).find((f) => s.pieces.every((p) => p.n % f === 0));
+        const max = Math.min(...s.pieces.map((p) => p.n)),
+          f = Array.from({ length: max - 1 }, (_, i) => max - i).find(
+            (factor) => factor >= 2 && s.pieces.every((p) => p.n % factor === 0),
+          );
+        assert.ok(f, "gear gcd");
         await width(s.pieces[0].id, f);
         s = await read();
         await drag(s.pieces[0], s.targets[0]);
@@ -132,32 +145,29 @@ export function driver(page, base) {
   }
   return { read, settled, route, audit, drag, width, solveCurrent };
 }
-// Native Chromium touch events, with explicit event times for repeatable velocities.
+// Native Chromium touch input. A deliberate peel holds for 600ms before moving.
 export async function touchPeel(
   context,
   page,
   from,
   dx,
   dy,
-  { fast = true, cancel = false } = {},
+  { fast = true, cancel = false, hold = fast ? 0.6 : 0 } = {},
 ) {
   const cdp = await context.newCDPSession(page),
-    box = await page.locator("#world").boundingBox();
-  const start = Date.now() / 1000,
-    steps = fast ? 2 : 8,
-    duration = fast ? 0.032 : 0.2;
+    box = await page.locator("#world").boundingBox(),
+    steps = fast ? 2 : 8;
   const read = () =>
     page.evaluate(async () => (await import("./src/game.mjs")).inspect());
   await cdp.send("Input.dispatchTouchEvent", {
     type: "touchStart",
-    timestamp: start,
     touchPoints: [{ x: box.x + from.x, y: box.y + from.y }],
   });
   const initial = (await read()).dragIds;
+  if (hold) await page.waitForTimeout(hold * 1000);
   for (let i = 1; i <= steps; i++)
     await cdp.send("Input.dispatchTouchEvent", {
       type: "touchMove",
-      timestamp: start + (duration * i) / steps,
       touchPoints: [
         {
           x: box.x + from.x + (dx * i) / steps,
@@ -165,12 +175,22 @@ export async function touchPeel(
         },
       ],
     });
-  const picked = (await read()).dragIds;
+  let picked = (await read()).dragIds;
   await cdp.send("Input.dispatchTouchEvent", {
     type: cancel ? "touchCancel" : "touchEnd",
-    timestamp: start + duration + 0.005,
     touchPoints: [],
   });
+  await page.waitForTimeout(20);
+  if (!cancel && Array.isArray(from.ids) && from.ids.length > 1) {
+    const after = await read(),
+      peeled = after.pieces.find(
+        (p) =>
+          p.id !== from.id &&
+          p.ids.length < from.ids.length &&
+          p.ids.every((id) => from.ids.includes(id)),
+      );
+    if (peeled) picked = [...peeled.ids];
+  }
   await cdp.detach();
   return { initial, picked };
 }
