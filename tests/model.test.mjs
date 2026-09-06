@@ -11,6 +11,7 @@ import {
   accountedIds,
 } from "../src/model.mjs";
 import { PROBLEM_BANK, generateProblem, divisors } from "../src/stages.mjs";
+import { gcd } from "../src/math.mjs";
 import { shape, factors, arrayShape } from "../src/shapes.mjs";
 import {
   freshProgress,
@@ -67,9 +68,9 @@ export function solve(problem) {
         i,
       );
   } else if (problem.area === "gear") {
-    const f = divisors(problem.ammo[0]).find((f) => problem.ammo[1] % f === 0);
-    setWidth(run, run.pieces[0].id, f);
-    shoot(run, run.pieces[0], 0);
+    setWidth(run, run.pieces[0].id, problem.gcd);
+    const result = shoot(run, run.pieces[0], 0);
+    assert.equal(result.outcome, "win");
   }
   assert.equal(run.status, "won");
   assert.equal(run.spent.length, run.dots.length);
@@ -98,22 +99,47 @@ test("seeded generation spans all difficulties without repeating the last ten", 
     }
   assert.throws(() => generateProblem("missing"));
 });
-test("all common widths work, and unequal rows never consume ammo", () => {
-  for (const problem of PROBLEM_BANK.gear)
-    for (const f of divisors(problem.ammo[0]).filter(
-      (f) => problem.ammo[1] % f === 0,
-    )) {
-      const r = createRun(problem);
-      setWidth(r, 0, f);
-      const result = shoot(r, r.pieces[0], 0);
-      assert.ok(result.groups.every((g) => g.length === f));
-    }
-  const r = createRun(PROBLEM_BANK.gear[0]);
-  setWidth(r, 0, 1);
-  const before = structuredClone(r);
-  for (let i = 0; i < 8; i++)
-    assert.equal(fire(r, 0, r.pieces[0].ids, 0).ok, false);
-  assert.deepEqual(r, before);
+test("gear only clears on the greatest common divisor", () => {
+  const problem = PROBLEM_BANK.gear.find(
+      (p) => p.ammo[0] === 12 && p.ammo[1] === 18,
+    ),
+    r = createRun(problem);
+  assert.ok(problem);
+  assert.equal(problem.gcd, 6);
+
+  for (const f of [2, 3]) {
+    setWidth(r, 0, f);
+    const before = structuredClone(r);
+    const result = fire(r, 0, [...r.pieces[0].ids], 0);
+    assert.equal(result.ok, true);
+    assert.equal(result.outcome, "repel");
+    assert.equal(result.greatest, 6);
+    assert.deepEqual(r, before);
+    audit(r);
+  }
+
+  setWidth(r, 0, 4);
+  const beforeMiss = structuredClone(r);
+  assert.equal(fire(r, 0, [...r.pieces[0].ids], 0).ok, false);
+  assert.deepEqual(r, beforeMiss);
+
+  setWidth(r, 0, 6);
+  const win = fire(r, 0, [...r.pieces[0].ids], 0);
+  assert.equal(win.ok, true);
+  assert.equal(win.outcome, "win");
+  assert.equal(r.status, "won");
+  assert.equal(r.spent.length, 30);
+  audit(r);
+});
+test("gear bank is gcd-driven and GCD 2 stays a minority", () => {
+  const twos = PROBLEM_BANK.gear.filter((p) => p.gcd === 2).length;
+  assert.ok(PROBLEM_BANK.gear.length >= 55);
+  assert.ok(twos / PROBLEM_BANK.gear.length <= 0.15);
+  for (const problem of PROBLEM_BANK.gear) {
+    assert.equal(gcd(problem.ammo[0], problem.ammo[1]), problem.gcd);
+    assert.ok(problem.gcd >= 2);
+    assert.ok(problem.gcd <= 12);
+  }
 });
 test("14 in three columns shoots eight, keeps four, and sets two aside", () => {
   const p = PROBLEM_BANK.link.find((p) => p.ammo[0] === 14 && p.gates[0] === 3),

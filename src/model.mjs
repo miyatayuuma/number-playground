@@ -1,3 +1,5 @@
+import { gcd } from "./math.mjs";
+
 export function createRun(stage) {
   if (!stage) throw new RangeError("Unknown stage");
   let unit = 0;
@@ -128,29 +130,36 @@ export function fire(run, pieceId, ids, targetIndex) {
   if (!t || !activeTargets(run).includes(targetIndex)) return reject(run);
   if (t.kind === "gear") {
     const f = run.width;
-    if (
-      f < 2 ||
-      run.pieces.length !== 2 ||
-      run.pieces.some((p) => p.ids.length % f)
-    )
-      return reject(run);
-    const groups = run.pieces.flatMap((p) =>
-      Array.from({ length: p.ids.length / f }, (_, i) =>
-        p.ids.slice(i * f, (i + 1) * f),
+    if (f < 2 || run.pieces.length !== 2) return reject(run);
+    const sizes = run.pieces.map((p) => p.ids.length);
+    if (sizes.some((n) => n % f)) return reject(run);
+
+    const greatest = gcd(sizes[0], sizes[1]),
+      groups = run.pieces.flatMap((p) =>
+        Array.from({ length: p.ids.length / f }, (_, i) =>
+          p.ids.slice(i * f, (i + 1) * f),
+        ),
       ),
-    );
-    const all = run.pieces.flatMap((p) => p.ids);
-    run.pieces = [];
-    run.spent.push(...all);
-    t.complete = true;
-    run.status = "won";
+      all = run.pieces.flatMap((p) => p.ids),
+      outcome = f === greatest ? "win" : "repel";
+
+    if (outcome === "win") {
+      run.pieces = [];
+      run.spent.push(...all);
+      t.complete = true;
+      run.status = "won";
+    }
+
     return {
       ok: true,
       type: "volley",
+      outcome,
+      factor: f,
+      greatest,
       ids: all,
       groups,
       targetIndex,
-      complete: true,
+      complete: outcome === "win",
     };
   }
   if (
