@@ -155,15 +155,12 @@ export async function touchPeel(
   { fast = true, cancel = false, hold = fast ? 0.6 : 0 } = {},
 ) {
   const cdp = await context.newCDPSession(page),
-    box = await page.locator("#world").boundingBox();
-  const start = Date.now() / 1000,
-    steps = fast ? 2 : 8,
-    duration = fast ? 0.032 : 0.2;
+    box = await page.locator("#world").boundingBox(),
+    steps = fast ? 2 : 8;
   const read = () =>
     page.evaluate(async () => (await import("./src/game.mjs")).inspect());
   await cdp.send("Input.dispatchTouchEvent", {
     type: "touchStart",
-    timestamp: start,
     touchPoints: [{ x: box.x + from.x, y: box.y + from.y }],
   });
   const initial = (await read()).dragIds;
@@ -171,7 +168,6 @@ export async function touchPeel(
   for (let i = 1; i <= steps; i++)
     await cdp.send("Input.dispatchTouchEvent", {
       type: "touchMove",
-      timestamp: start + hold + (duration * i) / steps,
       touchPoints: [
         {
           x: box.x + from.x + (dx * i) / steps,
@@ -182,7 +178,6 @@ export async function touchPeel(
   const picked = (await read()).dragIds;
   await cdp.send("Input.dispatchTouchEvent", {
     type: cancel ? "touchCancel" : "touchEnd",
-    timestamp: start + hold + duration + 0.005,
     touchPoints: [],
   });
   await cdp.detach();
