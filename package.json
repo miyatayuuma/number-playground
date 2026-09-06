@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "python3 -m http.server 4173 --bind 127.0.0.1",
     "test": "node --test tests/*.test.mjs",
-    "test:browser": "node tests/browser-check.mjs"
+    "test:browser": "node tests/browser-check.mjs",
+    "record": "node scripts/record-play.mjs"
   },
   "devDependencies": {
     "playwright": "1.62.1"
