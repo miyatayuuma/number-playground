@@ -118,10 +118,11 @@ export function driver(page, base) {
         assert.equal(s.targets.length, 1, "browser join fixture");
         await drag(s.pieces[0], s.targets[0]);
       } else if (s.rule === "gear") {
-        const f = Array.from(
-          { length: s.pieces[0].n - 1 },
-          (_, i) => i + 2,
-        ).find((f) => s.pieces.every((p) => p.n % f === 0));
+        const max = Math.min(...s.pieces.map((p) => p.n)),
+          f = Array.from({ length: max - 1 }, (_, i) => max - i).find(
+            (factor) => factor >= 2 && s.pieces.every((p) => p.n % factor === 0),
+          );
+        assert.ok(f, "gear gcd");
         await width(s.pieces[0].id, f);
         s = await read();
         await drag(s.pieces[0], s.targets[0]);
