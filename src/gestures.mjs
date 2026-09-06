@@ -1,48 +1,44 @@
 // CSS pixels and event timestamps: independent of device pixel ratio/render FPS.
 export const PEEL = Object.freeze({
-  sampleWindow: 80,
-  minDistance: 12,
-  minDuration: 120,
-  maxDuration: 360,
-  maxSpeed: 0.25,
-  fastCommitSpeed: 0.55,
+  holdDuration: 550,
+  holdSlop: 5,
+  peelDistance: 12,
 });
 export class PeelGesture {
   constructor(x, y, time) {
     this.origin = { x, y };
-    this.samples = [{ x, y, time }];
-    this.started = null;
+    this.last = { x, y, time };
+    this.startedAt = time;
+    this.armed = false;
     this.done = false;
   }
   update(x, y, time) {
     if (this.done) return false;
-    const distance = Math.hypot(x - this.origin.x, y - this.origin.y);
-    if (this.started === null && distance >= 4) this.started = time;
-    const sample = this.samples.find(
-      (s) => time - s.time <= PEEL.sampleWindow,
-    );
-    const elapsed = sample ? time - sample.time : 0;
-    const speed =
-      elapsed > 0 ? Math.hypot(x - sample.x, y - sample.y) / elapsed : 0;
-    this.samples = this.samples.filter(
-      (s) => time - s.time <= PEEL.sampleWindow,
-    );
-    this.samples.push({ x, y, time });
-    if (this.started === null) return false;
 
-    const duration = time - this.started;
-    // A decisive normal/flick drag commits to the originally grabbed range.
-    // It must not become a fine peel just because the pointer slows down later.
-    if (speed >= PEEL.fastCommitSpeed || duration > PEEL.maxDuration) {
+    const previousDistance = Math.hypot(
+      this.last.x - this.origin.x,
+      this.last.y - this.origin.y,
+    );
+    const distance = Math.hypot(x - this.origin.x, y - this.origin.y);
+    const elapsed = time - this.startedAt;
+
+    // Holding nearly still for long enough explicitly arms the precision peel.
+    // Check the previous known position first so the first movement after a
+    // successful hold can both arm and begin the peel in one pointer event.
+    if (!this.armed && elapsed >= PEEL.holdDuration && previousDistance <= PEEL.holdSlop)
+      this.armed = true;
+
+    // Any meaningful movement before the hold completes commits to a normal drag.
+    if (!this.armed && distance > PEEL.holdSlop) {
       this.done = true;
       return false;
     }
-    // A deliberate, slow pull peels exactly one direct child of the selection.
-    if (
-      duration >= PEEL.minDuration &&
-      distance >= PEEL.minDistance &&
-      speed <= PEEL.maxSpeed
-    ) {
+
+    this.last = { x, y, time };
+    if (!this.armed) return false;
+
+    // Once armed, direction chooses exactly one direct child; speed no longer matters.
+    if (distance >= PEEL.peelDistance) {
       this.done = true;
       return true;
     }
