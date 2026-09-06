@@ -176,9 +176,11 @@ FlowWorld.prototype.handleHit = function handleHit(x, y) {
   const hit = baseHandleHit.call(this, x, y);
   if (!hit) return null;
   this.widthAdjusting = true;
+  this.widthAdjustPieceId = hit.pieceId;
   if (!this.widthAdjustListeners) {
     const finish = () => {
       this.widthAdjusting = false;
+      this.widthAdjustPieceId = null;
     };
     this.canvas.addEventListener("pointerup", finish, true);
     this.canvas.addEventListener("pointercancel", finish, true);
@@ -219,15 +221,25 @@ FlowWorld.prototype.drawTargets = function drawTargets() {
 
 FlowWorld.prototype.drawPieces = function drawPieces() {
   baseDrawPieces.call(this);
-  if (!this.widthAdjusting || this.run.stage.area !== "gear") return;
+  if (!this.widthAdjusting) return;
+  const area = this.run.stage.area;
+  if (area !== "gear" && area !== "link") return;
 
-  const centers = this.run.pieces.map((p) => this.positions.get(p.id)).filter(Boolean),
-    y = Math.max(
-      this.h * 0.565,
-      Math.min(...centers.map((p) => p.y)) - this.baseRadius - 30,
-    ),
-    x = this.w / 2,
+  const piece = this.run.pieces.find((p) => p.id === this.widthAdjustPieceId),
+    centers = this.run.pieces.map((p) => this.positions.get(p.id)).filter(Boolean),
+    center = piece ? this.positions.get(piece.id) : null,
+    x = area === "gear" ? this.w / 2 : center?.x,
+    y =
+      area === "gear"
+        ? Math.max(
+            this.h * 0.565,
+            Math.min(...centers.map((p) => p.y)) - this.baseRadius - 30,
+          )
+        : Math.max(36, (center?.y ?? this.h * 0.7) - this.baseRadius - 42),
+    value = area === "gear" ? this.run.width : piece?.width,
     c = this.ctx;
+  if (x == null) return;
+
   c.save();
   c.fillStyle = "#15263cee";
   c.strokeStyle = this.color + "cc";
@@ -236,6 +248,6 @@ FlowWorld.prototype.drawPieces = function drawPieces() {
   c.roundRect(x - 25, y - 18, 50, 36, 18);
   c.fill();
   c.stroke();
-  this.label(this.run.width || "◌", x, y, this.color, 18);
+  this.label(value || "◌", x, y, this.color, 18);
   c.restore();
 };
