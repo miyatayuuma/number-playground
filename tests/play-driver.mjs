@@ -167,6 +167,7 @@ export async function touchPeel(
     touchPoints: [{ x: box.x + from.x, y: box.y + from.y }],
   });
   const initial = (await read()).dragIds;
+  if (hold) await page.waitForTimeout(hold * 1000);
   for (let i = 1; i <= steps; i++)
     await cdp.send("Input.dispatchTouchEvent", {
       type: "touchMove",
