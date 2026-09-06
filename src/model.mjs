@@ -1,6 +1,5 @@
-import { STAGES } from "./stages.mjs";
-export function createRun(index) {
-  const stage = STAGES[index];
+import { isPrime } from "./stages.mjs";
+export function createRun(stage) {
   if (!stage) throw new RangeError("Unknown stage");
   let unit = 0;
   const dots = [],
@@ -10,15 +9,20 @@ export function createRun(index) {
         dots.push({ id, origin });
         return id;
       });
-      return { id: origin, ids };
+      return { id: origin, ids, width: stage.widths?.[origin] || 0 };
     });
   return {
-    index,
+    width: 0,
     stage,
     dots,
     pieces,
     nextId: pieces.length,
-    targets: stage.targets.map((t) => ({ ...t, complete: false, loaded: [] })),
+    targets: stage.targets.map((t) => ({
+      ...t,
+      complete: false,
+      loaded: [],
+      cells: Array(t.n).fill(null),
+    })),
     spent: [],
     misses: 0,
     gateIndex: 0,
@@ -34,7 +38,7 @@ export function activeTargets(run) {
   );
 }
 export function gateFactor(run) {
-  return run.stage.gates?.[Math.min(run.gateIndex, run.stage.gates.length - 1)];
+  return run.stage.gates?.[run.gateIndex];
 }
 function validSelection(run, pieceId, ids) {
   const p = run.pieces.find((p) => p.id === pieceId);
@@ -50,11 +54,12 @@ function take(run, pieceId, ids) {
   const p = run.pieces.find((p) => p.id === pieceId),
     set = new Set(ids);
   p.ids = p.ids.filter((id) => !set.has(id));
+  p.width = 0;
   if (!p.ids.length) run.pieces.splice(run.pieces.indexOf(p), 1);
 }
 function add(run, ids) {
   if (!ids.length) return null;
-  const p = { id: run.nextId++, ids: [...ids] };
+  const p = { id: run.nextId++, ids: [...ids], width: 0 };
   run.pieces.push(p);
   return p.id;
 }
@@ -66,6 +71,8 @@ export function split(run, pieceId, ids) {
   return { ok: true, pieceId: add(run, ids), type: "split" };
 }
 export function merge(run, sourceId, ids, targetId) {
+  if (run.stage.area !== "spark" && run.stage.family !== "square")
+    return { ok: false };
   const t = run.pieces.find((p) => p.id === targetId);
   if (
     sourceId === targetId ||
@@ -76,60 +83,135 @@ export function merge(run, sourceId, ids, targetId) {
     return { ok: false };
   take(run, sourceId, ids);
   t.ids.push(...ids);
+  t.width = 0;
   return { ok: true, pieceId: targetId, type: "merge" };
 }
 function reject(run) {
-  run.misses++;
-  if (["gear", "core"].includes(run.stage.area) && run.misses >= 4)
-    run.status = "lost";
   return { ok: false, type: "miss" };
 }
-function accepts(run, targetIndex, ids) {
+export function setWidth(run, pieceId, width) {
+  if (run.status !== "play") return false;
+  const p = run.pieces.find((p) => p.id === pieceId);
+  if (!p) return false;
+  const max =
+    run.stage.area === "gear"
+      ? Math.min(...run.pieces.map((p) => p.ids.length))
+      : p.ids.length;
+  width = Math.max(0, Math.min(max, Math.round(width)));
+  if (run.stage.area === "gear") {
+    run.width = width;
+    for (const q of run.pieces) q.width = width;
+  } else p.width = width;
+  return true;
+}
+function accepts(run, targetIndex, ids, width = 0) {
   const t = run.targets[targetIndex];
-  return (
-    t &&
-    activeTargets(run).includes(targetIndex) &&
-    ids.length === t.n &&
-    (t.origin === null || ids.every((id) => run.dots[id].origin === t.origin))
-  );
+  if (!t || !activeTargets(run).includes(targetIndex) || ids.length !== t.n)
+    return false;
+  if (t.kind === "divide" || t.kind === "gear" || t.kind === "mosaic")
+    return false;
+  if (t.kind === "prime") return isPrime(ids.length) && width === 0;
+  if (t.kind === "rectangle")
+    return width > 1 && width < ids.length && ids.length % width === 0;
+  return true;
 }
 function fill(run, targetIndex, ids) {
   const t = run.targets[targetIndex];
   t.complete = true;
-  if (run.stage.charge) t.loaded = [...ids];
-  else run.spent.push(...ids);
-  let type = run.stage.charge ? "load" : "hit",
-    fired = ids;
-  if (run.targets.every((t) => t.complete)) {
-    run.status = "won";
-    if (run.stage.charge) {
-      fired = run.targets.flatMap((t) => t.loaded);
-      run.spent.push(...fired);
-      run.targets.forEach((t) => {
-        t.loaded = [];
-      });
-      type = "burst";
-    }
-  }
+  run.spent.push(...ids);
+  if (run.targets.every((t) => t.complete)) run.status = "won";
   return {
     ok: true,
-    type,
-    ids: [...fired],
+    type: "hit",
+    ids: [...ids],
     inputIds: [...ids],
     targetIndex,
     complete: run.status === "won",
-    charge: run.stage.charge,
   };
 }
-export function fire(run, pieceId, ids, targetIndex) {
+export function fire(run, pieceId, ids, targetIndex, cell) {
   if (!validSelection(run, pieceId, ids)) return { ok: false, ignored: true };
-  if (!accepts(run, targetIndex, ids)) return reject(run);
+  const p = run.pieces.find((p) => p.id === pieceId),
+    t = run.targets[targetIndex];
+  if (!t || !activeTargets(run).includes(targetIndex)) return reject(run);
+  if (t.kind === "gear") {
+    const f = run.width;
+    if (
+      f < 2 ||
+      run.pieces.length !== 2 ||
+      run.pieces.some((p) => p.ids.length % f)
+    )
+      return reject(run);
+    const groups = run.pieces.flatMap((p) =>
+      Array.from({ length: p.ids.length / f }, (_, i) =>
+        p.ids.slice(i * f, (i + 1) * f),
+      ),
+    );
+    const all = run.pieces.flatMap((p) => p.ids);
+    run.pieces = [];
+    run.spent.push(...all);
+    t.complete = true;
+    run.status = "won";
+    return {
+      ok: true,
+      type: "volley",
+      ids: all,
+      groups,
+      targetIndex,
+      complete: true,
+    };
+  }
+  if (t.kind === "mosaic") {
+    const width = ids.length === p.ids.length ? p.width : 0,
+      height = ids.length / width;
+    if (
+      !width ||
+      !Number.isInteger(height) ||
+      !cell ||
+      cell.col < 0 ||
+      cell.row < 0 ||
+      cell.col + width > t.side ||
+      cell.row + height > t.side
+    )
+      return reject(run);
+    const slots = ids.map(
+      (_, i) =>
+        (cell.row + Math.floor(i / width)) * t.side + cell.col + (i % width),
+    );
+    if (slots.some((i) => t.cells[i] !== null)) return reject(run);
+    take(run, pieceId, ids);
+    slots.forEach((slot, i) => (t.cells[slot] = ids[i]));
+    t.loaded.push(...ids);
+    const complete = t.loaded.length === t.n;
+    const all = [...t.loaded];
+    if (complete) {
+      t.complete = true;
+      run.spent.push(...all);
+      t.loaded = [];
+      run.status = "won";
+    }
+    return {
+      ok: true,
+      type: "mosaic",
+      ids: complete ? all : [...ids],
+      inputIds: [...ids],
+      slots,
+      targetIndex,
+      complete,
+    };
+  }
+  if (
+    !accepts(run, targetIndex, ids, ids.length === p.ids.length ? p.width : 0)
+  )
+    return reject(run);
   take(run, pieceId, ids);
   return fill(run, targetIndex, ids);
 }
 export function divide(run, pieceId, ids) {
   if (!validSelection(run, pieceId, ids)) return { ok: false, ignored: true };
   const f = gateFactor(run);
+  const piece = run.pieces.find((p) => p.id === pieceId);
+  if (piece.width !== f || ids.length !== piece.ids.length) return reject(run);
   if (!f) return { ok: false, ignored: true };
   const q = Math.floor(ids.length / f),
     r = ids.length % f;
@@ -137,7 +219,12 @@ export function divide(run, pieceId, ids) {
     shot = [],
     rest = ids.slice(q * f);
   for (let i = 0; i < q * f; i++) (i % f === 0 ? kept : shot).push(ids[i]);
-  const targetIndex = activeTargets(run).find((i) => accepts(run, i, shot));
+  const targetIndex = activeTargets(run).find(
+    (i) =>
+      run.targets[i].kind === "divide" &&
+      run.targets[i].n === shot.length &&
+      run.targets[i].input === ids.length,
+  );
   if (!q || targetIndex === undefined)
     return { ...reject(run), factor: f, quotient: q, remainder: r };
   take(run, pieceId, ids);

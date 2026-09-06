@@ -24,11 +24,16 @@ function geometry(n) {
     if (depth === fs.length)
       return { radius: 1, dots: [{ x: 0, y: 0, branch: 0 }], groups: [] };
     const f = fs[depth],
-      children = Array.from({ length: f }, () =>
-        build(depth + 1, f === 2 ? orientation + Math.PI / 2 : orientation),
-      );
+      children = Array.from({ length: f }, (_, i) => {
+        const angle =
+          orientation -
+          (f === 4 ? Math.PI * 0.75 : Math.PI / 2) +
+          (i * Math.PI * 2) / f;
+        return build(depth + 1, fs[depth + 1] === 2 ? angle + Math.PI / 2 : 0);
+      });
     const cr = children[0].radius,
-      distance = (cr + 0.3) / Math.sin(Math.PI / f);
+      distance =
+        (cr + (depth < fs.length - 1 ? 1.2 : 0.3)) / Math.sin(Math.PI / f);
     const dots = [],
       groups = [];
     children.forEach((child, i) => {
@@ -85,5 +90,48 @@ export function shape(n, radius = 54) {
     })),
     dotRadius: scale * 0.82,
     radius,
+  };
+}
+
+// The same row layout drives preview, acceptance, and the actual projectile IDs.
+export function arrayShape(n, columns, radius = 54, pitchLimit = 19) {
+  columns = Math.max(1, Math.min(n, Math.trunc(columns)));
+  const rows = Math.floor(n / columns),
+    remainder = n % columns;
+  const width = columns + (remainder ? 2 : 0),
+    height = Math.max(rows, remainder, 1);
+  const pitch = Math.min(pitchLimit, (radius * 1.65) / Math.max(width, height));
+  const dots = Array.from({ length: n }, (_, i) =>
+    i < rows * columns
+      ? {
+          x: ((i % columns) - (columns - 1) / 2) * pitch,
+          y: (Math.floor(i / columns) - (rows - 1) / 2) * pitch,
+          keep: i % columns === 0,
+        }
+      : {
+          x: ((columns - 1) / 2 + 2) * pitch,
+          y: (i - rows * columns - (remainder - 1) / 2) * pitch,
+          remainder: true,
+        },
+  );
+  const groups = Array.from({ length: rows }, (_, row) => ({
+    x: 0,
+    y: (row - (rows - 1) / 2) * pitch,
+    radius: (columns * pitch) / 2,
+    depth: 1,
+    indices: Array.from({ length: columns }, (_, i) => row * columns + i),
+  }));
+  return {
+    dots,
+    groups,
+    dotRadius: pitch * 0.29,
+    radius: Math.max(
+      20,
+      ...dots.map((d) => Math.hypot(d.x, d.y) + pitch * 0.29),
+    ),
+    pitch,
+    columns,
+    rows,
+    remainder,
   };
 }

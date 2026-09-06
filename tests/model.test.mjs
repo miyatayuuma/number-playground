@@ -3,224 +3,274 @@ import assert from "node:assert/strict";
 import {
   createRun,
   activeTargets,
-  gateFactor,
   split,
   merge,
   fire,
   divide,
+  setWidth,
   accountedIds,
 } from "../src/model.mjs";
-import { factors, shape, intrinsic } from "../src/shapes.mjs";
-import { STAGES } from "../src/stages.mjs";
-function audit(r) {
-  const ids = accountedIds(r);
-  assert.equal(ids.length, r.dots.length);
+import {
+  PROBLEM_BANK,
+  generateProblem,
+  divisors,
+  isPrime,
+} from "../src/stages.mjs";
+import { shape, factors, arrayShape } from "../src/shapes.mjs";
+import {
+  freshProgress,
+  restoreProgress,
+  recordResult,
+} from "../src/progress.mjs";
+function audit(run) {
+  const ids = accountedIds(run);
+  assert.equal(ids.length, run.dots.length);
   assert.equal(new Set(ids).size, ids.length);
   assert.deepEqual(
     [...ids].sort((a, b) => a - b),
-    r.dots.map((d) => d.id),
+    run.dots.map((d) => d.id),
   );
-  assert.ok(r.pieces.every((p) => p.ids.length > 0 && p.ids.length <= 36));
+  assert.ok(run.pieces.every((p) => p.ids.length > 0 && p.ids.length <= 36));
 }
-function part(r, p, n) {
-  const g = shape(p.ids.length).groups.find((g) => g.indices.length === n);
-  assert.ok(g, `Visible ${n} inside ${p.ids.length}`);
-  return g.indices.map((i) => p.ids[i]);
-}
-function shot(r, p, n, target) {
-  const ids = n === p.ids.length ? [...p.ids] : part(r, p, n);
-  const result = fire(r, p.id, ids, target);
-  assert.equal(result.ok, true);
-  audit(r);
+function shoot(run, p, i, cell) {
+  const result = fire(run, p.id, [...p.ids], i, cell);
+  assert.ok(result.ok, JSON.stringify(run.stage));
+  audit(run);
   return result;
 }
-
-test("canonical shapes cover 1–36, with exact factor products and disjoint dots", () => {
+function combineAll(run) {
+  while (run.pieces.length > 1) {
+    const p = run.pieces[1];
+    assert.ok(merge(run, p.id, [...p.ids], run.pieces[0].id).ok);
+    audit(run);
+  }
+  return run.pieces[0];
+}
+export function solve(problem) {
+  const run = createRun(structuredClone(problem));
+  if (problem.area === "spark") {
+    combineAll(run);
+    for (let i = 0; i < run.targets.length; i++) {
+      let p = run.pieces[0];
+      if (p.ids.length > run.targets[i].n) {
+        const result = split(run, p.id, p.ids.slice(0, run.targets[i].n));
+        p = run.pieces.find((p) => p.id === result.pieceId);
+      }
+      shoot(run, p, i);
+    }
+  } else if (problem.area === "link") {
+    while (run.stage.gates[run.gateIndex]) {
+      const p = run.pieces[0];
+      setWidth(run, p.id, run.stage.gates[run.gateIndex]);
+      assert.ok(divide(run, p.id, [...p.ids]).ok);
+      audit(run);
+    }
+    for (const i of activeTargets(run))
+      shoot(
+        run,
+        run.pieces.find((p) => p.ids.length === run.targets[i].n),
+        i,
+      );
+  } else if (problem.area === "gear") {
+    const f = divisors(problem.ammo[0]).find((f) => problem.ammo[1] % f === 0);
+    setWidth(run, run.pieces[0].id, f);
+    shoot(run, run.pieces[0], 0);
+  } else if (problem.family === "square") {
+    const t = run.targets[0];
+    for (const p of [...run.pieces]) {
+      const w = p.width,
+        h = p.ids.length / w;
+      let cell;
+      for (let row = 0; row <= t.side - h && !cell; row++)
+        for (let col = 0; col <= t.side - w; col++)
+          if (
+            p.ids.every(
+              (_, i) =>
+                t.cells[(row + Math.floor(i / w)) * t.side + col + (i % w)] ===
+                null,
+            )
+          ) {
+            cell = { row, col };
+            break;
+          }
+      shoot(run, p, 0, cell);
+    }
+  } else {
+    for (let i = 0; i < run.targets.length; i++) {
+      const p = run.pieces.find((p) => p.ids.length === run.targets[i].n);
+      if (run.targets[i].kind === "rectangle")
+        setWidth(
+          run,
+          p.id,
+          divisors(p.ids.length).find((f) => f < p.ids.length),
+        );
+      shoot(run, p, i);
+    }
+  }
+  assert.equal(run.status, "won");
+  assert.equal(run.spent.length, run.dots.length);
+  audit(run);
+}
+test("every generated construction is solvable and conserves every dot", () => {
+  for (const [rule, bank] of Object.entries(PROBLEM_BANK)) {
+    assert.ok(bank.length >= 30, rule);
+    for (const p of bank) solve(p);
+  }
+});
+test("seeded generation spans all difficulties without repeating the last ten", () => {
+  for (const rule of Object.keys(PROBLEM_BANK))
+    for (let d = 1; d <= 5; d++) {
+      let recent = [];
+      const seen = new Set();
+      for (let seed = 0; seed < 80; seed++) {
+        const p = generateProblem(rule, d, seed, recent);
+        assert.deepEqual(p, generateProblem(rule, d, seed, recent));
+        assert.equal(p.difficulty, d);
+        assert.ok(!recent.includes(p.id));
+        seen.add(p.id);
+        recent = [...recent, p.id].slice(-10);
+      }
+      assert.ok(seen.size >= 11);
+    }
+  assert.throws(() => generateProblem("missing"));
+});
+test("all common widths work, and unequal rows never consume ammo", () => {
+  for (const problem of PROBLEM_BANK.gear)
+    for (const f of divisors(problem.ammo[0]).filter(
+      (f) => problem.ammo[1] % f === 0,
+    )) {
+      const r = createRun(problem);
+      setWidth(r, 0, f);
+      const result = shoot(r, r.pieces[0], 0);
+      assert.ok(result.groups.every((g) => g.length === f));
+    }
+  const r = createRun(PROBLEM_BANK.gear[0]);
+  setWidth(r, 0, 1);
+  const before = structuredClone(r);
+  for (let i = 0; i < 8; i++)
+    assert.equal(fire(r, 0, r.pieces[0].ids, 0).ok, false);
+  assert.deepEqual(r, before);
+});
+test("14 in three columns shoots eight, keeps four, and sets two aside", () => {
+  const p = PROBLEM_BANK.link.find((p) => p.ammo[0] === 14 && p.gates[0] === 3),
+    r = createRun(p);
+  assert.equal(divide(r, 0, [...r.pieces[0].ids]).ok, false);
+  setWidth(r, 0, 3);
+  const out = divide(r, 0, [...r.pieces[0].ids]);
+  assert.deepEqual(out.kept, [0, 3, 6, 9]);
+  assert.deepEqual(out.rest, [12, 13]);
+  assert.equal(out.ids.length, 8);
+  audit(r);
+});
+test("square accepts spatial tiles and whole-square alternative, rejects overlap and boundaries", () => {
+  const problem = PROBLEM_BANK.core.find(
+    (p) =>
+      p.family === "square" &&
+      p.targets[0].n === 36 &&
+      p.ammo.every((n) => n === 9),
+  );
+  const r = createRun(problem);
+  shoot(r, r.pieces[0], 0, { row: 0, col: 0 });
+  const before = structuredClone(r);
+  assert.equal(fire(r, 1, r.pieces[0].ids, 0, { row: 0, col: 0 }).ok, false);
+  assert.equal(fire(r, 1, r.pieces[0].ids, 0, { row: 5, col: 5 }).ok, false);
+  assert.deepEqual(r, before);
+  for (const cell of [
+    { row: 0, col: 3 },
+    { row: 3, col: 0 },
+    { row: 3, col: 3 },
+  ])
+    shoot(r, r.pieces[0], 0, cell);
+  assert.equal(r.status, "won");
+  const alt = createRun(problem),
+    p = combineAll(alt);
+  setWidth(alt, p.id, 6);
+  shoot(alt, p, 0, { row: 0, col: 0 });
+  assert.equal(alt.status, "won");
+});
+test("prime and rectangle armour require their actual shapes", () => {
+  assert.equal(isPrime(1), false);
+  assert.equal(isPrime(2), true);
+  const r = createRun(
+    PROBLEM_BANK.core.find(
+      (p) => p.family === "contrast" && p.ammo[0] === 7 && p.ammo[1] === 9,
+    ),
+  );
+  assert.equal(fire(r, 1, r.pieces[1].ids, 1).ok, false);
+  setWidth(r, 1, 2);
+  assert.equal(fire(r, 1, r.pieces[1].ids, 1).ok, false);
+  setWidth(r, 1, 3);
+  shoot(r, r.pieces[1], 1);
+  setWidth(r, 0, 2);
+  assert.equal(fire(r, 0, r.pieces[0].ids, 0).ok, false);
+  setWidth(r, 0, 0);
+  shoot(r, r.pieces[0], 0);
+  assert.equal(r.status, "won");
+});
+test("shapes 1–36 do not overlap; paired polygons have radial symmetry", () => {
   for (let n = 1; n <= 36; n++) {
+    const s = shape(n, 60);
+    assert.equal(s.dots.length, n);
     assert.equal(
       factors(n).reduce((a, b) => a * b, 1),
       n,
     );
-    const s = shape(n, 60);
-    assert.equal(s.dots.length, n);
-    assert.deepEqual(shape(n, 60), s);
-    for (const d of s.dots)
-      assert.ok(Math.hypot(d.x, d.y) + s.dotRadius < 60.01);
     for (let i = 0; i < n; i++)
       for (let j = i + 1; j < n; j++)
         assert.ok(
           Math.hypot(s.dots[i].x - s.dots[j].x, s.dots[i].y - s.dots[j].y) >
             s.dotRadius * 2,
         );
+    for (let width = 1; width <= n; width++) {
+      const a = arrayShape(n, width);
+      assert.equal(a.dots.length, n);
+      assert.equal(a.dots.filter((d) => d.remainder).length, n % width);
+      assert.equal(a.dots.filter((d) => d.keep).length, Math.floor(n / width));
+    }
+  }
+  for (const n of [6, 10, 14, 22, 26, 34]) {
+    const s = shape(n, 60),
+      a = (2 * Math.PI) / (n / 2);
+    for (const d of s.dots) {
+      const x = d.x * Math.cos(a) - d.y * Math.sin(a),
+        y = d.x * Math.sin(a) + d.y * Math.cos(a);
+      assert.ok(s.dots.some((q) => Math.hypot(q.x - x, q.y - y) < 1e-7));
+    }
     for (const g of s.groups) {
-      assert.ok(g.indices.length < n);
-      assert.equal(new Set(g.indices).size, g.indices.length);
+      const [a, b] = g.indices.map((i) => s.dots[i]);
+      assert.ok(Math.abs((a.x - g.x) * g.y - (a.y - g.y) * g.x) < 1e-6);
+      assert.ok(Math.hypot(a.x - b.x, a.y - b.y) > 2 * s.dotRadius);
     }
-    assert.ok(intrinsic(n).radius >= 1);
   }
-  assert.deepEqual(factors(8), [2, 4]);
-  assert.deepEqual(factors(9), [3, 3]);
-  assert.deepEqual(factors(12), [3, 4]);
-  assert.throws(() => shape(0));
-  assert.throws(() => shape(37));
-  assert.throws(() => shape(2.5));
 });
-
-test("combining and pulling apart keeps persistent unit identities", () => {
-  const r = createRun(0),
-    before = [...r.pieces[0].ids, ...r.pieces[1].ids];
-  assert.ok(merge(r, 1, r.pieces[1].ids, 0).ok);
-  assert.equal(r.pieces[0].ids.length, 8);
-  audit(r);
-  const ids = part(r, r.pieces[0], 4);
-  assert.ok(split(r, 0, ids).ok);
-  assert.deepEqual(
-    r.pieces.map((p) => p.ids.length),
-    [4, 4],
+test("difficulty adapts only to completed problems or deliberate reissues; restores bounded state", () => {
+  const p = freshProgress().gear;
+  for (let i = 0; i < 3; i++) recordResult(p, true);
+  assert.equal(p.difficulty, 2);
+  recordResult(p, false);
+  assert.equal(p.difficulty, 2);
+  recordResult(p, false);
+  assert.equal(p.difficulty, 1);
+  for (let i = 0; i < 30; i++) recordResult(p, true);
+  assert.equal(p.difficulty, 5);
+  for (let i = 0; i < 30; i++) recordResult(p, false);
+  assert.equal(p.difficulty, 1);
+  assert.equal(
+    restoreProgress({
+      gear: { difficulty: 99, wins: 99, retries: -4, recent: [null, "a"] },
+    }).gear.difficulty,
+    5,
   );
-  audit(r);
-  assert.deepEqual(
-    r.pieces.flatMap((p) => p.ids).sort((a, b) => a - b),
-    before,
-  );
-  assert.equal(merge(r, 0, [999], 1).ok, false);
-  assert.equal(split(r, 0, [r.pieces[0].ids[0], r.pieces[0].ids[0]]).ok, false);
-  audit(r);
 });
 
-test("division shoots the other columns and leaves quotient plus remainder", () => {
-  const r = createRun(6),
-    p = r.pieces[0],
-    ids = [...p.ids],
-    result = divide(r, p.id, ids);
-  assert.equal(result.ok, true);
-  assert.equal(result.factor, 3);
-  assert.equal(result.quotient, 4);
-  assert.equal(result.remainder, 2);
-  assert.equal(result.ids.length, 8);
-  assert.deepEqual(result.kept, [0, 3, 6, 9]);
-  assert.deepEqual(result.rest, [12, 13]);
-  assert.deepEqual(
-    r.pieces.map((p) => p.ids.length),
-    [4, 2],
-  );
-  audit(r);
-  assert.equal(result.ids.length + result.kept.length + result.rest.length, 14);
-});
-
-test("every stage is solvable using actual visible subgroups or entire pieces", () => {
-  for (let index = 0; index < STAGES.length; index++) {
-    const r = createRun(index);
-    if (index === 0) {
-      merge(r, 1, r.pieces[1].ids, 0);
-      shot(r, r.pieces[0], 8, 0);
-    }
-    if (index === 1) {
-      shot(r, r.pieces[0], 4, 0);
-      shot(r, r.pieces[0], 8, 1);
-    }
-    if (index === 2) {
-      merge(r, 1, [...r.pieces[1].ids], 0);
-      merge(r, 2, [...r.pieces.find((p) => p.id === 2).ids], 0);
-      shot(r, r.pieces[0], 10, 0);
-    }
-    if ([3, 10, 11].includes(index)) {
-      for (let t = 0; t < r.targets.length; t++)
-        shot(r, r.pieces[0], r.targets[t].n, t);
-    }
-    if (index === 4) {
-      for (let t = 0; t < 3; t++) shot(r, r.pieces[0], 4, t);
-    }
-    if ([5, 6, 9].includes(index)) {
-      const divisions = index === 9 ? 2 : 1;
-      for (let d = 0; d < divisions; d++) {
-        const p = r.pieces[0];
-        assert.ok(divide(r, p.id, [...p.ids]).ok);
-        audit(r);
-      }
-      for (const t of activeTargets(r)) {
-        const p = r.pieces.find((p) => p.ids.length === r.targets[t].n);
-        shot(r, p, p.ids.length, t);
-      }
-    }
-    if (index === 7) {
-      shot(
-        r,
-        r.pieces.find((p) => p.id === 0),
-        4,
-        0,
-      );
-      shot(
-        r,
-        r.pieces.find((p) => p.id === 1),
-        4,
-        1,
-      );
-    }
-    if (index === 8) {
-      const p = r.pieces.find((p) => p.ids.length === 6);
-      merge(r, p.id, part(r, p, 2), 0);
-      shot(
-        r,
-        r.pieces.find((p) => p.ids.length === 10),
-        10,
-        0,
-      );
-      shot(r, r.pieces[0], 4, 1);
-    }
-    assert.equal(r.status, "won", r.stage.id);
-    audit(r);
+test("rule-specific objects cannot be merged into an unsolvable paired gun or division", () => {
+  for (const rule of ["gear", "core"]) {
+    const problem = PROBLEM_BANK[rule].find(
+      (p) => p.ammo.length === 2 && p.family !== "square",
+    );
+    const r = createRun(problem),
+      before = structuredClone(r);
+    assert.equal(merge(r, 0, [...r.pieces[0].ids], 1).ok, false);
+    assert.deepEqual(r, before);
   }
-});
-
-test("failed shots and invalid gates never delete ammunition", () => {
-  for (const index of [0, 6]) {
-    const r = createRun(index),
-      p = r.pieces[0],
-      ids = [...p.ids];
-    for (let i = 0; i < 4; i++) {
-      assert.equal(fire(r, p.id, ids, 0).ok, false);
-      audit(r);
-    }
-    assert.equal(r.status, index === 0 ? "play" : "lost");
-    assert.deepEqual(r.pieces[0].ids, ids);
-  }
-  const r = createRun(5),
-    p = r.pieces[0],
-    ids = p.ids.slice(0, 2);
-  const before = JSON.stringify(r.pieces);
-  assert.equal(divide(r, p.id, ids).ok, false);
-  assert.equal(JSON.stringify(r.pieces), before);
-  audit(r);
-});
-
-test("linked sockets keep their loaded units until a single combined burst", () => {
-  const r = createRun(3);
-  for (let i = 0; i < 2; i++) {
-    const result = shot(r, r.pieces[0], 3, i);
-    assert.equal(result.type, "load");
-    assert.equal(r.spent.length, 0);
-  }
-  const result = shot(r, r.pieces[0], 3, 2);
-  assert.equal(result.type, "burst");
-  assert.equal(result.ids.length, 9);
-  assert.equal(r.spent.length, 9);
-  assert.equal(r.targets.flatMap((t) => t.loaded).length, 0);
-  audit(r);
-});
-
-test("resonance requires a part from each source; future layers are closed", () => {
-  const r = createRun(7),
-    p = r.pieces[0],
-    ids = part(r, p, 4);
-  assert.equal(fire(r, p.id, ids, 1).ok, false);
-  audit(r);
-  assert.equal(r.targets[1].complete, false);
-  assert.equal(fire(r, p.id, ids, 0).ok, true);
-  audit(r);
-  const t = createRun(8),
-    q = t.pieces[0];
-  assert.equal(fire(t, q.id, part(t, q, 4), 1).ok, false);
-  audit(t);
-  assert.equal(gateFactor(createRun(9)), 3);
 });
