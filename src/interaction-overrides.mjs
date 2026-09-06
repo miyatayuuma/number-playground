@@ -169,7 +169,8 @@ FlowWorld.prototype.dropTarget = function dropTarget(x, y) {
 };
 
 const baseHandleHit = FlowWorld.prototype.handleHit,
-  baseDrawPieces = FlowWorld.prototype.drawPieces;
+  baseDrawPieces = FlowWorld.prototype.drawPieces,
+  baseDrawTargets = FlowWorld.prototype.drawTargets;
 
 FlowWorld.prototype.handleHit = function handleHit(x, y) {
   const hit = baseHandleHit.call(this, x, y);
@@ -185,6 +186,35 @@ FlowWorld.prototype.handleHit = function handleHit(x, y) {
     this.widthAdjustListeners = true;
   }
   return hit;
+};
+
+FlowWorld.prototype.drawTargets = function drawTargets() {
+  baseDrawTargets.call(this);
+  if (this.run.stage.area !== "gear" || this.hover?.kind !== "target") return;
+
+  const i = this.hover.index,
+    target = this.run.targets[i];
+  if (!target || target.kind !== "gear") return;
+
+  const p = this.targetPoint(i),
+    count = Math.max(2, this.run.width || 3),
+    pitch = Math.min(11, 55 / count),
+    width = count * pitch + 8,
+    c = this.ctx;
+
+  c.save();
+  c.strokeStyle = this.color + "ff";
+  c.fillStyle = this.color + "18";
+  c.lineWidth = 2.5;
+  c.shadowColor = this.color;
+  c.shadowBlur = 12;
+  for (const dx of [-38, 38]) {
+    const x = p.x + dx - width / 2,
+      y = p.y - 12;
+    c.fillRect(x, y, width, 24);
+    c.strokeRect(x, y, width, 24);
+  }
+  c.restore();
 };
 
 FlowWorld.prototype.drawPieces = function drawPieces() {
