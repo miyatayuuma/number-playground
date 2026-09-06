@@ -56,24 +56,35 @@ test("four contains two vertical pairs, including fours nested in larger shapes"
       );
     }
 });
-test("fast movement descends once, while slow movement, jitter and late acceleration do not", () => {
-  for (const dt of [8, 16, 33]) {
-    const g = new PeelGesture(0, 0, 0);
-    assert.equal(g.update(30, 0, dt), true);
-    assert.equal(g.update(80, 0, dt + 10), false);
-  }
+test("deliberate slow movement peels once while normal flicks, jitter and holds do not", () => {
   const slow = new PeelGesture(0, 0, 0);
-  for (let t = 20; t <= 160; t += 20)
-    assert.equal(slow.update(t * 0.2, 0, t), false);
-  assert.equal(slow.update(120, 0, 170), false);
+  assert.equal(slow.update(4, 0, 40), false);
+  assert.equal(slow.update(8, 0, 100), false);
+  assert.equal(slow.update(12, 0, 160), true);
+  assert.equal(slow.update(24, 0, 260), false);
+
+  for (const dt of [8, 16, 33]) {
+    const fast = new PeelGesture(0, 0, 0);
+    assert.equal(fast.update(30, 0, dt), false);
+    assert.equal(fast.update(32, 0, dt + 150), false);
+  }
+
+  const ordinary = new PeelGesture(0, 0, 0);
+  assert.equal(ordinary.update(6, 0, 30), false);
+  assert.equal(ordinary.update(14, 0, 70), false);
+  assert.equal(ordinary.update(24, 0, 110), false);
+  assert.equal(ordinary.update(26, 0, 260), false);
+
   const tap = new PeelGesture(0, 0, 0);
-  for (let t = 10; t < 100; t += 10)
+  for (let t = 10; t < 220; t += 10)
     assert.equal(tap.update(t % 4, 0, t), false);
+
   const hold = new PeelGesture(0, 0, 0);
-  hold.update(0, 0, 500);
-  assert.equal(hold.update(20, 0, 520), true);
+  assert.equal(hold.update(0, 0, 500), false);
+  assert.equal(hold.update(4, 0, 540), false);
+  assert.equal(hold.update(12, 0, 680), true);
 });
-test("flick direction selects a child without skipping another level; grip is exempt", () => {
+test("peel direction selects a direct child without skipping another level; grip is exempt", () => {
   const w = world([4]),
     p = w.read().pieces[0],
     whole = w.hit(p.x, p.y);
