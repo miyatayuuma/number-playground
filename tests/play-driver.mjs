@@ -175,11 +175,22 @@ export async function touchPeel(
         },
       ],
     });
-  const picked = (await read()).dragIds;
+  let picked = (await read()).dragIds;
   await cdp.send("Input.dispatchTouchEvent", {
     type: cancel ? "touchCancel" : "touchEnd",
     touchPoints: [],
   });
+  await page.waitForTimeout(20);
+  if (!cancel && Array.isArray(from.ids) && from.ids.length > 1) {
+    const after = await read(),
+      peeled = after.pieces.find(
+        (p) =>
+          p.id !== from.id &&
+          p.ids.length < from.ids.length &&
+          p.ids.every((id) => from.ids.includes(id)),
+      );
+    if (peeled) picked = [...peeled.ids];
+  }
   await cdp.detach();
   return { initial, picked };
 }
