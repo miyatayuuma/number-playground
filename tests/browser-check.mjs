@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { readFile, mkdir } from "node:fs/promises";
 import { resolve, extname } from "node:path";
 import { chromium } from "playwright";
-import { STAGES } from "../src/stages.mjs";
+import { instrument, driver } from "./play-driver.mjs";
 const root = resolve(import.meta.dirname, "..");
 const server = createServer(async (req, res) => {
   try {
@@ -40,167 +40,91 @@ const context = await browser.newContext({
   reducedMotion: "reduce",
   hasTouch: true,
 });
+await instrument(context);
 const page = await context.newPage(),
   errors = [];
-page.on("pageerror", (e) => errors.push(e.message));
+page.on("pageerror", (e) => errors.push(e.stack));
 page.on("response", (r) => {
   if (r.status() >= 400) errors.push(`${r.status()} ${r.url()}`);
 });
-const read = () =>
-  page.evaluate(async () => (await import("./src/game.mjs")).inspect());
-async function settled() {
-  await page.waitForFunction(async () => {
-    const s = (await import("./src/game.mjs")).inspect();
-    return !s.busy && s.width > 0;
-  });
-  await page.waitForTimeout(45);
-  return read();
-}
-let navigation = 0;
-async function route(index) {
-  const s = STAGES[index];
-  await page.goto(`${base}/?test=${++navigation}#${s.area}/${(index % 3) + 1}`);
-  await settled();
-}
-async function audit() {
-  const s = await read(),
-    ids = [...s.pieces.flatMap((p) => p.ids), ...s.loaded, ...s.spent];
-  assert.equal(ids.length, s.total);
-  assert.equal(new Set(ids).size, s.total);
-  if (!s.busy)
-    assert.equal(
-      new Set(s.visibleIds).size,
-      s.pieces.flatMap((p) => p.ids).length + s.loaded.length,
-    );
-  return s;
-}
-async function drag(piece, destination, n = piece.n) {
-  const source = n === piece.n ? piece : piece.parts.find((p) => p.n === n);
-  assert.ok(source, `Visible ${n} in ${piece.n}`);
-  const box = await page.locator("#world").boundingBox();
-  await page.mouse.move(box.x + source.x, box.y + source.y);
-  await page.mouse.down();
-  const selected = await read();
-  assert.equal(selected.dragIds.length, n, `selected ${n} in ${piece.n}`);
-  await page.mouse.move(box.x + destination.x, box.y + destination.y, {
-    steps: 12,
-  });
-  await page.mouse.up();
-  await settled();
-  await audit();
-}
-async function shoot(n, targetIndex, sourceN = n) {
-  const s = await read();
-  const p = s.pieces.find((p) => p.n === sourceN);
-  assert.ok(p, `source ${sourceN}`);
-  await drag(p, s.targets[targetIndex], n);
-}
-async function combine(sourceN, targetN, n = sourceN) {
-  const s = await read(),
-    p = s.pieces.find((p) => p.n === sourceN);
-  const target = s.pieces.find((q) => q.n === targetN && q.id !== p.id);
-  assert.ok(target);
-  await drag(p, target, n);
-}
-async function gate(n) {
-  const s = await read();
-  await drag(
-    s.pieces.find((p) => p.n === n),
-    s.gate,
-  );
-}
+const { read, settled, route, audit, drag, width, solveCurrent } = driver(
+  page,
+  base,
+);
 try {
-  await route(0);
+  await page.goto(base);
+  await page.locator("[data-rule]").first().waitFor();
+  assert.equal(await page.locator("[data-rule]").count(), 4);
+  assert.equal(await page.locator("[data-stage]").count(), 0);
+  await page.locator('[data-rule="spark"]').click();
+  await settled();
+  assert.equal((await read()).rule, "spark");
   assert.equal(await page.locator(".hud button:visible").count(), 2);
-  assert.equal(await page.locator("p:visible").count(), 0);
-  await page.getByRole("button", { name: "エリアを選ぶ", exact: true }).click();
-  assert.equal(await page.locator("[data-stage]").count(), 12);
-  await page.getByRole("button", { name: "戻る", exact: true }).click();
-  for (let i = 0; i < 12; i++) {
-    await route(i);
-    if (i === 0) {
-      await combine(1, 7);
-      await shoot(8, 0);
-    }
-    if (i === 1) {
-      await shoot(4, 0, 12);
-      await shoot(8, 1);
-    }
-    if (i === 2) {
-      await combine(3, 5);
-      await combine(2, 8);
-      await shoot(10, 0);
-    }
-    if ([3, 10, 11].includes(i)) {
-      for (let t = 0; t < STAGES[i].targets.length; t++)
-        await shoot(STAGES[i].targets[t].n, t);
-    }
-    if (i === 4) {
-      await shoot(4, 0, 12);
-      await shoot(4, 1, 8);
-      await shoot(4, 2);
-    }
-    if (i === 5) {
-      await gate(12);
-      assert.deepEqual(
-        (await read()).pieces.map((p) => p.n),
-        [4],
-      );
-      await shoot(4, 1);
-    }
-    if (i === 6) {
-      await gate(14);
-      assert.deepEqual(
-        (await read()).pieces.map((p) => p.n),
-        [4, 2],
-      );
-      await shoot(2, 1);
-      await shoot(4, 2);
-    }
-    if (i === 7) {
-      await shoot(4, 0, 12);
-      await shoot(4, 1, 20);
-    }
-    if (i === 8) {
-      await combine(6, 8, 2);
-      await shoot(10, 0);
-      await shoot(4, 1);
-    }
-    if (i === 9) {
-      await gate(24);
-      await gate(8);
-      await shoot(4, 2);
-    }
-    await page.locator(".victory").waitFor();
-    assert.equal((await read()).status, "won");
+  for (const [rule, predicate] of [
+    ["spark", (p) => p.family === "join" && p.ammo[0] === 7 && p.ammo[1] === 1],
+    ["link", (p) => p.ammo[0] === 14 && p.gates[0] === 3],
+    [
+      "link",
+      (p) =>
+        p.family === "chain" &&
+        p.ammo[0] === 24 &&
+        p.gates[0] === 3 &&
+        p.gates[1] === 2,
+    ],
+    ["gear", (p) => p.ammo[0] === 12 && p.ammo[1] === 20],
+    ["gear", (p) => p.ammo[0] === 18 && p.ammo[1] === 24],
+    [
+      "core",
+      (p) => p.family === "contrast" && p.ammo[0] === 7 && p.ammo[1] === 9,
+    ],
+    ["core", (p) => p.family === "square" && p.ammo.every((n) => n === 9)],
+    [
+      "core",
+      (p) =>
+        p.family === "square" &&
+        p.targets[0].n === 25 &&
+        p.widths[0] === 2 &&
+        p.ammo[0] === 6,
+    ],
+  ]) {
+    const before = await route(rule, predicate);
+    await solveCurrent();
+    assert.notEqual((await read()).stage, before.stage);
+    assert.equal((await read()).rule, rule);
   }
   console.log(
-    "All 12 battles solved with real dragging; every unit accounted for and visible exactly once.",
+    "Real drags solved merge, remainder, chained division, common widths, primes and spatial square assembly; automatic continuation verified.",
   );
-  await page.reload();
-  await page.getByRole("button", { name: "エリアを選ぶ", exact: true }).click();
-  assert.equal(await page.locator("[data-stage].cleared").count(), 12);
-
-  // A physical touch sequence rather than hidden model actions.
-  await route(0);
-  const cdp = await context.newCDPSession(page);
+  await route("link", (p) => p.ammo[0] === 14 && p.gates[0] === 3);
   let s = await read();
-  const from = s.pieces.find((p) => p.n === 1),
-    to = s.pieces.find((p) => p.n === 7),
-    box = await page.locator("#world").boundingBox();
+  const id = s.stage;
+  for (let i = 0; i < 5; i++) await drag(s.pieces[0], s.targets[0]);
+  assert.equal((await read()).stage, id);
+  assert.equal((await read()).progress.link.retries, 0);
+  // Cancelling a width gesture restores the previous preview.
+  const box = await page.locator("#world").boundingBox(),
+    handle = s.pieces[0].handle;
+  await page.mouse.move(box.x + handle.x, box.y + handle.y);
+  await page.mouse.down();
+  await page.mouse.move(box.x + handle.x + 36, box.y + handle.y);
+  await page.locator("#world").dispatchEvent("pointercancel", { pointerId: 1 });
+  await page.mouse.up();
+  await settled();
+  assert.equal((await read()).pieces[0].width, 0);
+  // Real CDP touch input on the common-width handle.
+  await route("gear", (p) => p.ammo[0] === 12 && p.ammo[1] === 20);
+  s = await read();
+  const h = s.pieces[0].handle,
+    b = await page.locator("#world").boundingBox(),
+    cdp = await context.newCDPSession(page);
   await cdp.send("Input.dispatchTouchEvent", {
     type: "touchStart",
-    touchPoints: [{ x: box.x + from.x, y: box.y + from.y }],
+    touchPoints: [{ x: b.x + h.x, y: b.y + h.y }],
   });
-  for (let i = 1; i <= 10; i++)
+  for (let i = 1; i <= 8; i++)
     await cdp.send("Input.dispatchTouchEvent", {
       type: "touchMove",
-      touchPoints: [
-        {
-          x: box.x + from.x + ((to.x - from.x) * i) / 10,
-          y: box.y + from.y + ((to.y - from.y) * i) / 10,
-        },
-      ],
+      touchPoints: [{ x: b.x + h.x + (48 * i) / 8, y: b.y + h.y }],
     });
   await cdp.send("Input.dispatchTouchEvent", {
     type: "touchEnd",
@@ -208,114 +132,64 @@ try {
   });
   await settled();
   assert.deepEqual(
-    (await read()).pieces.map((p) => p.n),
-    [8],
+    (await read()).pieces.map((p) => p.width),
+    [4, 4],
   );
-  await shoot(8, 0);
-  console.log("Touch dragging and persistent clear records verified.");
-
-  await route(0);
-  for (let i = 0; i < 5; i++) await shoot(7, 0);
-  assert.equal((await read()).status, "play");
-  assert.equal(
-    (await read()).pieces.reduce((sum, p) => sum + p.n, 0),
-    8,
-  );
-  await route(6);
-  for (let i = 0; i < 4; i++) await shoot(14, 0);
-  await page.locator(".defeat").waitFor();
-  assert.equal((await read()).misses, 4);
-  await page.getByRole("button", { name: "同じ戦闘をやり直す" }).click();
-  assert.equal((await read()).misses, 0);
-  assert.equal((await read()).pieces[0].n, 14);
-  await route(1);
-  s = await read();
-  await drag(s.pieces[0], { x: s.width * 0.78, y: s.height * 0.83 }, 4);
-  assert.deepEqual(
-    (await read()).pieces.map((p) => p.n),
-    [8, 4],
-  );
-  await combine(4, 8);
-  assert.deepEqual(
-    (await read()).pieces.map((p) => p.n),
-    [12],
-  );
-
-  await route(0);
-  s = await read();
-  const b = await page.locator("#world").boundingBox();
-  await page.mouse.move(b.x + s.pieces[0].x, b.y + s.pieces[0].y);
-  await page.mouse.down();
-  await page.mouse.move(b.x + 20, b.y + 30, { steps: 5 });
-  await page.locator("#world").dispatchEvent("pointercancel", { pointerId: 1 });
-  await page.mouse.up();
+  // Two deliberate reissues lower difficulty; the persisted state is used after a fresh navigation.
+  const level = (await read()).difficulty;
+  for (let i = 0; i < 2; i++) {
+    await page.locator("#pause").click();
+    await page.locator('[data-menu="retry"]').click();
+    await settled();
+  }
+  assert.equal((await read()).difficulty, Math.max(1, level - 1));
+  const savedLevel = (await read()).difficulty;
+  await page.goto(`${base}/#gear`);
   await settled();
-  assert.deepEqual(
-    (await read()).pieces.map((p) => p.n),
-    [7, 1],
-  );
-
-  // Normal-motion attacks must survive pause, navigation, and resizing.
+  assert.equal((await read()).difficulty, savedLevel);
+  // Pause during normal animation, then navigate away during another shot.
   await page.emulateMedia({ reducedMotion: "no-preference" });
-  await route(5);
+  await route("link", (p) => p.ammo[0] === 14 && p.gates[0] === 3);
   s = await read();
-  const cb = await page.locator("#world").boundingBox();
-  await page.mouse.move(cb.x + s.pieces[0].x, cb.y + s.pieces[0].y);
-  await page.mouse.down();
-  await page.mouse.move(cb.x + s.gate.x, cb.y + s.gate.y, { steps: 8 });
-  await page.mouse.up();
-  await page.getByRole("button", { name: "一時停止", exact: true }).click();
-  await page.waitForTimeout(160);
-  await page.getByRole("button", { name: "再開", exact: true }).last().click();
+  await width(s.pieces[0].id, 3);
+  s = await read();
+  await drag(s.pieces[0], s.targets[0], s.pieces[0].n, false);
+  await page.locator("#pause").click();
+  await page.waitForTimeout(180);
+  await page.locator('[data-menu="close"]').first().click();
   await settled();
+  await audit();
   assert.deepEqual(
     (await read()).pieces.map((p) => p.n),
-    [4],
+    [4, 2],
   );
-  await audit();
-  await route(5);
+  await route("gear", (p) => p.ammo[0] === 12 && p.ammo[1] === 20);
   s = await read();
-  const bb = await page.locator("#world").boundingBox();
-  await page.mouse.move(bb.x + s.pieces[0].x, bb.y + s.pieces[0].y);
-  await page.mouse.down();
-  await page.mouse.move(bb.x + s.gate.x, bb.y + s.gate.y, { steps: 8 });
-  await page.mouse.up();
-  await page.setViewportSize({ width: 768, height: 900 });
+  await width(s.pieces[0].id, 4);
+  s = await read();
+  await drag(s.pieces[0], s.targets[0], s.pieces[0].n, false);
+  await page.locator("#areas").click();
+  await page.locator('[data-rule="core"]').click();
   await settled();
   await audit();
-  assert.equal((await read()).pieces[0].n, 4);
-  await route(0);
-  s = await read();
-  await combine(1, 7);
-  s = await read();
-  const rb = await page.locator("#world").boundingBox();
-  await page.mouse.move(rb.x + s.pieces[0].x, rb.y + s.pieces[0].y);
-  await page.mouse.down();
-  await page.mouse.move(rb.x + s.targets[0].x, rb.y + s.targets[0].y, {
-    steps: 5,
-  });
-  await page.mouse.up();
-  await page.getByRole("button", { name: "エリアを選ぶ", exact: true }).click();
-  await page.locator('[data-stage="7"]').click();
-  await settled();
-  assert.equal((await read()).stage, "gear-2");
-  await audit();
-  console.log(
-    "Splitting, rejoining, cancelled drags, failure/retry, pause, resize, and navigation passed.",
-  );
-
+  assert.equal((await read()).rule, "core");
   await page.emulateMedia({ reducedMotion: "reduce" });
-  for (const [width, height] of [
+  await mkdir(resolve(root, "artifacts"), { recursive: true });
+  for (const [w, h] of [
     [320, 568],
     [390, 844],
     [844, 390],
     [768, 1024],
     [1280, 900],
   ]) {
-    await page.setViewportSize({ width, height });
-    for (const index of [0, 1, 6, 7, 11]) {
-      await route(index);
-      const state = await read();
+    await page.setViewportSize({ width: w, height: h });
+    for (const rule of ["spark", "link", "gear", "core"]) {
+      s = await route(
+        rule,
+        rule === "core"
+          ? (p) => p.family === "square" && p.ammo.every((n) => n === 9)
+          : () => true,
+      );
       assert.equal(
         await page.evaluate(
           () =>
@@ -324,25 +198,29 @@ try {
         ),
         false,
       );
-      for (const p of state.pieces) {
-        assert.ok(p.x - p.radius >= 0 && p.x + p.radius <= state.width);
-        assert.ok(p.y - p.radius >= 0 && p.y + p.radius <= state.height);
+      for (const p of s.pieces) {
+        assert.ok(p.x - p.radius >= 0 && p.x + p.radius <= s.width);
+        assert.ok(p.y - p.radius >= 0 && p.y + p.radius <= s.height);
+        if (p.handle) assert.ok(p.handle.y + 13 < s.height);
       }
       await audit();
     }
   }
-  await mkdir(resolve(root, "artifacts"), { recursive: true });
   await page.setViewportSize({ width: 390, height: 844 });
-  await route(1);
-  await page.screenshot({
-    path: resolve(root, "artifacts/tactile-mobile.png"),
-  });
-  await page.setViewportSize({ width: 1280, height: 900 });
-  await route(7);
-  await page.screenshot({
-    path: resolve(root, "artifacts/tactile-desktop.png"),
-  });
-
+  for (const rule of ["link", "gear", "core"]) {
+    s = await route(
+      rule,
+      rule === "core"
+        ? (p) => p.family === "square" && p.ammo.every((n) => n === 9)
+        : rule === "gear"
+          ? (p) => p.ammo[0] === 12 && p.ammo[1] === 20
+          : (p) => p.ammo[0] === 14 && p.gates[0] === 3,
+    );
+    if (rule !== "core") await width(s.pieces[0].id, rule === "gear" ? 4 : 3);
+    await page.screenshot({
+      path: resolve(root, `artifacts/flow-${rule}.png`),
+    });
+  }
   await page.goto(`${base}/classic.html`);
   await page.locator("#modes").waitFor();
   for (const mode of ["casual", "normal", "expert", "blitz"]) {
@@ -350,26 +228,34 @@ try {
     assert.equal(await page.locator(`[data-mode="${mode}"].on`).count(), 1);
   }
   await page.locator('.app>a[href="./"]').click();
-  await settled();
-  assert.equal((await read()).stage, "spark-1");
+  await page.locator("[data-rule]").first().waitFor();
   const blocked = await browser.newContext({ reducedMotion: "reduce" });
-  await blocked.addInitScript(() => {
+  await blocked.addInitScript(() =>
     Object.defineProperty(window, "localStorage", {
       get() {
         throw new Error("disabled");
       },
-    });
-  });
+    }),
+  );
   const bp = await blocked.newPage();
   bp.on("pageerror", (e) => errors.push(e.message));
   await bp.goto(base);
-  await bp.locator("#stage-name").waitFor();
-  assert.match(await bp.locator("#stage-name").textContent(), /スパーク/);
+  await bp.locator('[data-rule="gear"]').click();
+  await bp.waitForTimeout(150);
+  assert.match(await bp.locator("#stage-name").textContent(), /ギア/);
   await blocked.close();
   assert.deepEqual(errors, []);
   console.log(
-    "320px–1280px and landscape layouts, classic modes, disabled storage: no browser errors.",
+    "Touch, cancellation, retry adaptation, persistence, pause/navigation, responsive layouts, classic and disabled storage passed.",
   );
+} catch (error) {
+  await mkdir(resolve(root, "artifacts"), { recursive: true });
+  await page.screenshot({
+    path: resolve(root, "artifacts/browser-failure.png"),
+  });
+  console.error(await read().catch(() => null));
+  console.error(errors);
+  throw error;
 } finally {
   await browser.close();
   await new Promise((r) => server.close(r));

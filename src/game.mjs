@@ -1,4 +1,4 @@
-import { STAGES, AREAS } from "./stages.mjs";
+import { generateProblem, AREAS } from "./stages.mjs";
 import {
   createRun,
   activeTargets,
@@ -7,14 +7,24 @@ import {
   merge,
   fire,
   divide,
+  setWidth,
 } from "./model.mjs";
-import { shape } from "./shapes.mjs";
-import { World } from "./view.mjs";
+import { shape, arrayShape } from "./shapes.mjs";
+import { FlowWorld as World } from "./flow-view.mjs";
+import {
+  SAVE_KEY,
+  freshProgress,
+  restoreProgress,
+  recordResult,
+} from "./progress.mjs";
 const canvas = document.querySelector("#world"),
   overlay = document.querySelector("#overlay");
 const world = new World(canvas),
-  KEY = "core-break-tactile-v2";
-let cleared = new Set(),
+  KEY = SAVE_KEY;
+let progress = freshProgress(),
+  ruleId = null,
+  widthPointer = null,
+  serial = 0,
   sound = true,
   audio,
   run,
@@ -24,16 +34,16 @@ let cleared = new Set(),
   menu = null;
 try {
   const data = JSON.parse(localStorage.getItem(KEY) || "{}");
-  cleared = new Set(
-    (Array.isArray(data.cleared) ? data.cleared : []).filter((id) =>
-      STAGES.some((s) => s.id === id),
-    ),
+  progress = restoreProgress(data.progress);
+  const legacy = JSON.parse(
+    localStorage.getItem("core-break-tactile-v2") || "{}",
   );
+  if (data.sound === undefined) data.sound = legacy.sound;
   sound = data.sound !== false;
 } catch {}
 function save() {
   try {
-    localStorage.setItem(KEY, JSON.stringify({ cleared: [...cleared], sound }));
+    localStorage.setItem(KEY, JSON.stringify({ progress, sound }));
   } catch {}
 }
 function tone(type = "pick", n = 1) {
@@ -84,16 +94,14 @@ const icon = (name) =>
     back: "←",
   })[name];
 function syncHUD() {
-  const a = AREAS.find((a) => a.id === run.stage.area),
-    local = run.index % 3;
+  const a = AREAS.find((a) => a.id === run.stage.area);
   document.documentElement.style.setProperty("--accent", a.color);
-  document.querySelector("#stage-name").textContent =
-    `${a.name} · ${String(local + 1).padStart(2, "0")}`;
-  document.querySelector("#steps").innerHTML = Array.from(
-    { length: 3 },
-    (_, i) =>
-      `<i class="${i === local ? "current" : cleared.has(`${a.id}-${i + 1}`) ? "done" : ""}"></i>`,
-  ).join("");
+  document.querySelector("#stage-name").textContent = a.name;
+  document.querySelector("#steps").textContent =
+    "◆".repeat(run.stage.difficulty) + "◇".repeat(5 - run.stage.difficulty);
+  document
+    .querySelector("#steps")
+    .setAttribute("aria-label", `難易度 ${run.stage.difficulty} / 5`);
 }
 function announce(text) {
   document.querySelector("#announcement").textContent = text;
@@ -122,6 +130,14 @@ function keyboardUI() {
     .join("");
   document.querySelector("#keyboard-controls").innerHTML =
     buttons +
+    (run.stage.area === "spark"
+      ? ""
+      : run.pieces
+          .map(
+            (p) =>
+              `<button data-width="${p.id}" data-delta="-1">${p.ids.length}の列幅を減らす</button><button data-width="${p.id}" data-delta="1">${p.ids.length}の列幅を増やす</button>`,
+          )
+          .join("")) +
     parts +
     targets +
     (gateFactor(run)
@@ -130,14 +146,17 @@ function keyboardUI() {
     (selected ? '<button data-release="1">手元に分けて置く</button>' : "");
 }
 function closeMenu() {
+  if (!ruleId) return;
   overlay.hidden = true;
   overlay.innerHTML = "";
   menu = null;
   world.paused = document.hidden;
   canvas.focus({ preventScroll: true });
+  if (run?.status === "won" && !world.busy) queueMicrotask(nextProblem);
 }
 function openPanel(html, kind) {
   pointer = null;
+  widthPointer = null;
   selected = null;
   if (!world.busy) world.cancel();
   world.paused = true;
@@ -146,45 +165,100 @@ function openPanel(html, kind) {
   overlay.hidden = false;
   overlay.querySelector("button")?.focus();
 }
-function areaGlyph(n) {
-  const s = shape(n, 28);
-  return `<svg viewBox="-42 -38 84 76" aria-hidden="true">${s.dots.map((d) => `<circle cx="${d.x}" cy="${d.y}" r="${Math.min(3.5, s.dotRadius)}"/>`).join("")}</svg>`;
+function areaGlyph(rule) {
+  const dots = [];
+  if (rule === "spark") {
+    const end = shape(8, 27);
+    let index = 0;
+    for (const [n, x] of [
+      [5, -25],
+      [3, 25],
+    ])
+      for (const p of shape(n, 14).dots) {
+        const e = end.dots[index++];
+        dots.push({ x: p.x + x, y: p.y, mx: e.x, my: e.y, ex: e.x, ey: e.y });
+      }
+  } else if (rule === "link") {
+    shape(12, 29).dots.forEach((p, i) => {
+      const x = ((i % 3) - 1) * 10,
+        y = (Math.floor(i / 3) - 1.5) * 10;
+      dots.push({
+        x: p.x,
+        y: p.y,
+        mx: x,
+        my: y,
+        ex: x,
+        ey: i % 3 ? y - 29 : y,
+      });
+    });
+  } else if (rule === "gear") {
+    for (const [n, cx] of [
+      [12, -25],
+      [20, 25],
+    ])
+      shape(n, 17).dots.forEach((p, i) => {
+        const x = cx + ((i % 4) - 1.5) * 5.5,
+          y = (Math.floor(i / 4) - (n / 4 - 1) / 2) * 6;
+        dots.push({ x: p.x + cx, y: p.y, mx: x, my: y, ex: x, ey: y - 20 });
+      });
+  } else {
+    for (let block = 0; block < 4; block++)
+      for (let i = 0; i < 9; i++) {
+        const col = block % 2,
+          row = Math.floor(block / 2),
+          x = (col - 0.5) * 40 + ((i % 3) - 1) * 6,
+          y = (row - 0.5) * 40 + (Math.floor(i / 3) - 1) * 6;
+        const eX = (col * 3 + (i % 3) - 2.5) * 6,
+          eY = (row * 3 + Math.floor(i / 3) - 2.5) * 6;
+        dots.push({ x, y, mx: eX, my: eY, ex: eX, ey: eY - 8 });
+      }
+  }
+  return `<svg viewBox="-55 -48 110 96" aria-hidden="true">${dots.map((d, i) => `<circle class="demo-dot" cx="${d.x}" cy="${d.y}" r="${rule === "core" || rule === "gear" ? 1.7 : 2.5}" style="--mx:${d.mx - d.x}px;--my:${d.my - d.y}px;--dx:${d.ex - d.x}px;--dy:${d.ey - d.y}px;animation-delay:${Math.floor(i / 4) * 25}ms"/>`).join("")}</svg>`;
 }
 function areaMenu() {
+  document.body.classList.toggle("entrance", !ruleId);
   openPanel(
-    `<section class="panel"><div class="panel-header"><span class="panel-title">CORE BREAK</span><button class="icon" data-menu="close" aria-label="戻る">×</button></div><div class="area-grid">${AREAS.map((a, i) => `<section class="area-tile" style="--tile:${a.color}"><div class="area-glyph">${areaGlyph([8, 9, 12, 16][i])}</div><span class="area-title">${a.name}</span><div class="stage-choices">${[0, 1, 2].map((j) => `<button data-stage="${i * 3 + j}" class="${cleared.has(`${a.id}-${j + 1}`) ? "cleared" : ""}" aria-label="${a.name} ${j + 1}">${j + 1}</button>`).join("")}</div></section>`).join("")}</div><div class="panel-footer"><a class="classic-link" href="classic.html">クラシック ↗</a></div></section>`,
+    `<section class="panel"><div class="panel-header"><span class="panel-title">CORE BREAK</span>${ruleId ? '<button class="icon" data-menu="close" aria-label="戻る">×</button>' : ""}</div><div class="area-grid">${AREAS.map((a) => `<button class="area-tile rule-choice" data-rule="${a.id}" style="--tile:${a.color}" aria-label="${a.name}"><div class="area-glyph">${areaGlyph(a.id)}</div><span class="area-title">${a.name}</span></button>`).join("")}</div><div class="panel-footer"><a class="classic-link" href="classic.html">クラシック ↗</a></div></section>`,
     "areas",
   );
 }
 function pauseMenu() {
+  if (!ruleId) return;
   openPanel(
-    `<section class="panel"><div class="panel-header"><span class="panel-title">CORE BREAK</span><button class="icon" data-menu="close" aria-label="再開">×</button></div><div class="pause-actions"><button class="large-action primary" data-menu="close" aria-label="再開">${icon("play")}</button><button class="large-action" data-menu="retry" aria-label="やり直す">${icon("replay")}</button><button class="large-action" data-menu="sound" aria-label="${sound ? "音を消す" : "音を出す"}" aria-pressed="${sound}">${icon("sound")}${sound ? "" : "̸"}</button><button class="large-action" data-menu="areas" aria-label="エリアを選ぶ">${icon("map")}</button></div></section>`,
+    `<section class="panel"><div class="panel-header"><span class="panel-title">CORE BREAK</span><button class="icon" data-menu="close" aria-label="再開">×</button></div><div class="pause-actions"><button class="large-action primary" data-menu="close" aria-label="再開">${icon("play")}</button><button class="large-action" data-menu="retry" aria-label="別の問題にする">${icon("replay")}</button><button class="large-action" data-menu="sound" aria-label="${sound ? "音を消す" : "音を出す"}" aria-pressed="${sound}">${icon("sound")}${sound ? "" : "̸"}</button><button class="large-action" data-menu="areas" aria-label="ルールを選ぶ">${icon("map")}</button></div></section>`,
     "pause",
   );
 }
-function resultMenu() {
-  const a = AREAS.find((a) => a.id === run.stage.area),
-    won = run.status === "won";
-  openPanel(
-    `<section class="panel ${won ? "victory" : "defeat"}"><div class="victory-emblem" aria-label="${won ? "クリア" : "再挑戦"}">${won ? "✦" : "↻"}</div><div class="result-stage">${a.name} · ${String((run.index % 3) + 1).padStart(2, "0")}</div><div class="pause-actions"><button class="large-action" data-menu="areas" aria-label="エリアを選ぶ">${icon("map")}</button><button class="large-action ${won ? "" : "primary"}" data-menu="retry" aria-label="同じ戦闘をやり直す">${icon("replay")}</button>${won ? `<button class="large-action primary" data-menu="next" aria-label="次へ">${icon("next")}</button>` : ""}</div></section>`,
-    won ? "won" : "lost",
-  );
-}
-function start(index, changeHash = true) {
+function start(id, changeHash = true) {
   epoch++;
   world.token = epoch;
   pointer = null;
+  widthPointer = null;
   selected = null;
-  run = createRun(index);
+  ruleId = id;
+  document.body.classList.remove("entrance");
+  const p = progress[id];
+  const problem = generateProblem(
+    id,
+    p.difficulty,
+    `${Date.now()}-${serial++}`,
+    p.recent,
+  );
+  p.recent.push(problem.id);
+  p.recent = p.recent.slice(-10);
+  save();
+  run = createRun(problem);
   world.setRun(run);
   closeMenu();
   syncHUD();
   keyboardUI();
-  if (changeHash)
-    history.replaceState(null, "", `#${run.stage.area}/${(index % 3) + 1}`);
+  if (changeHash) history.replaceState(null, "", `#${id}`);
   announce(
-    `${AREAS.find((a) => a.id === run.stage.area).name} ${(index % 3) + 1}`,
+    `${AREAS.find((a) => a.id === id).name} 難易度 ${problem.difficulty}`,
   );
+}
+function nextProblem() {
+  if (run.status === "won" && !world.busy && !menu) start(ruleId);
 }
 async function drop(destination) {
   const drag = world.drag;
@@ -222,13 +296,20 @@ async function drop(destination) {
     keyboardUI();
     return;
   }
+  const targetIndex =
+    destination.index ??
+    (destination.kind === "gate"
+      ? activeTargets(run).find((i) => run.targets[i].kind === "divide")
+      : 0);
+  const targetPosition = world.targetPoint(targetIndex || 0);
   const result =
     destination.kind === "gate"
       ? divide(run, pieceId, ids)
-      : fire(run, pieceId, ids, destination.index);
+      : fire(run, pieceId, ids, destination.index, destination.cell);
+  result.targetPoint = targetPosition;
   tone(result.ok ? "hit" : "miss");
   if (run.status === "won") {
-    cleared.add(run.stage.id);
+    recordResult(progress[ruleId], true);
     save();
     syncHUD();
   }
@@ -245,7 +326,7 @@ async function drop(destination) {
           : "命中"
       : "弾が戻りました",
   );
-  if (run.status !== "play") resultMenu();
+  if (run.status === "won") nextProblem();
 }
 function point(e) {
   const r = canvas.getBoundingClientRect();
@@ -255,7 +336,16 @@ canvas.addEventListener("pointerdown", (e) => {
   if (pointer !== null || world.busy || world.paused || run.status !== "play")
     return;
   const p = point(e),
-    hit = world.hit(p.x, p.y);
+    handle = world.handleHit(p.x, p.y);
+  if (handle) {
+    e.preventDefault();
+    pointer = e.pointerId;
+    canvas.setPointerCapture(pointer);
+    widthPointer = { ...handle, startX: p.x };
+    tone("pick");
+    return;
+  }
+  const hit = world.hit(p.x, p.y);
   if (!hit) return;
   e.preventDefault();
   pointer = e.pointerId;
@@ -267,12 +357,37 @@ canvas.addEventListener("pointerdown", (e) => {
 canvas.addEventListener("pointermove", (e) => {
   if (e.pointerId !== pointer) return;
   const p = point(e);
+  if (widthPointer) {
+    const width = Math.max(
+      0,
+      Math.min(
+        widthPointer.max,
+        widthPointer.value + Math.round((p.x - widthPointer.startX) / 12),
+      ),
+    );
+    const piece = run.pieces.find((p) => p.id === widthPointer.pieceId);
+    if (piece && piece.width !== width) {
+      setWidth(run, piece.id, width);
+      world.sync();
+      tone("pick", width);
+      keyboardUI();
+    }
+    return;
+  }
   world.move(p.x, p.y);
 });
 canvas.addEventListener("pointerup", (e) => {
   if (e.pointerId !== pointer) return;
   const p = point(e);
   pointer = null;
+  if (widthPointer) {
+    widthPointer = null;
+    world.sync();
+    keyboardUI();
+    if (canvas.hasPointerCapture(e.pointerId))
+      canvas.releasePointerCapture(e.pointerId);
+    return;
+  }
   if (canvas.hasPointerCapture(e.pointerId))
     canvas.releasePointerCapture(e.pointerId);
   if (
@@ -290,6 +405,10 @@ canvas.addEventListener("pointerup", (e) => {
 function cancelPointer() {
   if (pointer !== null) {
     pointer = null;
+    if (widthPointer) {
+      setWidth(run, widthPointer.pieceId, widthPointer.value);
+      widthPointer = null;
+    }
     selected = null;
     world.cancel();
     keyboardUI();
@@ -311,7 +430,7 @@ world.onResize = () => {
     }
     world.sync();
     keyboardUI();
-    if (run.status !== "play") resultMenu();
+    if (run.status === "won") nextProblem();
   }
 };
 function failSafe(error) {
@@ -319,23 +438,24 @@ function failSafe(error) {
   world.token = ++epoch;
   world.busy = false;
   world.cancel();
-  if (run.status !== "play") resultMenu();
+  if (run.status === "won") nextProblem();
 }
 document.querySelector("#areas").onclick = areaMenu;
 document.querySelector("#pause").onclick = pauseMenu;
 overlay.addEventListener("click", (e) => {
   const button = e.target.closest("button");
   if (!button) return;
-  if (button.dataset.stage !== undefined) {
-    start(Number(button.dataset.stage));
+  if (button.dataset.rule) {
+    start(button.dataset.rule);
     return;
   }
   const action = button.dataset.menu;
-  if (action === "close") {
-    if (run.status !== "play" && !world.busy) resultMenu();
-    else closeMenu();
+  if (action === "close") closeMenu();
+  if (action === "retry") {
+    recordResult(progress[ruleId], false);
+    save();
+    start(ruleId);
   }
-  if (action === "retry") start(run.index);
   if (action === "areas") areaMenu();
   if (action === "sound") {
     sound = !sound;
@@ -343,15 +463,39 @@ overlay.addEventListener("click", (e) => {
     pauseMenu();
     if (sound) tone("merge");
   }
-  if (action === "next") {
-    if (run.index % 3 === 2) areaMenu();
-    else start(run.index + 1);
-  }
 });
+function firstCell(index) {
+  const t = run.targets[index],
+    p = run.pieces.find((p) => p.id === selected?.pieceId);
+  if (t.kind !== "mosaic" || !p?.width) return null;
+  const w = p.width,
+    h = p.ids.length / w;
+  for (let row = 0; row <= t.side - h; row++)
+    for (let col = 0; col <= t.side - w; col++)
+      if (
+        p.ids.every(
+          (_, i) =>
+            t.cells[(row + Math.floor(i / w)) * t.side + col + (i % w)] ===
+            null,
+        )
+      )
+        return { row, col };
+  return null;
+}
 document.querySelector("#keyboard-controls").addEventListener("click", (e) => {
   if (world.busy || world.paused) return;
   const b = e.target.closest("button");
   if (!b) return;
+  if (b.dataset.width !== undefined) {
+    const p = run.pieces.find((p) => p.id === Number(b.dataset.width));
+    setWidth(run, p.id, p.width + Number(b.dataset.delta));
+    world.sync();
+    keyboardUI();
+    document
+      .querySelector(`[data-width="${p.id}"][data-delta="${b.dataset.delta}"]`)
+      ?.focus();
+    return;
+  }
   if (b.dataset.piece !== undefined) {
     const id = Number(b.dataset.piece),
       p = run.pieces.find((p) => p.id === id),
@@ -371,7 +515,14 @@ document.querySelector("#keyboard-controls").addEventListener("click", (e) => {
     keyboardUI();
   } else if (selected) {
     if (b.dataset.target !== undefined)
-      drop({ kind: "target", index: Number(b.dataset.target) });
+      drop({
+        kind:
+          run.targets[Number(b.dataset.target)].kind === "divide"
+            ? "gate"
+            : "target",
+        index: Number(b.dataset.target),
+        cell: firstCell(Number(b.dataset.target)),
+      });
     else if (b.dataset.gate) drop({ kind: "gate" });
     else if (b.dataset.release) {
       world.move(world.w * 0.75, world.h * 0.8);
@@ -397,15 +548,18 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("hashchange", route);
 function route() {
-  const [id, n] = location.hash.slice(1).split("/"),
-    area = AREAS.findIndex((a) => a.id === id);
-  if (area >= 0 && /^[1-3]$/.test(n || ""))
-    start(area * 3 + Number(n) - 1, false);
-  else if (area >= 0) {
-    start(area * 3, false);
+  const id = location.hash.slice(1).split("/")[0];
+  if (AREAS.some((a) => a.id === id)) start(id, false);
+  else {
+    if (!run) {
+      run = createRun(generateProblem("spark", 1, 0));
+      world.setRun(run);
+      syncHUD();
+    }
     areaMenu();
-  } else start(0, false);
+  }
 }
+
 route();
 // Read-only observability for real pointer tests and quantity audits.
 export function inspect() {
@@ -414,7 +568,10 @@ export function inspect() {
     status: run.status,
     misses: run.misses,
     menu,
-    cleared: [...cleared],
+    rule: run.stage.area,
+    difficulty: run.stage.difficulty,
+    family: run.stage.family,
+    progress: structuredClone(progress),
     ...world.read(),
     visibleIds: [...world.units.values()]
       .filter((d) => d.visible)

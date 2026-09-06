@@ -433,3 +433,69 @@ button svg {
 canvas:focus {
   outline: none;
 }
+/* Four rule entrances; motion demonstrates the material, with no instructions. */
+.rule-choice {
+  cursor: pointer;
+  font: inherit;
+  text-align: center;
+  transition:
+    border-color 0.2s,
+    transform 0.2s;
+}
+.rule-choice:hover {
+  border-color: var(--tile);
+  transform: translateY(-3px);
+}
+.rule-choice:focus-visible {
+  outline: 2px solid var(--tile);
+  outline-offset: 3px;
+}
+.demo-dot {
+  animation: rule-demo 3.4s ease-in-out infinite;
+}
+@keyframes rule-demo {
+  0%,
+  16%,
+  100% {
+    transform: translate(0, 0);
+  }
+  40%,
+  54% {
+    transform: translate(var(--mx), var(--my));
+  }
+  73%,
+  82% {
+    transform: translate(var(--dx), var(--dy));
+  }
+}
+#steps {
+  white-space: nowrap;
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: var(--accent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .demo-dot {
+    animation: none;
+    transform: translate(var(--dx), var(--dy));
+  }
+}
+@media (max-width: 380px) {
+  #steps {
+    font-size: 9px;
+    letter-spacing: 1px;
+  }
+}
+
+.entrance .hud {
+  display: none;
+}
+@media (max-height: 450px) {
+  .area-glyph {
+    display: grid;
+    height: 58px;
+  }
+  .area-glyph svg {
+    height: 58px;
+  }
+}
