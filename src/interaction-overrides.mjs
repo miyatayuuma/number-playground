@@ -1,47 +1,59 @@
 import { World } from "./view.mjs";
 import { FlowWorld } from "./flow-view.mjs";
 import { activeTargets, gateFactor } from "./model.mjs";
-import { boundsFromDots, circle, overlaps, rect } from "./interactions.mjs";
+import {
+  boundsFromDots,
+  circle,
+  compound,
+  overlaps,
+  rect,
+} from "./interactions.mjs";
 
 const HYSTERESIS = 7;
 
-function dragDots(world, x, y, includeGearPair = false) {
+function dragDots(world, x, y) {
   if (!world.drag) return [];
-  const dots = world.drag.offsets.map((o) => {
+  return world.drag.offsets.map((o) => {
     const d = world.units.get(o.id);
     return { x: x + o.x, y: y + o.y, r: d?.r || 0 };
   });
-
-  if (includeGearPair && world.run.stage.area === "gear") {
-    const source = world.positions.get(world.drag.pieceId),
-      dx = x - source.x,
-      dy = y - source.y;
-    for (const p of world.run.pieces) {
-      if (p.id === world.drag.pieceId) continue;
-      const center = world.positions.get(p.id),
-        shape = world.pieceShape(p);
-      p.ids.forEach((id, i) => {
-        const d = world.units.get(id);
-        dots.push({
-          x: center.x + shape.dots[i].x + dx,
-          y: center.y + shape.dots[i].y + dy,
-          r: d?.r || shape.dotRadius || 0,
-        });
-      });
-    }
-  }
-  return dots;
 }
 
 function baseDragBounds(world, x, y) {
   return boundsFromDots(dragDots(world, x, y), "circle");
 }
 
+function gearDragBounds(world, x, y) {
+  const source = world.positions.get(world.drag.pieceId),
+    dx = x - source.x,
+    dy = y - source.y,
+    parts = [];
+
+  for (const p of world.run.pieces) {
+    if (p.id === world.drag.pieceId) {
+      parts.push(boundsFromDots(dragDots(world, x, y), "rect"));
+      continue;
+    }
+    const center = world.positions.get(p.id),
+      shape = world.pieceShape(p),
+      dots = p.ids.map((id, i) => {
+        const d = world.units.get(id);
+        return {
+          x: center.x + shape.dots[i].x + dx,
+          y: center.y + shape.dots[i].y + dy,
+          r: d?.r || shape.dotRadius || 0,
+        };
+      });
+    parts.push(boundsFromDots(dots, "rect"));
+  }
+  return compound(parts);
+}
+
 function flowDragBounds(world, x, y) {
-  const arrayLike = world.run.stage.area !== "spark";
+  if (world.run.stage.area === "gear") return gearDragBounds(world, x, y);
   return boundsFromDots(
-    dragDots(world, x, y, world.run.stage.area === "gear"),
-    arrayLike ? "rect" : "circle",
+    dragDots(world, x, y),
+    world.run.stage.area === "spark" ? "circle" : "rect",
   );
 }
 
@@ -105,8 +117,21 @@ World.prototype.dropTarget = function dropTarget(x, y) {
 
 function flowTargetBounds(world, target, index) {
   const point = world.targetPoint(index);
-  if (target.kind === "gear")
-    return rect(point.x - 78, point.y - 20, point.x + 78, point.y + 20);
+  if (target.kind === "gear") {
+    const count = Math.max(2, world.run.width || 3),
+      pitch = Math.min(11, 55 / count),
+      halfWidth = (count * pitch + 8) / 2;
+    return compound(
+      [-38, 38].map((dx) =>
+        rect(
+          point.x + dx - halfWidth,
+          point.y - 12,
+          point.x + dx + halfWidth,
+          point.y + 12,
+        ),
+      ),
+    );
+  }
   if (target.kind !== "divide")
     return circle(point.x, point.y, point.radius + 10);
 
