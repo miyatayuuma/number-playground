@@ -1,3 +1,5 @@
+import { gcd } from "./math.mjs";
+
 export const AREAS = [
   { id: "spark", name: "スパーク", color: "#ffc977", glyph: "✦" },
   { id: "link", name: "リンク", color: "#75ead2", glyph: "⠿" },
@@ -74,20 +76,44 @@ for (let f = 2; f <= 6; f++)
               1,
             );
     }
-for (let a = 4; a <= 36; a++)
-  for (let b = a + 1; b <= 36; b++) {
-    const common = divisors(a).filter((f) => b % f === 0);
-    if (common.length)
-      add(
-        "gear",
-        {
-          ammo: [a, b],
-          targets: [target(a + b, { kind: "gear" })],
-          family: "common",
-        },
-        common.length > 2 ? 1 : 0,
-      );
-  }
+
+const gearSpecs = [],
+  gearSeen = new Set();
+for (let g = 2; g <= 12; g++)
+  for (let x = 1; g * x <= 36; x++)
+    for (let y = x + 1; g * y <= 36; y++) {
+      if (gcd(x, y) !== 1) continue;
+      const a = g * x,
+        b = g * y;
+      if (a < 4 || gcd(a, b) !== g) continue;
+      // Keep GCD=2 as a minority instead of letting even/even pairs dominate.
+      if (g === 2 && (x + y) % 4 !== 0) continue;
+      const key = `${a}:${b}`;
+      if (gearSeen.has(key)) continue;
+      gearSeen.add(key);
+      const lower = divisors(g).filter((f) => f < g).length;
+      gearSpecs.push({
+        ammo: [a, b],
+        gcd: g,
+        lower,
+        targets: [target(a + b, { kind: "gear" })],
+        family: "common",
+      });
+    }
+
+gearSpecs.sort((a, b) => {
+  const scoreA = Math.max(...a.ammo) + a.lower * 6 + a.gcd * 0.15,
+    scoreB = Math.max(...b.ammo) + b.lower * 6 + b.gcd * 0.15;
+  return scoreA - scoreB || a.ammo[0] - b.ammo[0] || a.ammo[1] - b.ammo[1];
+});
+gearSpecs.forEach((spec, i) => {
+  const difficulty = Math.min(5, Math.floor((i * 5) / gearSpecs.length) + 1),
+    clean = { ...spec };
+  delete clean.lower;
+  const id = `gear:${JSON.stringify(clean)}`;
+  bank.gear.push({ ...clean, id, area: "gear", difficulty });
+});
+
 export const PROBLEM_BANK = bank;
 export function generateProblem(
   ruleId,
