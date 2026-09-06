@@ -51,10 +51,7 @@ function gearDragBounds(world, x, y) {
 
 function flowDragBounds(world, x, y) {
   if (world.run.stage.area === "gear") return gearDragBounds(world, x, y);
-  return boundsFromDots(
-    dragDots(world, x, y),
-    world.run.stage.area === "spark" ? "circle" : "rect",
-  );
+  return boundsFromDots(dragDots(world, x, y), "rect");
 }
 
 function sameHover(hover, candidate) {
@@ -148,6 +145,9 @@ function flowTargetBounds(world, target, index) {
 
 FlowWorld.prototype.dropTarget = function dropTarget(x, y) {
   if (!this.drag) return { kind: "cancel" };
+  if (this.run.stage.area === "spark")
+    return World.prototype.dropTarget.call(this, x, y);
+
   const dragged = flowDragBounds(this, x, y),
     candidates = activeTargets(this.run).map((i) => {
       const target = this.run.targets[i],
