@@ -605,6 +605,54 @@ document.querySelector("#keyboard-controls").addEventListener("click", (e) => {
   if (world.busy || world.paused) return;
   const b = e.target.closest("button");
   if (!b) return;
+  if (run.stage.area === "pack") {
+    const state = world.read().pack;
+    if (b.dataset.packGroup !== undefined) {
+      const group = state.groups[Number(b.dataset.packGroup)];
+      if (!group) return;
+      const selection = {
+        pieceId: run.pieces[0].id,
+        ids: [...group.ids],
+        rawIds: [...group.rawIds],
+        itemIds: [...group.itemIds],
+        kind: "pack-group",
+        level: group.level,
+        anchor: { x: group.x, y: group.y },
+      };
+      selected = selection;
+      world.begin(selection, group.x, group.y);
+      drop({ kind: "pack", itemIds: [...group.itemIds] }).catch(failSafe);
+      return;
+    }
+    if (b.dataset.packItem !== undefined) {
+      const item = state.items.find((candidate) => candidate.id === b.dataset.packItem);
+      if (!item) return;
+      const selection = {
+        pieceId: run.pieces[0].id,
+        ids: [...item.ids],
+        rawIds: [...item.rawIds],
+        itemIds: [item.id],
+        itemId: item.id,
+        kind: "pack-item",
+        level: item.level,
+        macro: true,
+        anchor: { x: item.x, y: item.y },
+      };
+      selected = selection;
+      world.begin(selection, item.x, item.y);
+      drop({ kind: "unpack", itemId: item.id }).catch(failSafe);
+      return;
+    }
+    if (b.dataset.packBase !== undefined) {
+      if (setPackBase(run, Number(b.dataset.packBase))) {
+        tone("merge");
+        world.sync();
+        keyboardUI();
+      }
+      return;
+    }
+    return;
+  }
   if (b.dataset.width !== undefined) {
     const p = run.pieces.find((p) => p.id === Number(b.dataset.width));
     setWidth(run, p.id, p.width + Number(b.dataset.delta));
