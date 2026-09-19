@@ -245,7 +245,7 @@ try {
   // The old mode URL returns to the four choices, keeping saved progress.
   await page.goto(`${base}/#core`);
   await page.locator("[data-rule]").first().waitFor();
-  assert.equal(await page.locator("[data-rule]").count(), 3);
+  assert.equal(await page.locator("[data-rule]").count(), 4);
   assert.equal((await read()).progress.core, undefined);
   await route("gear", (p) => p.ammo[0] === 12 && p.ammo[1] === 20);
   console.log(
@@ -314,6 +314,12 @@ try {
         assert.ok(p.y - p.radius >= 0 && p.y + p.radius <= s.height);
         if (p.handle) assert.ok(p.handle.y + 13 < s.height);
       }
+      if (s.rule === "pack")
+        for (const slot of s.pack.slots) {
+          assert.ok(slot.x - slot.radius >= 0 && slot.x + slot.radius <= s.width);
+          assert.ok(slot.y - slot.radius * 1.2 >= 0);
+          assert.ok(slot.y + slot.radius * 1.7 <= s.height);
+        }
       await audit();
     }
   }
