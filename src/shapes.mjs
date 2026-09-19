@@ -186,3 +186,75 @@ export function arrayShape(n, columns, radius = 54, pitchLimit = 19) {
     remainder,
   };
 }
+
+
+export function packCoefficientShape(count, base, radius = 48) {
+  if (!Number.isInteger(count) || count < 0 || count > 36)
+    throw new RangeError("PACK coefficient must contain 0–36 items");
+  if (!Number.isInteger(base) || base < 2 || base > 10)
+    throw new RangeError("PACK base must be 2–10");
+  if (!count)
+    return { dots: [], groups: [], dotRadius: 0, radius, count, base };
+
+  const groupCount = Math.ceil(count / base),
+    centers =
+      groupCount === 1
+        ? [{ x: 0, y: 0 }]
+        : shape(groupCount, radius * 0.54).dots,
+    clusterRadius =
+      groupCount === 1 ? radius * 0.68 : Math.max(10, radius * 0.27),
+    dots = [],
+    groups = [];
+  let offset = 0;
+  for (let group = 0; group < groupCount; group++) {
+    const size = Math.min(base, count - offset),
+      local = shape(size, clusterRadius),
+      center = centers[group],
+      start = dots.length;
+    local.dots.forEach((d) =>
+      dots.push({
+        x: center.x + d.x,
+        y: center.y + d.y,
+        group,
+      }),
+    );
+    groups.push({
+      x: center.x,
+      y: center.y,
+      radius: clusterRadius + 5,
+      indices: Array.from({ length: size }, (_, i) => start + i),
+      packable: size === base,
+    });
+    offset += size;
+  }
+  return {
+    dots,
+    groups,
+    dotRadius: Math.min(...groups.map((g) => {
+      const first = g.indices[0];
+      const localSize = g.indices.length;
+      return shape(localSize, clusterRadius).dotRadius;
+    })),
+    radius: Math.max(
+      18,
+      ...dots.map((d) => Math.hypot(d.x, d.y) + clusterRadius * 0.22),
+    ),
+    count,
+    base,
+  };
+}
+
+export function placeSlotLayout(total, base, width, y) {
+  if (!Number.isInteger(total) || total < 1)
+    throw new RangeError("PACK total must be positive");
+  if (!Number.isInteger(base) || base < 2)
+    throw new RangeError("PACK base must be at least 2");
+  const places = Math.floor(Math.log(total) / Math.log(base)) + 1,
+    margin = Math.min(58, width * 0.17),
+    gap = places === 1 ? 0 : Math.min(120, (width - margin * 2) / (places - 1));
+  return Array.from({ length: places }, (_, level) => ({
+    level,
+    x: width / 2 + ((places - 1) / 2 - level) * gap,
+    y,
+  }));
+}

@@ -9,10 +9,22 @@ import {
   divide,
   setWidth,
   accountedIds,
+  activePackItems,
+  packableGroups,
+  packDigits,
+  packGroup,
+  unpackPackItem,
+  setPackBase,
 } from "../src/model.mjs";
 import { PROBLEM_BANK, generateProblem, divisors } from "../src/stages.mjs";
 import { gcd } from "../src/math.mjs";
-import { shape, factors, arrayShape } from "../src/shapes.mjs";
+import {
+  shape,
+  factors,
+  arrayShape,
+  packCoefficientShape,
+  placeSlotLayout,
+} from "../src/shapes.mjs";
 import {
   freshProgress,
   restoreProgress,
@@ -41,6 +53,26 @@ function combineAll(run) {
     audit(run);
   }
   return run.pieces[0];
+}
+function packAll(run) {
+  while (run.pack.phase === "pack") {
+    const group = packableGroups(run)[0];
+    assert.ok(group, "PACK has a packable group before lock");
+    const result = packGroup(run, group.itemIds);
+    assert.ok(result.ok);
+    audit(run);
+    if (result.locked) return result;
+  }
+  throw new Error("PACK did not lock");
+}
+function unpackAll(run) {
+  while (run.pack.phase === "unpack") {
+    const macro = activePackItems(run).find((item) => item.macro);
+    assert.ok(macro, "PACK has a macro to unpack");
+    assert.ok(unpackPackItem(run, macro.id).ok);
+    audit(run);
+  }
+  assert.equal(run.pack.phase, "choose");
 }
 export function solve(problem) {
   const run = createRun(structuredClone(problem));
@@ -71,19 +103,28 @@ export function solve(problem) {
     setWidth(run, run.pieces[0].id, problem.gcd);
     const result = shoot(run, run.pieces[0], 0);
     assert.equal(result.outcome, "win");
+  } else if (problem.area === "pack") {
+    const first = packAll(run);
+    assert.equal(first.lock.notation, "32₅");
+    unpackAll(run);
+    assert.ok(setPackBase(run, 4));
+    const second = packAll(run);
+    assert.equal(second.lock.notation, "101₄");
   }
   assert.equal(run.status, "won");
-  assert.equal(run.spent.length, run.dots.length);
+  if (problem.area === "pack") assert.equal(run.spent.length, 0);
+  else assert.equal(run.spent.length, run.dots.length);
   audit(run);
 }
 test("every generated construction is solvable and conserves every dot", () => {
   for (const [rule, bank] of Object.entries(PROBLEM_BANK)) {
-    assert.ok(bank.length >= 30, rule);
+    if (rule === "pack") assert.equal(bank.length, 1);
+    else assert.ok(bank.length >= 30, rule);
     for (const p of bank) solve(p);
   }
 });
-test("seeded generation spans all difficulties without repeating the last ten", () => {
-  for (const rule of Object.keys(PROBLEM_BANK))
+test("seeded generation spans all production difficulties without repeating the last ten", () => {
+  for (const rule of Object.keys(PROBLEM_BANK).filter((rule) => rule !== "pack"))
     for (let d = 1; d <= 5; d++) {
       let recent = [];
       const seen = new Set();
@@ -99,6 +140,98 @@ test("seeded generation spans all difficulties without repeating the last ten", 
     }
   assert.throws(() => generateProblem("missing"));
 });
+test("PACK keeps 17 raw identities while locking 32₅ then 101₄", () => {
+  const run = createRun(structuredClone(PROBLEM_BANK.pack[0])),
+    original = [...run.pieces[0].ids];
+
+  assert.equal(run.pack.base, 5);
+  assert.deepEqual(packDigits(run), [0, 17]);
+  const first = packAll(run);
+  assert.deepEqual(first.lock.digits, [3, 2]);
+  assert.equal(first.lock.notation, "32₅");
+  assert.equal(run.pack.phase, "unpack");
+  assert.deepEqual(run.pieces[0].ids, original);
+  assert.deepEqual(
+    activePackItems(run).map((item) => item.ids.length),
+    [1, 1, 5, 5, 5],
+  );
+
+  unpackAll(run);
+  assert.deepEqual(run.pieces[0].ids, original);
+  assert.equal(activePackItems(run).length, 17);
+  assert.ok(activePackItems(run).every((item) => item.level === 0));
+  assert.ok(setPackBase(run, 4));
+  assert.equal(setPackBase(run, 5), false);
+
+  const second = packAll(run);
+  assert.equal(second.complete, true);
+  assert.deepEqual(second.lock.digits, [1, 0, 1]);
+  assert.equal(second.lock.notation, "101₄");
+  assert.equal(run.status, "won");
+  assert.deepEqual(run.pieces[0].ids, original);
+  assert.equal(new Set(run.pieces[0].ids).size, 17);
+
+  const top = activePackItems(run).find((item) => item.level === 2);
+  assert.ok(top);
+  assert.equal(top.ids.length, 16);
+  assert.equal(top.children.length, 4);
+  assert.ok(top.children.every((id) => run.pack.nodes[id].level === 1));
+  assert.equal(activePackItems(run).filter((item) => item.level === 1).length, 0);
+  audit(run);
+});
+
+test("PACK unpack is reversible and zero places remain explicit", () => {
+  const run = createRun(structuredClone(PROBLEM_BANK.pack[0])),
+    firstGroup = packableGroups(run)[0],
+    before = [...run.pieces[0].ids],
+    packed = packGroup(run, firstGroup.itemIds);
+  assert.ok(packed.ok);
+  const macro = run.pack.nodes[packed.itemId];
+  assert.deepEqual(macro.ids, firstGroup.ids);
+  assert.equal(macro.children.length, 5);
+  const unpacked = unpackPackItem(run, packed.itemId);
+  assert.ok(unpacked.ok);
+  assert.deepEqual(
+    activePackItems(run)
+      .flatMap((item) => item.ids)
+      .sort((a, b) => a - b),
+    before,
+  );
+
+  packAll(run);
+  unpackAll(run);
+  assert.ok(setPackBase(run, 4));
+  const second = packAll(run);
+  assert.deepEqual(second.lock.digits, [1, 0, 1]);
+  const slots = placeSlotLayout(17, 4, 390, 600);
+  assert.deepEqual(slots.map((slot) => slot.level), [0, 1, 2]);
+  assert.equal(activePackItems(run).filter((item) => item.level === 1).length, 0);
+});
+
+test("PACK digit geometry reuses Prime Dot shapes without inventing quantity dots", () => {
+  const three = packCoefficientShape(3, 5, 48),
+    zero = packCoefficientShape(0, 4, 48),
+    seventeen = packCoefficientShape(17, 5, 48);
+  assert.equal(three.dots.length, 3);
+  assert.equal(zero.dots.length, 0);
+  assert.equal(seventeen.dots.length, 17);
+  assert.deepEqual(
+    seventeen.groups.map((group) => group.indices.length),
+    [5, 5, 5, 2],
+  );
+  assert.equal(seventeen.groups.filter((group) => group.packable).length, 3);
+});
+
+test("PACK remains outside adaptive saved progress", () => {
+  assert.equal(freshProgress().pack, undefined);
+  assert.equal(
+    restoreProgress({ pack: { difficulty: 5, wins: 2, retries: 1 } }).pack,
+    undefined,
+  );
+  assert.equal(generateProblem("pack", 5, 999).id, "pack:17:5-4");
+  assert.equal(generateProblem("pack", 5, 999).difficulty, 1);
+});
+
 test("gear only clears on the greatest common divisor", () => {
   const problem = PROBLEM_BANK.gear.find(
       (p) => p.ammo[0] === 12 && p.ammo[1] === 18,

@@ -4,6 +4,7 @@ export const AREAS = [
   { id: "spark", name: "スパーク", color: "#ffc977", glyph: "✦" },
   { id: "link", name: "リンク", color: "#75ead2", glyph: "⠿" },
   { id: "gear", name: "ギア", color: "#8bbcff", glyph: "◈" },
+  { id: "pack", name: "パック", color: "#f3a6ff", glyph: "◉" },
 ];
 export const divisors = (n) =>
   Array.from({ length: n - 1 }, (_, i) => i + 2).filter((f) => n % f === 0);
@@ -114,6 +115,19 @@ gearSpecs.forEach((spec, i) => {
   bank.gear.push({ ...clean, id, area: "gear", difficulty });
 });
 
+// PACK is intentionally a fixed vertical-slice problem. It is not part of the
+// adaptive difficulty bank until the interaction itself has been validated.
+bank.pack.push({
+  id: "pack:17:5-4",
+  area: "pack",
+  difficulty: 1,
+  ammo: [17],
+  quantity: 17,
+  radices: [5, 4],
+  family: "radix",
+  targets: [],
+});
+
 export const PROBLEM_BANK = bank;
 export function generateProblem(
   ruleId,
@@ -122,6 +136,8 @@ export function generateProblem(
   recentHistory = [],
 ) {
   if (!bank[ruleId]) throw new RangeError("Unknown rule");
+  if (ruleId === "pack")
+    return { ...structuredClone(bank.pack[0]), difficulty: 1, seed };
   difficulty = Math.max(1, Math.min(5, Math.trunc(difficulty) || 1));
   const candidates = bank[ruleId].filter((p) => p.difficulty === difficulty);
   const pool = candidates.length

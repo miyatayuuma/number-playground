@@ -1,5 +1,197 @@
 import { gcd } from "./math.mjs";
 
+
+function createPackState(stage, ids) {
+  const nodes = Object.fromEntries(
+    ids.map((rawId, order) => [
+      `d${rawId}`,
+      {
+        id: `d${rawId}`,
+        level: 0,
+        ids: [rawId],
+        children: [],
+        order,
+        macro: false,
+        base: 1,
+      },
+    ]),
+  );
+  return {
+    base: stage.radices[0],
+    step: 0,
+    phase: "pack",
+    active: ids.map((id) => `d${id}`),
+    nodes,
+    nextMacroId: 0,
+    locks: [],
+  };
+}
+
+function requirePack(run) {
+  if (run?.stage?.area !== "pack" || !run.pack)
+    throw new RangeError("PACK run required");
+  return run.pack;
+}
+
+export function activePackItems(run) {
+  const pack = requirePack(run);
+  return pack.active
+    .map((id) => pack.nodes[id])
+    .sort((a, b) => a.level - b.level || a.order - b.order);
+}
+
+export function packableGroups(run) {
+  const pack = requirePack(run);
+  if (run.status !== "play" || pack.phase !== "pack") return [];
+  const levels = [...new Set(activePackItems(run).map((item) => item.level))],
+    groups = [];
+  for (const level of levels) {
+    const items = activePackItems(run)
+      .filter((item) => item.level === level)
+      .sort((a, b) => a.order - b.order);
+    for (let i = 0; i + pack.base <= items.length; i += pack.base) {
+      const chunk = items.slice(i, i + pack.base);
+      groups.push({
+        level,
+        itemIds: chunk.map((item) => item.id),
+        ids: chunk.flatMap((item) => item.ids),
+      });
+    }
+  }
+  return groups;
+}
+
+export function packDigits(run) {
+  const pack = requirePack(run),
+    items = activePackItems(run),
+    expectedMax = Math.floor(
+      Math.log(run.stage.quantity || run.dots.length) / Math.log(pack.base),
+    ),
+    maxLevel = Math.max(expectedMax, ...items.map((item) => item.level), 0),
+    lowToHigh = Array.from({ length: maxLevel + 1 }, (_, level) =>
+      items.filter((item) => item.level === level).length,
+    );
+  return lowToHigh.reverse();
+}
+
+const SUBSCRIPT = "₀₁₂₃₄₅₆₇₈₉";
+export function radixNotation(digits, base) {
+  return `${digits.join("")}${String(base)
+    .split("")
+    .map((digit) => SUBSCRIPT[Number(digit)])
+    .join("")}`;
+}
+
+function settlePack(run, result) {
+  const pack = requirePack(run);
+  if (packableGroups(run).length) return result;
+  const digits = packDigits(run);
+  if (digits.some((digit) => digit >= pack.base)) return result;
+  const lock = {
+    base: pack.base,
+    digits,
+    notation: radixNotation(digits, pack.base),
+  };
+  pack.locks.push(lock);
+  result.lock = structuredClone(lock);
+  result.locked = true;
+  if (pack.step === run.stage.radices.length - 1) {
+    pack.phase = "break";
+    run.status = "won";
+    result.complete = true;
+  } else {
+    pack.phase = "unpack";
+  }
+  return result;
+}
+
+export function packGroup(run, itemIds) {
+  const pack = requirePack(run);
+  if (run.status !== "play" || pack.phase !== "pack")
+    return { ok: false, ignored: true };
+  const key = itemIds.join("|"),
+    group = packableGroups(run).find((candidate) => candidate.itemIds.join("|") === key);
+  if (!group) return { ok: false, type: "miss" };
+  const children = group.itemIds.map((id) => pack.nodes[id]),
+    level = group.level + 1,
+    id = `m${pack.step}-${pack.nextMacroId++}`,
+    node = {
+      id,
+      level,
+      ids: children.flatMap((item) => item.ids),
+      children: [...group.itemIds],
+      order: Math.min(...children.map((item) => item.order)),
+      macro: true,
+      base: pack.base,
+    },
+    childSet = new Set(group.itemIds);
+  pack.nodes[id] = node;
+  pack.active = pack.active.filter((activeId) => !childSet.has(activeId));
+  pack.active.push(id);
+  pack.active.sort(
+    (a, b) => pack.nodes[a].order - pack.nodes[b].order || pack.nodes[a].level - pack.nodes[b].level,
+  );
+  return settlePack(run, {
+    ok: true,
+    type: "pack",
+    itemId: id,
+    itemIds: [...group.itemIds],
+    ids: [...node.ids],
+    level,
+    representative: node.ids[0],
+    complete: false,
+    locked: false,
+  });
+}
+
+export function unpackPackItem(run, itemId) {
+  const pack = requirePack(run),
+    node = pack.nodes[itemId];
+  if (
+    run.status !== "play" ||
+    !node?.macro ||
+    !pack.active.includes(itemId) ||
+    (pack.phase !== "pack" && pack.phase !== "unpack")
+  )
+    return { ok: false, type: "miss" };
+  const index = pack.active.indexOf(itemId);
+  pack.active.splice(index, 1, ...node.children);
+  pack.active.sort(
+    (a, b) => pack.nodes[a].order - pack.nodes[b].order || pack.nodes[a].level - pack.nodes[b].level,
+  );
+  if (
+    pack.phase === "unpack" &&
+    pack.active.every((id) => pack.nodes[id].level === 0)
+  )
+    pack.phase = "choose";
+  return {
+    ok: true,
+    type: "unpack",
+    itemId,
+    childItemIds: [...node.children],
+    ids: [...node.ids],
+    level: node.level - 1,
+    representative: node.ids[0],
+  };
+}
+
+export function setPackBase(run, base) {
+  const pack = requirePack(run),
+    next = run.stage.radices[pack.step + 1];
+  if (
+    run.status !== "play" ||
+    pack.phase !== "choose" ||
+    base !== next ||
+    !pack.active.every((id) => pack.nodes[id].level === 0)
+  )
+    return false;
+  pack.step++;
+  pack.base = base;
+  pack.phase = "pack";
+  return true;
+}
+
+
 export function createRun(stage) {
   if (!stage) throw new RangeError("Unknown stage");
   let unit = 0;
@@ -12,7 +204,7 @@ export function createRun(stage) {
       });
       return { id: origin, ids, width: 0 };
     });
-  return {
+  const run = {
     width: 0,
     stage,
     dots,
@@ -27,6 +219,8 @@ export function createRun(stage) {
     gateIndex: 0,
     status: "play",
   };
+  if (stage.area === "pack") run.pack = createPackState(stage, pieces[0].ids);
+  return run;
 }
 export function activeTargets(run) {
   const phase = Math.min(

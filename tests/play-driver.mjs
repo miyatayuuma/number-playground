@@ -55,7 +55,9 @@ export function driver(page, base) {
     if (!s.busy)
       assert.equal(
         new Set(s.visibleIds).size,
-        s.pieces.flatMap((p) => p.ids).length,
+        s.rule === "pack"
+          ? s.pack.items.length
+          : s.pieces.flatMap((p) => p.ids).length,
       );
     return s;
   }
@@ -104,6 +106,18 @@ export function driver(page, base) {
     }
     throw new Error("width did not change");
   }
+  async function packBase() {
+    const s = await read(),
+      control = s.pack?.control;
+    assert.ok(control, "PACK radix control");
+    const b = await page.locator("#world").boundingBox();
+    await page.mouse.move(b.x + control.x1, b.y + control.y);
+    await page.mouse.down();
+    await page.mouse.move(b.x + control.x2, b.y + control.y, { steps: 10 });
+    await page.mouse.up();
+    await settled();
+    return audit();
+  }
   async function solveCurrent() {
     let s = await read();
     const id = s.stage;
@@ -139,11 +153,29 @@ export function driver(page, base) {
           s.pieces.find((q) => q.id === p.id),
           s.targets[i],
         );
+      } else if (s.rule === "pack") {
+        if (s.pack.phase === "pack") {
+          const group = s.pack.groups[0];
+          assert.ok(group, "PACK group");
+          const slot = s.pack.slots.find((slot) => slot.level === group.level + 1);
+          assert.ok(slot, "PACK upper slot");
+          const finalCarry = s.pack.step === 1 && group.level === 1;
+          await drag(group, slot, group.n);
+          if (finalCarry) return read();
+        } else if (s.pack.phase === "unpack") {
+          const item = s.pack.items.find((item) => item.macro);
+          assert.ok(item, "PACK macro");
+          const slot = s.pack.slots.find((slot) => slot.level === item.level - 1);
+          assert.ok(slot, "PACK lower slot");
+          await drag(item, slot, 1);
+        } else if (s.pack.phase === "choose") {
+          await packBase();
+        }
       }
     }
     throw new Error(`No automatic next problem: ${id}`);
   }
-  return { read, settled, route, audit, drag, width, solveCurrent };
+  return { read, settled, route, audit, drag, width, packBase, solveCurrent };
 }
 // Native Chromium touch input. A deliberate peel holds for 600ms before moving.
 export async function touchPeel(

@@ -8,10 +8,13 @@ import {
   fire,
   divide,
   setWidth,
+  packGroup,
+  unpackPackItem,
+  setPackBase,
 } from "./model.mjs";
 import { shape, arrayShape } from "./shapes.mjs";
 import { PeelGesture, finerSelection } from "./gestures.mjs";
-import { FlowWorld as World } from "./flow-view.mjs";
+import { PackWorld as World } from "./pack-view.mjs";
 import {
   SAVE_KEY,
   freshProgress,
@@ -25,6 +28,7 @@ const world = new World(canvas),
 let progress = freshProgress(),
   ruleId = null,
   widthPointer = null,
+  packPointer = false,
   peel = null,
   serial = 0,
   sound = true,
@@ -96,19 +100,48 @@ const icon = (name) =>
     back: "←",
   })[name];
 function syncHUD() {
-  const a = AREAS.find((a) => a.id === run.stage.area);
+  const a = AREAS.find((a) => a.id === run.stage.area),
+    steps = document.querySelector("#steps");
   document.documentElement.style.setProperty("--accent", a.color);
   document.querySelector("#stage-name").textContent = a.name;
-  document.querySelector("#steps").textContent =
-    "◆".repeat(run.stage.difficulty) + "◇".repeat(5 - run.stage.difficulty);
-  document
-    .querySelector("#steps")
-    .setAttribute("aria-label", `難易度 ${run.stage.difficulty} / 5`);
+  if (run.stage.area === "pack") {
+    steps.textContent = "";
+    steps.setAttribute("aria-label", "パック");
+  } else {
+    steps.textContent =
+      "◆".repeat(run.stage.difficulty) + "◇".repeat(5 - run.stage.difficulty);
+    steps.setAttribute("aria-label", `難易度 ${run.stage.difficulty} / 5`);
+  }
 }
 function announce(text) {
   document.querySelector("#announcement").textContent = text;
 }
 function keyboardUI() {
+  const controls = document.querySelector("#keyboard-controls");
+  if (run.stage.area === "pack") {
+    const state = world.read().pack;
+    controls.innerHTML =
+      state.phase === "pack"
+        ? state.groups
+            .map(
+              (g, i) =>
+                `<button data-pack-group="${i}">${state.base}個のまとまりを上位へ送る</button>`,
+            )
+            .join("")
+        : state.phase === "unpack"
+          ? state.items
+              .filter((item) => item.macro)
+              .map(
+                (item) =>
+                  `<button data-pack-item="${item.id}">上位のまとまりをほどく</button>`,
+              )
+              .join("")
+          : state.phase === "choose" && state.control
+            ? `<button data-pack-base="${state.control.next}">束の大きさを変える</button>`
+            : "";
+    return;
+  }
+
   const buttons = run.pieces
     .map(
       (p) =>
@@ -130,7 +163,7 @@ function keyboardUI() {
         `<button data-target="${i}">${run.targets[i].n}の標的に撃つ</button>`,
     )
     .join("");
-  document.querySelector("#keyboard-controls").innerHTML =
+  controls.innerHTML =
     buttons +
     (run.stage.area === "spark"
       ? ""
@@ -160,6 +193,8 @@ function openPanel(html, kind) {
   pointer = null;
   peel = null;
   widthPointer = null;
+  packPointer = false;
+  world.cancelPackControl?.();
   selected = null;
   if (!world.busy) world.cancel();
   world.paused = true;
@@ -204,6 +239,20 @@ function areaGlyph(rule) {
           y = (Math.floor(i / 4) - (n / 4 - 1) / 2) * 6;
         dots.push({ x: p.x + cx, y: p.y, mx: x, my: y, ex: x, ey: y - 20 });
       });
+  } else if (rule === "pack") {
+    const start = shape(5, 25).dots,
+      regroup = [...shape(4, 15).dots.map((p) => ({ x: p.x - 20, y: p.y })), { x: 24, y: 0 }];
+    start.forEach((p, i) => {
+      const compact = { x: p.x * 0.3 - 18, y: p.y * 0.3 };
+      dots.push({
+        x: p.x,
+        y: p.y,
+        mx: compact.x,
+        my: compact.y,
+        ex: regroup[i].x,
+        ey: regroup[i].y,
+      });
+    });
   }
   return `<svg viewBox="-55 -48 110 96" aria-hidden="true">${dots.map((d, i) => `<circle class="demo-dot" cx="${d.x}" cy="${d.y}" r="${rule === "gear" ? 1.7 : 2.5}" style="--mx:${d.mx - d.x}px;--my:${d.my - d.y}px;--dx:${d.ex - d.x}px;--dy:${d.ey - d.y}px;animation-delay:${Math.floor(i / 4) * 25}ms"/>`).join("")}</svg>`;
 }
@@ -217,7 +266,7 @@ function areaMenu() {
 function pauseMenu() {
   if (!ruleId) return;
   openPanel(
-    `<section class="panel"><div class="panel-header"><span class="panel-title">CORE BREAK</span><button class="icon" data-menu="close" aria-label="再開">×</button></div><div class="pause-actions"><button class="large-action primary" data-menu="close" aria-label="再開">${icon("play")}</button><button class="large-action" data-menu="retry" aria-label="別の問題にする">${icon("replay")}</button><button class="large-action" data-menu="sound" aria-label="${sound ? "音を消す" : "音を出す"}" aria-pressed="${sound}">${icon("sound")}${sound ? "" : "̸"}</button><button class="large-action" data-menu="areas" aria-label="ルールを選ぶ">${icon("map")}</button></div></section>`,
+    `<section class="panel"><div class="panel-header"><span class="panel-title">CORE BREAK</span><button class="icon" data-menu="close" aria-label="再開">×</button></div><div class="pause-actions"><button class="large-action primary" data-menu="close" aria-label="再開">${icon("play")}</button><button class="large-action" data-menu="retry" aria-label="${ruleId === "pack" ? "最初からやり直す" : "別の問題にする"}">${icon("replay")}</button><button class="large-action" data-menu="sound" aria-label="${sound ? "音を消す" : "音を出す"}" aria-pressed="${sound}">${icon("sound")}${sound ? "" : "̸"}</button><button class="large-action" data-menu="areas" aria-label="ルールを選ぶ">${icon("map")}</button></div></section>`,
     "pause",
   );
 }
@@ -227,19 +276,22 @@ function start(id, changeHash = true) {
   pointer = null;
   peel = null;
   widthPointer = null;
+  packPointer = false;
   selected = null;
   ruleId = id;
   document.body.classList.remove("entrance");
-  const p = progress[id];
-  const problem = generateProblem(
-    id,
-    p.difficulty,
-    `${Date.now()}-${serial++}`,
-    p.recent,
-  );
-  p.recent.push(problem.id);
-  p.recent = p.recent.slice(-10);
-  save();
+  const p = id === "pack" ? null : progress[id],
+    problem = generateProblem(
+      id,
+      p?.difficulty || 1,
+      `${Date.now()}-${serial++}`,
+      p?.recent || [],
+    );
+  if (p) {
+    p.recent.push(problem.id);
+    p.recent = p.recent.slice(-10);
+    save();
+  }
   run = createRun(problem);
   world.setRun(run);
   closeMenu();
@@ -247,7 +299,9 @@ function start(id, changeHash = true) {
   keyboardUI();
   if (changeHash) history.replaceState(null, "", `#${id}`);
   announce(
-    `${AREAS.find((a) => a.id === id).name} 難易度 ${problem.difficulty}`,
+    id === "pack"
+      ? AREAS.find((a) => a.id === id).name
+      : `${AREAS.find((a) => a.id === id).name} 難易度 ${problem.difficulty}`,
   );
 }
 function nextProblem() {
@@ -262,6 +316,30 @@ async function drop(destination) {
     world.cancel();
     selected = null;
     keyboardUI();
+    return;
+  }
+  if (
+    run.stage.area === "pack" &&
+    (destination.kind === "pack" || destination.kind === "unpack")
+  ) {
+    const result =
+      destination.kind === "pack"
+        ? packGroup(run, destination.itemIds)
+        : unpackPackItem(run, destination.itemId);
+    if (!result.ok) {
+      tone("miss");
+      world.cancel();
+      selected = null;
+      keyboardUI();
+      return;
+    }
+    tone(result.type === "pack" ? "merge" : "split");
+    await world.animatePack(result);
+    if (token !== epoch) return;
+    selected = null;
+    keyboardUI();
+    announce(result.lock?.notation || (result.complete ? "BREAK" : ""));
+    if (run.status === "won") nextProblem();
     return;
   }
   if (destination.kind === "space") {
@@ -331,8 +409,17 @@ function point(e) {
 canvas.addEventListener("pointerdown", (e) => {
   if (pointer !== null || world.busy || world.paused || run.status !== "play")
     return;
-  const p = point(e),
-    handle = world.handleHit(p.x, p.y);
+  const p = point(e);
+  if (run.stage.area === "pack" && world.packControlHit?.(p.x, p.y)) {
+    e.preventDefault();
+    pointer = e.pointerId;
+    packPointer = true;
+    canvas.setPointerCapture(pointer);
+    world.beginPackControl(p.x);
+    tone("pick");
+    return;
+  }
+  const handle = world.handleHit(p.x, p.y);
   if (handle) {
     e.preventDefault();
     pointer = e.pointerId;
@@ -379,6 +466,10 @@ function updatePeel(p, time) {
 canvas.addEventListener("pointermove", (e) => {
   if (e.pointerId !== pointer) return;
   const p = point(e);
+  if (packPointer) {
+    world.movePackControl(p.x);
+    return;
+  }
   if (widthPointer) {
     const width = Math.max(
       0,
@@ -404,6 +495,20 @@ canvas.addEventListener("pointerup", (e) => {
   const p = point(e);
   updatePeel(p, e.timeStamp);
   peel = null;
+  if (packPointer) {
+    const nextBase = world.endPackControl();
+    packPointer = false;
+    pointer = null;
+    if (canvas.hasPointerCapture(e.pointerId))
+      canvas.releasePointerCapture(e.pointerId);
+    if (nextBase && setPackBase(run, nextBase)) {
+      tone("merge");
+      world.sync();
+      keyboardUI();
+      announce("");
+    }
+    return;
+  }
   pointer = null;
   if (widthPointer) {
     widthPointer = null;
@@ -431,6 +536,10 @@ function cancelPointer() {
   peel = null;
   if (pointer !== null) {
     pointer = null;
+    if (packPointer) {
+      packPointer = false;
+      world.cancelPackControl?.();
+    }
     if (widthPointer) {
       setWidth(run, widthPointer.pieceId, widthPointer.value);
       widthPointer = null;
@@ -478,8 +587,10 @@ overlay.addEventListener("click", (e) => {
   const action = button.dataset.menu;
   if (action === "close") closeMenu();
   if (action === "retry") {
-    recordResult(progress[ruleId], false);
-    save();
+    if (ruleId !== "pack") {
+      recordResult(progress[ruleId], false);
+      save();
+    }
     start(ruleId);
   }
   if (action === "areas") areaMenu();
@@ -494,6 +605,54 @@ document.querySelector("#keyboard-controls").addEventListener("click", (e) => {
   if (world.busy || world.paused) return;
   const b = e.target.closest("button");
   if (!b) return;
+  if (run.stage.area === "pack") {
+    const state = world.read().pack;
+    if (b.dataset.packGroup !== undefined) {
+      const group = state.groups[Number(b.dataset.packGroup)];
+      if (!group) return;
+      const selection = {
+        pieceId: run.pieces[0].id,
+        ids: [...group.ids],
+        rawIds: [...group.rawIds],
+        itemIds: [...group.itemIds],
+        kind: "pack-group",
+        level: group.level,
+        anchor: { x: group.x, y: group.y },
+      };
+      selected = selection;
+      world.begin(selection, group.x, group.y);
+      drop({ kind: "pack", itemIds: [...group.itemIds] }).catch(failSafe);
+      return;
+    }
+    if (b.dataset.packItem !== undefined) {
+      const item = state.items.find((candidate) => candidate.id === b.dataset.packItem);
+      if (!item) return;
+      const selection = {
+        pieceId: run.pieces[0].id,
+        ids: [...item.ids],
+        rawIds: [...item.rawIds],
+        itemIds: [item.id],
+        itemId: item.id,
+        kind: "pack-item",
+        level: item.level,
+        macro: true,
+        anchor: { x: item.x, y: item.y },
+      };
+      selected = selection;
+      world.begin(selection, item.x, item.y);
+      drop({ kind: "unpack", itemId: item.id }).catch(failSafe);
+      return;
+    }
+    if (b.dataset.packBase !== undefined) {
+      if (setPackBase(run, Number(b.dataset.packBase))) {
+        tone("merge");
+        world.sync();
+        keyboardUI();
+      }
+      return;
+    }
+    return;
+  }
   if (b.dataset.width !== undefined) {
     const p = run.pieces.find((p) => p.id === Number(b.dataset.width));
     setWidth(run, p.id, p.width + Number(b.dataset.delta));
