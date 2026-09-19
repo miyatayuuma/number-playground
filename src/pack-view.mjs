@@ -253,13 +253,14 @@ export class PackWorld extends FlowWorld {
     if (this.run?.stage.area !== "pack") return super.dropTarget(x, y);
     if (!this.drag) return { kind: "cancel" };
     const layout = this.packLayout(),
-      center = this.drag.offsets.reduce(
+      averageOffset = this.drag.offsets.reduce(
         (point, offset) => ({
-          x: point.x + x + offset.x / this.drag.offsets.length,
-          y: point.y + y + offset.y / this.drag.offsets.length,
+          x: point.x + offset.x / this.drag.offsets.length,
+          y: point.y + offset.y / this.drag.offsets.length,
         }),
         { x: 0, y: 0 },
-      );
+      ),
+      center = { x: x + averageOffset.x, y: y + averageOffset.y };
     if (this.drag.kind === "pack-group") {
       const slot = layout.slots.find((candidate) => candidate.level === this.drag.level + 1);
       if (
