@@ -106,7 +106,7 @@ function syncHUD() {
   document.querySelector("#stage-name").textContent = a.name;
   if (run.stage.area === "pack") {
     steps.textContent = "";
-    steps.setAttribute("aria-label", "PACK prototype");
+    steps.setAttribute("aria-label", "パック");
   } else {
     steps.textContent =
       "◆".repeat(run.stage.difficulty) + "◇".repeat(5 - run.stage.difficulty);
@@ -266,7 +266,7 @@ function areaMenu() {
 function pauseMenu() {
   if (!ruleId) return;
   openPanel(
-    `<section class="panel"><div class="panel-header"><span class="panel-title">CORE BREAK</span><button class="icon" data-menu="close" aria-label="再開">×</button></div><div class="pause-actions"><button class="large-action primary" data-menu="close" aria-label="再開">${icon("play")}</button><button class="large-action" data-menu="retry" aria-label="別の問題にする">${icon("replay")}</button><button class="large-action" data-menu="sound" aria-label="${sound ? "音を消す" : "音を出す"}" aria-pressed="${sound}">${icon("sound")}${sound ? "" : "̸"}</button><button class="large-action" data-menu="areas" aria-label="ルールを選ぶ">${icon("map")}</button></div></section>`,
+    `<section class="panel"><div class="panel-header"><span class="panel-title">CORE BREAK</span><button class="icon" data-menu="close" aria-label="再開">×</button></div><div class="pause-actions"><button class="large-action primary" data-menu="close" aria-label="再開">${icon("play")}</button><button class="large-action" data-menu="retry" aria-label="${ruleId === "pack" ? "最初からやり直す" : "別の問題にする"}">${icon("replay")}</button><button class="large-action" data-menu="sound" aria-label="${sound ? "音を消す" : "音を出す"}" aria-pressed="${sound}">${icon("sound")}${sound ? "" : "̸"}</button><button class="large-action" data-menu="areas" aria-label="ルールを選ぶ">${icon("map")}</button></div></section>`,
     "pause",
   );
 }
