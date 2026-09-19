@@ -8,10 +8,13 @@ import {
   fire,
   divide,
   setWidth,
+  packGroup,
+  unpackPackItem,
+  setPackBase,
 } from "./model.mjs";
 import { shape, arrayShape } from "./shapes.mjs";
 import { PeelGesture, finerSelection } from "./gestures.mjs";
-import { FlowWorld as World } from "./flow-view.mjs";
+import { PackWorld as World } from "./pack-view.mjs";
 import {
   SAVE_KEY,
   freshProgress,
@@ -25,6 +28,7 @@ const world = new World(canvas),
 let progress = freshProgress(),
   ruleId = null,
   widthPointer = null,
+  packPointer = false,
   peel = null,
   serial = 0,
   sound = true,
@@ -96,19 +100,48 @@ const icon = (name) =>
     back: "←",
   })[name];
 function syncHUD() {
-  const a = AREAS.find((a) => a.id === run.stage.area);
+  const a = AREAS.find((a) => a.id === run.stage.area),
+    steps = document.querySelector("#steps");
   document.documentElement.style.setProperty("--accent", a.color);
   document.querySelector("#stage-name").textContent = a.name;
-  document.querySelector("#steps").textContent =
-    "◆".repeat(run.stage.difficulty) + "◇".repeat(5 - run.stage.difficulty);
-  document
-    .querySelector("#steps")
-    .setAttribute("aria-label", `難易度 ${run.stage.difficulty} / 5`);
+  if (run.stage.area === "pack") {
+    steps.textContent = "";
+    steps.setAttribute("aria-label", "PACK prototype");
+  } else {
+    steps.textContent =
+      "◆".repeat(run.stage.difficulty) + "◇".repeat(5 - run.stage.difficulty);
+    steps.setAttribute("aria-label", `難易度 ${run.stage.difficulty} / 5`);
+  }
 }
 function announce(text) {
   document.querySelector("#announcement").textContent = text;
 }
 function keyboardUI() {
+  const controls = document.querySelector("#keyboard-controls");
+  if (run.stage.area === "pack") {
+    const state = world.read().pack;
+    controls.innerHTML =
+      state.phase === "pack"
+        ? state.groups
+            .map(
+              (g, i) =>
+                `<button data-pack-group="${i}">${state.base}個のまとまりを上位へ送る</button>`,
+            )
+            .join("")
+        : state.phase === "unpack"
+          ? state.items
+              .filter((item) => item.macro)
+              .map(
+                (item) =>
+                  `<button data-pack-item="${item.id}">上位のまとまりをほどく</button>`,
+              )
+              .join("")
+          : state.phase === "choose" && state.control
+            ? `<button data-pack-base="${state.control.next}">束の大きさを変える</button>`
+            : "";
+    return;
+  }
+
   const buttons = run.pieces
     .map(
       (p) =>
@@ -130,7 +163,7 @@ function keyboardUI() {
         `<button data-target="${i}">${run.targets[i].n}の標的に撃つ</button>`,
     )
     .join("");
-  document.querySelector("#keyboard-controls").innerHTML =
+  controls.innerHTML =
     buttons +
     (run.stage.area === "spark"
       ? ""
@@ -160,6 +193,8 @@ function openPanel(html, kind) {
   pointer = null;
   peel = null;
   widthPointer = null;
+  packPointer = false;
+  world.cancelPackControl?.();
   selected = null;
   if (!world.busy) world.cancel();
   world.paused = true;
@@ -204,6 +239,20 @@ function areaGlyph(rule) {
           y = (Math.floor(i / 4) - (n / 4 - 1) / 2) * 6;
         dots.push({ x: p.x + cx, y: p.y, mx: x, my: y, ex: x, ey: y - 20 });
       });
+  } else if (rule === "pack") {
+    const start = shape(5, 25).dots,
+      regroup = [...shape(4, 15).dots.map((p) => ({ x: p.x - 20, y: p.y })), { x: 24, y: 0 }];
+    start.forEach((p, i) => {
+      const compact = { x: p.x * 0.3 - 18, y: p.y * 0.3 };
+      dots.push({
+        x: p.x,
+        y: p.y,
+        mx: compact.x,
+        my: compact.y,
+        ex: regroup[i].x,
+        ey: regroup[i].y,
+      });
+    });
   }
   return `<svg viewBox="-55 -48 110 96" aria-hidden="true">${dots.map((d, i) => `<circle class="demo-dot" cx="${d.x}" cy="${d.y}" r="${rule === "gear" ? 1.7 : 2.5}" style="--mx:${d.mx - d.x}px;--my:${d.my - d.y}px;--dx:${d.ex - d.x}px;--dy:${d.ey - d.y}px;animation-delay:${Math.floor(i / 4) * 25}ms"/>`).join("")}</svg>`;
 }
@@ -227,19 +276,22 @@ function start(id, changeHash = true) {
   pointer = null;
   peel = null;
   widthPointer = null;
+  packPointer = false;
   selected = null;
   ruleId = id;
   document.body.classList.remove("entrance");
-  const p = progress[id];
-  const problem = generateProblem(
-    id,
-    p.difficulty,
-    `${Date.now()}-${serial++}`,
-    p.recent,
-  );
-  p.recent.push(problem.id);
-  p.recent = p.recent.slice(-10);
-  save();
+  const p = id === "pack" ? null : progress[id],
+    problem = generateProblem(
+      id,
+      p?.difficulty || 1,
+      `${Date.now()}-${serial++}`,
+      p?.recent || [],
+    );
+  if (p) {
+    p.recent.push(problem.id);
+    p.recent = p.recent.slice(-10);
+    save();
+  }
   run = createRun(problem);
   world.setRun(run);
   closeMenu();
@@ -247,7 +299,9 @@ function start(id, changeHash = true) {
   keyboardUI();
   if (changeHash) history.replaceState(null, "", `#${id}`);
   announce(
-    `${AREAS.find((a) => a.id === id).name} 難易度 ${problem.difficulty}`,
+    id === "pack"
+      ? AREAS.find((a) => a.id === id).name
+      : `${AREAS.find((a) => a.id === id).name} 難易度 ${problem.difficulty}`,
   );
 }
 function nextProblem() {
