@@ -318,6 +318,30 @@ async function drop(destination) {
     keyboardUI();
     return;
   }
+  if (
+    run.stage.area === "pack" &&
+    (destination.kind === "pack" || destination.kind === "unpack")
+  ) {
+    const result =
+      destination.kind === "pack"
+        ? packGroup(run, destination.itemIds)
+        : unpackPackItem(run, destination.itemId);
+    if (!result.ok) {
+      tone("miss");
+      world.cancel();
+      selected = null;
+      keyboardUI();
+      return;
+    }
+    tone(result.type === "pack" ? "merge" : "split");
+    await world.animatePack(result);
+    if (token !== epoch) return;
+    selected = null;
+    keyboardUI();
+    announce(result.lock?.notation || (result.complete ? "BREAK" : ""));
+    if (run.status === "won") nextProblem();
+    return;
+  }
   if (destination.kind === "space") {
     const result = split(run, pieceId, ids);
     if (result.ok) {
@@ -385,8 +409,17 @@ function point(e) {
 canvas.addEventListener("pointerdown", (e) => {
   if (pointer !== null || world.busy || world.paused || run.status !== "play")
     return;
-  const p = point(e),
-    handle = world.handleHit(p.x, p.y);
+  const p = point(e);
+  if (run.stage.area === "pack" && world.packControlHit?.(p.x, p.y)) {
+    e.preventDefault();
+    pointer = e.pointerId;
+    packPointer = true;
+    canvas.setPointerCapture(pointer);
+    world.beginPackControl(p.x);
+    tone("pick");
+    return;
+  }
+  const handle = world.handleHit(p.x, p.y);
   if (handle) {
     e.preventDefault();
     pointer = e.pointerId;
@@ -433,6 +466,10 @@ function updatePeel(p, time) {
 canvas.addEventListener("pointermove", (e) => {
   if (e.pointerId !== pointer) return;
   const p = point(e);
+  if (packPointer) {
+    world.movePackControl(p.x);
+    return;
+  }
   if (widthPointer) {
     const width = Math.max(
       0,
@@ -458,6 +495,20 @@ canvas.addEventListener("pointerup", (e) => {
   const p = point(e);
   updatePeel(p, e.timeStamp);
   peel = null;
+  if (packPointer) {
+    const nextBase = world.endPackControl();
+    packPointer = false;
+    pointer = null;
+    if (canvas.hasPointerCapture(e.pointerId))
+      canvas.releasePointerCapture(e.pointerId);
+    if (nextBase && setPackBase(run, nextBase)) {
+      tone("merge");
+      world.sync();
+      keyboardUI();
+      announce("");
+    }
+    return;
+  }
   pointer = null;
   if (widthPointer) {
     widthPointer = null;
@@ -485,6 +536,10 @@ function cancelPointer() {
   peel = null;
   if (pointer !== null) {
     pointer = null;
+    if (packPointer) {
+      packPointer = false;
+      world.cancelPackControl?.();
+    }
     if (widthPointer) {
       setWidth(run, widthPointer.pieceId, widthPointer.value);
       widthPointer = null;
@@ -532,8 +587,10 @@ overlay.addEventListener("click", (e) => {
   const action = button.dataset.menu;
   if (action === "close") closeMenu();
   if (action === "retry") {
-    recordResult(progress[ruleId], false);
-    save();
+    if (ruleId !== "pack") {
+      recordResult(progress[ruleId], false);
+      save();
+    }
     start(ruleId);
   }
   if (action === "areas") areaMenu();
