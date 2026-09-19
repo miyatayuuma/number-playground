@@ -47,14 +47,12 @@ page.on("pageerror", (e) => errors.push(e.stack));
 page.on("response", (r) => {
   if (r.status() >= 400) errors.push(`${r.status()} ${r.url()}`);
 });
-const { read, settled, route, audit, drag, width, solveCurrent } = driver(
-  page,
-  base,
-);
+const { read, settled, route, audit, drag, width, packBase, solveCurrent } =
+  driver(page, base);
 try {
   await page.goto(base);
   await page.locator("[data-rule]").first().waitFor();
-  assert.equal(await page.locator("[data-rule]").count(), 3);
+  assert.equal(await page.locator("[data-rule]").count(), 4);
   assert.equal(await page.locator("[data-stage]").count(), 0);
   await page.locator('[data-rule="spark"]').click();
   await settled();
@@ -81,6 +79,86 @@ try {
   }
   console.log(
     "Real drags solved merge, remainder, chained division, common widths; automatic continuation verified.",
+  );
+
+  // PACK vertical slice: the same 17 raw IDs become 32₅, return to raw,
+  // then become 101₄ through one nested carry.
+  let packState = await route("pack");
+  assert.equal(packState.total, 17);
+  assert.equal(packState.progress.pack, undefined);
+  assert.equal(packState.pack.base, 5);
+  assert.equal(packState.pack.phase, "pack");
+  const originalPackIds = [...packState.pieces[0].ids];
+
+  while (packState.pack.phase === "pack") {
+    const group = packState.pack.groups[0],
+      slot = packState.pack.slots.find(
+        (candidate) => candidate.level === group.level + 1,
+      );
+    assert.ok(group && slot);
+    await drag(group, slot, group.n);
+    packState = await read();
+  }
+  assert.equal(packState.pack.phase, "unpack");
+  assert.equal(packState.pack.locks.length, 1);
+  assert.equal(packState.pack.locks[0].notation, "32₅");
+  assert.deepEqual(packState.pack.locks[0].digits, [3, 2]);
+  assert.deepEqual(packState.pieces[0].ids, originalPackIds);
+  await audit();
+
+  while (packState.pack.phase === "unpack") {
+    const item = packState.pack.items.find((candidate) => candidate.macro),
+      slot = packState.pack.slots.find(
+        (candidate) => candidate.level === item.level - 1,
+      );
+    assert.ok(item && slot);
+    await drag(item, slot, 1);
+    packState = await read();
+  }
+  assert.equal(packState.pack.phase, "choose");
+  assert.equal(packState.pack.items.length, 17);
+  assert.ok(packState.pack.items.every((item) => item.rawIds.length === 1));
+  assert.deepEqual(packState.pieces[0].ids, originalPackIds);
+
+  await packBase();
+  packState = await read();
+  assert.equal(packState.pack.base, 4);
+  assert.equal(packState.pack.phase, "pack");
+
+  while (true) {
+    const group = packState.pack.groups[0],
+      slot = packState.pack.slots.find(
+        (candidate) => candidate.level === group.level + 1,
+      );
+    assert.ok(group && slot);
+    if (group.level === 1) {
+      await drag(group, slot, group.n, false);
+      await page.waitForFunction(() => {
+        const state = window.__readFlow?.();
+        return (
+          state?.rule === "pack" &&
+          state.status === "won" &&
+          state.pack?.locks?.length === 2
+        );
+      });
+      packState = await read();
+      assert.equal(packState.pack.locks[1].notation, "101₄");
+      assert.deepEqual(packState.pack.locks[1].digits, [1, 0, 1]);
+      assert.equal(
+        packState.pack.items.filter((item) => item.level === 1).length,
+        0,
+      );
+      assert.deepEqual(packState.pieces[0].ids, originalPackIds);
+      await audit();
+      break;
+    }
+    await drag(group, slot, group.n);
+    packState = await read();
+  }
+  await settled();
+  assert.equal((await read()).rule, "pack");
+  console.log(
+    "PACK real drags verified 17 → 32₅ → raw 17 → 101₄, nested carry and BREAK.",
   );
   await route("link", (p) => p.ammo[0] === 14 && p.gates[0] === 3);
   let s = await read();
@@ -164,7 +242,7 @@ try {
     assert.deepEqual(pick.initial, [dot.id]);
     await settled();
   }
-  // The old mode URL returns to the three choices, keeping saved progress.
+  // The old mode URL returns to the four choices, keeping saved progress.
   await page.goto(`${base}/#core`);
   await page.locator("[data-rule]").first().waitFor();
   assert.equal(await page.locator("[data-rule]").count(), 3);
@@ -221,7 +299,7 @@ try {
     [1280, 900],
   ]) {
     await page.setViewportSize({ width: w, height: h });
-    for (const rule of ["spark", "link", "gear"]) {
+    for (const rule of ["spark", "link", "gear", "pack"]) {
       s = await route(rule);
       assert.equal(
         await page.evaluate(
