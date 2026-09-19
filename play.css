@@ -473,22 +473,32 @@ canvas:focus {
   grid-template-columns: repeat(2, 1fr);
 }
 .rule-choice {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 26px;
-  padding: 8px 20px;
+  display: block;
+  padding: 9px 7px;
+}
+.rule-choice .area-glyph {
+  height: 58px;
+}
+.rule-choice .area-glyph svg {
+  width: 64px;
+  height: 54px;
 }
 .rule-choice .area-title {
-  margin: 0;
+  margin: 4px 0 2px;
 }
 @media (min-width: 640px), (orientation: landscape) {
   .area-grid {
     grid-template-columns: repeat(4, 1fr);
   }
   .rule-choice {
-    display: block;
     padding: 12px;
+  }
+  .rule-choice .area-glyph {
+    height: 62px;
+  }
+  .rule-choice .area-glyph svg {
+    width: 76px;
+    height: 60px;
   }
   .rule-choice .area-title {
     margin-top: 8px;
