@@ -10,6 +10,24 @@ export class PackWorld extends FlowWorld {
     return super.handle(p);
   }
 
+  displayPackGroup(group) {
+    const dots = group.representatives
+      .map((id) => this.units.get(id))
+      .filter((dot) => dot?.visible);
+    if (dots.length !== group.representatives.length) return group;
+    const x = dots.reduce((sum, dot) => sum + dot.x, 0) / dots.length,
+      y = dots.reduce((sum, dot) => sum + dot.y, 0) / dots.length;
+    return {
+      ...group,
+      x,
+      y,
+      radius: Math.max(
+        group.radius,
+        ...dots.map((dot) => Math.hypot(dot.x - x, dot.y - y) + dot.r + 7),
+      ),
+    };
+  }
+
   packLayout() {
     const total = this.run.stage.quantity || this.run.dots.length,
       base = this.run.pack.base,
@@ -132,17 +150,20 @@ export class PackWorld extends FlowWorld {
           radius: visual.r + (visual.item.macro ? 5 : 2),
         };
       }),
-      groups = layout.groups.map((group) => ({
-        id: group.itemIds.join("|"),
-        itemIds: [...group.itemIds],
-        ids: [...group.representatives],
-        rawIds: [...group.rawIds],
-        n: group.itemIds.length,
-        level: group.level,
-        x: group.x,
-        y: group.y,
-        radius: group.radius,
-      })),
+      groups = layout.groups.map((rawGroup) => {
+        const group = this.displayPackGroup(rawGroup);
+        return {
+          id: group.itemIds.join("|"),
+          itemIds: [...group.itemIds],
+          ids: [...group.representatives],
+          rawIds: [...group.rawIds],
+          n: group.itemIds.length,
+          level: group.level,
+          x: group.x,
+          y: group.y,
+          radius: group.radius,
+        };
+      }),
       control = this.packControl();
     return {
       width: this.w,
@@ -199,7 +220,8 @@ export class PackWorld extends FlowWorld {
     if (phase === "choose" || phase === "break") return null;
 
     if (phase === "pack") {
-      const group = [...layout.groups]
+      const group = layout.groups
+        .map((candidate) => this.displayPackGroup(candidate))
         .sort(
           (a, b) =>
             Math.hypot(x - a.x, y - a.y) - Math.hypot(x - b.x, y - b.y),
@@ -267,7 +289,11 @@ export class PackWorld extends FlowWorld {
         slot &&
         Math.hypot(center.x - slot.x, center.y - slot.y) <= slot.radius + 34
       )
-        return { kind: "pack", itemIds: [...this.drag.itemIds] };
+        return {
+          kind: "pack",
+          itemIds: [...this.drag.itemIds],
+          level: this.drag.level + 1,
+        };
     }
     if (this.drag.kind === "pack-item" && this.drag.level > 0) {
       const slot = layout.slots.find((candidate) => candidate.level === this.drag.level - 1);
@@ -275,7 +301,11 @@ export class PackWorld extends FlowWorld {
         slot &&
         Math.hypot(center.x - slot.x, center.y - slot.y) <= slot.radius + 34
       )
-        return { kind: "unpack", itemId: this.drag.itemId };
+        return {
+          kind: "unpack",
+          itemId: this.drag.itemId,
+          level: this.drag.level - 1,
+        };
     }
     return { kind: "cancel" };
   }
@@ -341,8 +371,8 @@ export class PackWorld extends FlowWorld {
     c.lineWidth = 1.2;
     for (const slot of layout.slots) {
       const hot =
-        (hover?.kind === "pack" && slot.level > 0) ||
-        (hover?.kind === "unpack" && slot.level >= 0);
+        (hover?.kind === "pack" || hover?.kind === "unpack") &&
+        hover.level === slot.level;
       c.strokeStyle = this.color + (hot ? "88" : "2d");
       c.setLineDash(slot.level === 0 ? [] : [3, 5]);
       c.beginPath();
@@ -374,7 +404,8 @@ export class PackWorld extends FlowWorld {
     }
 
     if (this.run.pack.phase === "pack")
-      for (const group of layout.groups) {
+      for (const rawGroup of layout.groups) {
+        const group = this.displayPackGroup(rawGroup);
         c.strokeStyle =
           hover?.kind === "pack" &&
           hover.itemIds?.join("|") === group.itemIds.join("|")
