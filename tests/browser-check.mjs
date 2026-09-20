@@ -109,12 +109,12 @@ try {
   );
   const originalPackIds = [...packState.pieces[0].ids],
     base5Upper = packState.pack.slots.find((slot) => slot.level === 1),
-    single = packState.pack.items.find((item) => item.level === 0);
-  assert.ok(base5Upper && single);
+    packSingle = packState.pack.items.find((item) => item.level === 0);
+  assert.ok(base5Upper && packSingle);
 
   // Less than one base unit crosses the boundary, reacts, and returns without
   // becoming an error or changing the mathematical state.
-  await drag(single, base5Upper, 1);
+  await drag(packSingle, base5Upper, 1);
   packState = await read();
   assert.equal(packState.pack.phase, "pack");
   assert.equal(packState.pack.items.length, 17);
