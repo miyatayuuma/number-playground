@@ -421,6 +421,36 @@ canvas:focus {
 .demo-dot {
   animation: rule-demo 3.4s ease-in-out infinite;
 }
+.pack-demo-slot {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+  stroke-opacity: 0.16;
+  stroke-dasharray: 2 4;
+}
+.pack-demo-dot {
+  fill: currentColor;
+  animation: pack-radix-demo 5.6s ease-in-out infinite;
+}
+@keyframes pack-radix-demo {
+  0%,
+  18%,
+  100% {
+    transform: translate(var(--p2x), var(--p2y));
+  }
+  27%,
+  42% {
+    transform: translate(var(--p3x), var(--p3y));
+  }
+  51%,
+  66% {
+    transform: translate(var(--p4x), var(--p4y));
+  }
+  75%,
+  90% {
+    transform: translate(var(--p5x), var(--p5y));
+  }
+}
 @keyframes rule-demo {
   0%,
   16%,
@@ -446,6 +476,10 @@ canvas:focus {
   .demo-dot {
     animation: none;
     transform: translate(var(--dx), var(--dy));
+  }
+  .pack-demo-dot {
+    animation: none;
+    transform: translate(var(--p5x), var(--p5y));
   }
 }
 @media (max-width: 380px) {
