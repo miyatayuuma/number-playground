@@ -130,7 +130,14 @@ try {
   assert.equal((await read()).rule, "spark");
   assert.equal(await page.locator(".hud button:visible").count(), 2);
   for (const [rule, predicate] of [
-    ["spark", (p) => p.family === "join" && p.ammo[0] === 7 && p.ammo[1] === 1],
+    [
+      "spark",
+      (p) =>
+        p.family === "join" &&
+        p.difficulty === 1 &&
+        p.ammo[0] === 2 &&
+        p.ammo[1] === 3,
+    ],
     ["link", (p) => p.ammo[0] === 14 && p.gates[0] === 3],
     [
       "link",
@@ -150,6 +157,117 @@ try {
   }
   console.log(
     "Real drags solved merge, remainder, chained division, common widths; automatic continuation verified.",
+  );
+
+  // Sequential SPARK uses one enemy position: future layers stay hidden
+  // until the currently active quantity has actually impacted.
+  let sparkState = await route(
+    "spark",
+    (p) =>
+      p.family === "sequential-split" &&
+      p.difficulty === 3 &&
+      p.ammo.length === 1 &&
+      p.ammo[0] === 9 &&
+      p.targets.length === 2 &&
+      p.targets[0].n === 3 &&
+      p.targets[1].n === 6,
+    3,
+  );
+  const sequentialIds = [...sparkState.pieces[0].ids],
+    firstLayerPoint = { x: sparkState.targets[0].x, y: sparkState.targets[0].y },
+    groupOfThree = sparkState.pieces[0].parts.find((part) => part.n === 3);
+  assert.ok(groupOfThree, "factorized 9 exposes a directly manipulable group of 3");
+  assert.equal(sparkState.targets[0].active, true);
+  assert.equal(sparkState.targets[0].visible, true);
+  assert.equal(sparkState.targets[1].active, false);
+  assert.equal(sparkState.targets[1].visible, false);
+
+  const touchShot = await touchPeel(
+    context,
+    page,
+    groupOfThree,
+    sparkState.targets[0].x - groupOfThree.x,
+    sparkState.targets[0].y - groupOfThree.y,
+    { fast: true, hold: 0 },
+  );
+  assert.equal(touchShot.initial.length, 3);
+  sparkState = await settled();
+  assert.equal(sparkState.spent.length, 3);
+  assert.deepEqual(sparkState.pieces.map((piece) => piece.n), [6]);
+  assert.equal(sparkState.targets[0].complete, true);
+  assert.equal(sparkState.targets[0].visible, false);
+  assert.equal(sparkState.targets[1].active, true);
+  assert.equal(sparkState.targets[1].visible, true);
+  assert.ok(Math.abs(sparkState.targets[1].x - firstLayerPoint.x) < 0.01);
+  assert.ok(Math.abs(sparkState.targets[1].y - firstLayerPoint.y) < 0.01);
+  assert.deepEqual(
+    [...sparkState.pieces.flatMap((piece) => piece.ids), ...sparkState.spent].sort(
+      (a, b) => a - b,
+    ),
+    sequentialIds,
+  );
+  const sequentialToken = sparkState.runToken;
+  await drag(sparkState.pieces[0], sparkState.targets[1], 6, false);
+  const sequentialFinish = await read();
+  assert.equal(sequentialFinish.runToken, sequentialToken);
+  assert.equal(sequentialFinish.status, "won");
+  assert.equal(sequentialFinish.pieces.length, 0);
+  assert.deepEqual(
+    [...sequentialFinish.spent].sort((a, b) => a - b),
+    sequentialIds,
+  );
+  assert.equal(new Set(sequentialFinish.spent).size, sequentialIds.length);
+  await settled();
+  await audit();
+
+  // Join -> decomposition cannot fire an untouched initial piece at phase 0.
+  // Merge first, peel a visible subgroup away, then use both resulting quantities.
+  sparkState = await route(
+    "spark",
+    (p) =>
+      p.family === "join-decomposition" &&
+      p.difficulty === 3 &&
+      p.ammo[0] === 4 &&
+      p.ammo[1] === 5 &&
+      p.targets[0].n === 6 &&
+      p.targets[1].n === 3,
+    3,
+  );
+  assert.ok(sparkState.pieces.every((piece) => piece.n < sparkState.targets[0].n));
+  const joinIds = [...sparkState.pieces.flatMap((piece) => piece.ids)];
+  await drag(sparkState.pieces[1], sparkState.pieces[0]);
+  sparkState = await settled();
+  assert.deepEqual(sparkState.pieces.map((piece) => piece.n), [9]);
+  const peelThree = sparkState.pieces[0].parts.find((part) => part.n === 3);
+  assert.ok(peelThree);
+  await drag(
+    peelThree,
+    { x: sparkState.width * 0.78, y: sparkState.height * 0.8 },
+    3,
+  );
+  sparkState = await settled();
+  assert.deepEqual(
+    sparkState.pieces.map((piece) => piece.n).sort((a, b) => a - b),
+    [3, 6],
+  );
+  const six = sparkState.pieces.find((piece) => piece.n === 6);
+  await drag(six, sparkState.targets[0], 6);
+  sparkState = await settled();
+  assert.equal(sparkState.spent.length, 6);
+  assert.deepEqual(sparkState.pieces.map((piece) => piece.n), [3]);
+  assert.equal(sparkState.targets[1].active, true);
+  assert.equal(sparkState.targets[1].visible, true);
+  const joinToken = sparkState.runToken;
+  await drag(sparkState.pieces[0], sparkState.targets[1], 3, false);
+  const joinFinish = await read();
+  assert.equal(joinFinish.runToken, joinToken);
+  assert.equal(joinFinish.status, "won");
+  assert.deepEqual([...joinFinish.spent].sort((a, b) => a - b), joinIds);
+  assert.equal(new Set(joinFinish.spent).size, joinIds.length);
+  await settled();
+  await audit();
+  console.log(
+    "SPARK D1 join, sequential touch decomposition, hidden next layer, and join->decomposition passed.",
   );
 
   await page.emulateMedia({ reducedMotion: "no-preference" });
