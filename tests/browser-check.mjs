@@ -49,21 +49,33 @@ page.on("response", (r) => {
 });
 const { read, settled, route, audit, drag, width, packBase, solveCurrent } =
   driver(page, base);
-async function scaleSwipe(delta) {
+async function inspectScaleMouse(deltas, direction = "left", screenshotPath = null) {
   const bounds = await page.locator("#world").boundingBox(),
     y = bounds.y + 58,
-    startX = bounds.x + (delta > 0 ? 18 : bounds.width - 18);
+    startX = bounds.x +
+      (direction === "left" ? bounds.width * 0.75 : Math.min(24, bounds.width * 0.08));
   await page.mouse.move(startX, y);
   await page.mouse.down();
-  await page.mouse.move(startX + (delta > 0 ? 5 : -5), y);
-  assert.equal((await read()).pack.camera.moving, false);
-  await page.mouse.move(startX + delta, y, { steps: 8 });
+  await page.mouse.move(startX + (direction === "left" ? -5 : 5), y);
+  const jitter = await read(),
+    states = [];
+  assert.equal(jitter.pack.camera.mode, "overview");
+  assert.equal(jitter.pack.camera.moving, false);
+  for (const [index, delta] of deltas.entries()) {
+    await page.mouse.move(startX + delta, y, { steps: 8 });
+    states.push(await read());
+    if (screenshotPath && index === deltas.length - 1)
+      await page.screenshot({ path: resolve(root, screenshotPath) });
+  }
   await page.mouse.up();
-  return settled();
+  const released = await read(),
+    home = await settled();
+  return { jitter, states, released, home };
 }
-async function touchScaleSwipe(delta) {
+async function inspectScaleTouch(deltas, direction = "left", screenshotPath = null) {
   const bounds = await page.locator("#world").boundingBox(),
-    x = bounds.x + (delta > 0 ? 18 : bounds.width - 18),
+    x = bounds.x +
+      (direction === "left" ? bounds.width * 0.75 : Math.min(24, bounds.width * 0.08)),
     y = bounds.y + 58,
     cdp = await context.newCDPSession(page);
   await cdp.send("Input.dispatchTouchEvent", {
@@ -72,19 +84,34 @@ async function touchScaleSwipe(delta) {
   });
   await cdp.send("Input.dispatchTouchEvent", {
     type: "touchMove",
-    touchPoints: [{ x: x + Math.sign(delta) * 5, y }],
+    touchPoints: [{ x: x + (direction === "left" ? -5 : 5), y }],
   });
-  await cdp.send("Input.dispatchTouchEvent", {
-    type: "touchMove",
-    touchPoints: [{ x: x + delta, y }],
-  });
+  await page.waitForTimeout(16);
+  const jitter = await read(),
+    states = [];
+  assert.equal(jitter.pack.camera.mode, "overview");
+  assert.equal(jitter.pack.camera.moving, false);
+  for (const [index, delta] of deltas.entries()) {
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x: x + delta, y }],
+    });
+    await page.waitForTimeout(16);
+    states.push(await read());
+    if (screenshotPath && index === deltas.length - 1)
+      await page.screenshot({ path: resolve(root, screenshotPath) });
+  }
   await cdp.send("Input.dispatchTouchEvent", {
     type: "touchEnd",
     touchPoints: [],
   });
+  await page.waitForTimeout(16);
   await cdp.detach();
-  return settled();
+  const released = await read(),
+    home = await settled();
+  return { jitter, states, released, home };
 }
+const focusStep = (width) => Math.min(56, Math.max(40, width * 0.145));
 try {
   await page.goto(base);
   await page.locator("[data-rule]").first().waitFor();
@@ -126,8 +153,8 @@ try {
   );
 
   await page.emulateMedia({ reducedMotion: "no-preference" });
-  // PACK Pass 5: true shared-world-size dots, perspective scale planes, and
-  // discrete focus gestures that inspect nested raw identities.
+  // PACK Pass 5R: true shared-world-size dots, compact nested planes, and
+  // transient continuous camera gestures that inspect raw identities.
   let packState = await route("pack");
   await mkdir(resolve(root, "artifacts"), { recursive: true });
   await page.screenshot({ path: resolve(root, "artifacts/pack-initial.png") });
@@ -183,28 +210,42 @@ try {
   await page.mouse.up();
   await settled();
 
-  // Background owns focus from pointerdown; a sub-threshold jitter has no effect.
+  // Background owns transient camera inspection from pointerdown; jitter is ignored.
   const beforeBackground = await read();
-  await page.mouse.move(bounds.x + 18, bounds.y + 58);
+  const backgroundInspect = await inspectScaleMouse(
+    [focusStep(beforeBackground.width)],
+    "right",
+  );
+  assert.equal(backgroundInspect.jitter.pack.camera.mode, "overview");
+  assert.equal(backgroundInspect.states[0].pack.camera.mode, "inspection");
+  assert.equal(backgroundInspect.states[0].pack.camera.focusLevel, 0);
+  assert.deepEqual(backgroundInspect.states[0].pack.digits, beforeBackground.pack.digits);
+  assert.deepEqual(backgroundInspect.states[0].pack.rawIds, beforeBackground.pack.rawIds);
+  assert.equal(backgroundInspect.states[0].pack.base, beforeBackground.pack.base);
+  assert.equal(backgroundInspect.released.pack.camera.mode, "returning");
+  assert.equal(backgroundInspect.home.pack.camera.mode, "overview");
+  assert.equal(backgroundInspect.home.pack.camera.focusLevel, null);
+  const focusedZero = backgroundInspect.states[0].pack.viewports.find((view) => view.level === 0);
+  assert.ok(Math.abs(focusedZero.x - backgroundInspect.states[0].width / 2) < 0.01);
+  assert.ok(Math.abs(focusedZero.y - backgroundInspect.states[0].height / 2) < 0.01);
+  // A no-op gesture during the return spring must not leave a persistent
+  // arbitrary camera midpoint after cancelling the return transition.
+  const returnBounds = await page.locator("#world").boundingBox(),
+    returnX = returnBounds.x + 12,
+    returnY = returnBounds.y + 58;
+  await page.mouse.move(returnX, returnY);
   await page.mouse.down();
-  await page.mouse.move(bounds.x + 23, bounds.y + 58);
-  assert.equal((await read()).dragIds.length, 0);
-  assert.equal((await read()).pack.camera.mode, "overview");
-  await page.mouse.move(bounds.x + 118, bounds.y + 58, { steps: 8 });
+  await page.mouse.move(returnX + focusStep(beforeBackground.width), returnY, {
+    steps: 8,
+  });
   await page.mouse.up();
-  await settled();
-  let backgroundFocus = await read();
-  assert.equal(backgroundFocus.pack.camera.mode, "focus");
-  assert.equal(backgroundFocus.pack.camera.focusLevel, 0);
-  assert.deepEqual(backgroundFocus.pack.digits, beforeBackground.pack.digits);
-  assert.deepEqual(backgroundFocus.pack.rawIds, beforeBackground.pack.rawIds);
-  assert.equal(backgroundFocus.pack.base, beforeBackground.pack.base);
-  const focusedZero = backgroundFocus.pack.viewports.find((view) => view.level === 0);
-  assert.ok(Math.abs(focusedZero.x - backgroundFocus.width / 2) < 0.01);
-  assert.ok(Math.abs(focusedZero.y - backgroundFocus.height / 2) < 0.01);
-  await scaleSwipe(110);
-  backgroundFocus = await read();
-  assert.equal(backgroundFocus.pack.camera.mode, "overview");
+  await page.mouse.move(returnX, returnY);
+  await page.mouse.down();
+  await page.mouse.move(returnX + 5, returnY);
+  await page.mouse.up();
+  const noopReturnHome = await settled();
+  assert.equal(noopReturnHome.pack.camera.mode, "overview");
+  assert.equal(noopReturnHome.pack.camera.focusLevel, null);
 
   // Less than one base unit crosses the boundary, reacts, and returns without
   // becoming an error or changing the mathematical state.
@@ -279,18 +320,32 @@ try {
   );
   await page.screenshot({ path: resolve(root, "artifacts/pack-base5-carry.png") });
 
-  // Focus L0 then L1. Raw dot screen radius is unchanged; every mathematical
-  // child moves through the same camera projection as its spacing and boundary.
-  await scaleSwipe(110);
-  const base5L0Focus = await read(),
+  // Overview unit frames match the L0 raw-dot reference. Inspection moves
+  // continuously while held and returns home as soon as the gesture ends.
+  const base5Overview = await read(),
+    base5Frame0 = base5Overview.pack.viewports.find((view) => view.level === 0),
+    base5Frame1 = base5Overview.pack.items.find((item) => item.level === 1);
+  assert.ok(base5Frame1);
+  assert.ok(Math.abs(base5Frame0.frameRadius - 7) < 0.15);
+  assert.ok(Math.abs(base5Frame1.frameRadius - base5Frame0.frameRadius) < 0.15);
+  const base5Inspection = await inspectScaleMouse(
+      [
+        -focusStep(base5Overview.width),
+        -focusStep(base5Overview.width) * 1.5,
+        -focusStep(base5Overview.width) * 2,
+      ],
+      "left",
+      "artifacts/pack-base5-focus-l1.png",
+    ),
+    base5L0Focus = base5Inspection.states[0],
     base5L0Dots = base5L0Focus.pack.renderedDots.filter(
       (dot) => dot.level === 0 && dot.visible,
     ),
     base5FocusRadius = base5L0Dots[0].radius;
+  assert.ok(base5Inspection.states[1].pack.camera.z > base5Inspection.states[0].pack.camera.z);
   assert.equal(base5L0Focus.pack.camera.focusLevel, 0);
   assert.ok(Math.abs(base5FocusRadius - 7) < 0.15);
-  await scaleSwipe(-110);
-  const base5L1Focus = await read(),
+  const base5L1Focus = base5Inspection.states[2],
     base5L1Dots = base5L1Focus.pack.renderedDots.filter(
       (dot) => dot.level === 1 && dot.visible,
     ),
@@ -302,13 +357,12 @@ try {
   assert.ok(Math.abs(base5L1Radius - base5FocusRadius) < 0.15);
   assert.ok(Math.abs(base5L1Viewport.x - base5L1Focus.width / 2) < 0.01);
   assert.ok(Math.abs(base5L1Viewport.y - base5L1Focus.height / 2) < 0.01);
-  assert.ok(base5L1Viewport.frameRadius > base5L1Focus.pack.viewports.find((view) => view.level === 0).frameRadius);
+  assert.ok(base5L1Viewport.frameRadius > 0);
   assert.deepEqual(base5L1Focus.pack.rawIds, originalPackIds);
-  await page.screenshot({ path: resolve(root, "artifacts/pack-base5-focus-l1.png") });
-  await scaleSwipe(110);
-  assert.equal((await read()).pack.camera.focusLevel, 0);
-  await scaleSwipe(110);
-  assert.equal((await read()).pack.camera.mode, "overview");
+  assert.equal(base5Inspection.released.pack.camera.mode, "returning");
+  assert.equal(base5Inspection.home.pack.camera.mode, "overview");
+  assert.equal(base5Inspection.home.pack.camera.focusLevel, null);
+  assert.ok(base5Inspection.home.pack.viewports.find((view) => view.level === 1));
   await audit();
 
   while (packState.pack.phase === "unpack") {
@@ -416,15 +470,19 @@ try {
       "the scale 1 viewport stays known when the radix changes",
   );
 
-  await scaleSwipe(110);
-  const base4L0Focus = await read(),
+  const base4Overview = await read(),
+    base4L0Focus = base4Overview,
     base4L0Radius = base4L0Focus.pack.renderedDots.find(
       (dot) => dot.level === 0 && dot.visible,
     ).radius;
-  assert.equal(base4L0Focus.pack.camera.focusLevel, 0);
+  assert.equal(base4L0Focus.pack.camera.mode, "overview");
   assert.ok(Math.abs(base4L0Radius - 7) < 0.15);
-  await scaleSwipe(-110);
-  const base4L1Focus = await read(),
+  const base4Inspection = await inspectScaleMouse(
+      [-focusStep(base4Overview.width), -focusStep(base4Overview.width) * 2],
+      "left",
+      "artifacts/pack-base4-focus-l1.png",
+    ),
+    base4L1Focus = base4Inspection.states[1],
     base4L1Dots = base4L1Focus.pack.renderedDots.filter(
       (dot) => dot.level === 1 && dot.visible,
     );
@@ -432,9 +490,7 @@ try {
   assert.equal(base4L1Dots.length, 16);
   assert.ok(base4L1Dots.every((dot) => Math.abs(dot.radius - base4L0Radius) < 0.15));
   assert.deepEqual(base4L1Focus.pack.rawIds, originalPackIds);
-  await scaleSwipe(110);
-  await scaleSwipe(110);
-  assert.equal((await read()).pack.camera.mode, "overview");
+  assert.equal(base4Inspection.home.pack.camera.mode, "overview");
 
   const middle = packState.pack.places.find((place) => place.level === 1),
     topSlot = packState.pack.slots.find((slot) => slot.level === 2);
@@ -480,10 +536,7 @@ try {
   );
   assert.equal(packState.pack.renderedDots.length, 17);
   assert.equal(new Set(packState.pack.renderedDots.map((dot) => dot.id)).size, 17);
-  assert.equal(
-    base4Top.radius,
-    packState.pack.items.find((item) => item.level === 0).radius,
-  );
+  assert.ok(packState.pack.renderedDots.every((dot) => dot.worldRadius === 8));
   assert.deepEqual(
     packState.pack.items
       .flatMap((item) => item.rawIds)
@@ -502,16 +555,21 @@ try {
   assert.equal(packState.rule, "pack");
   assert.equal(packState.status, "won");
   const finalRawIds = [...packState.pack.rawIds].sort((a, b) => a - b),
-    base4FocusRadius = base4L0Radius;
-  await touchScaleSwipe(-110);
-  const touchL1 = await read(),
+    base4FocusRadius = base4L0Radius,
+    touchStep = focusStep(packState.width),
+    nestedInspection = await inspectScaleTouch(
+      [-touchStep, -touchStep * 2, -touchStep * 2.5, -touchStep * 3],
+      "left",
+      "artifacts/pack-scale-focused-l2.png",
+    ),
+    touchL1 = nestedInspection.states[1],
     touchL1Viewport = touchL1.pack.viewports.find((view) => view.level === 1);
   assert.equal(touchL1.pack.camera.focusLevel, 1);
   assert.equal(touchL1.pack.places.find((place) => place.level === 1).n, 0);
   assert.ok(touchL1Viewport && !touchL1Viewport.ghost);
   assert.ok(Math.abs(touchL1Viewport.x - touchL1.width / 2) < 0.01);
-  await touchScaleSwipe(-110);
-  const touchL2 = await read(),
+  assert.ok(nestedInspection.states[2].pack.camera.z > nestedInspection.states[1].pack.camera.z);
+  const touchL2 = nestedInspection.states[3],
     touchL2Dots = touchL2.pack.renderedDots.filter(
       (dot) => dot.level === 2 && dot.visible,
     ),
@@ -522,22 +580,19 @@ try {
   assert.ok(touchL2Dots.every((dot) => Math.abs(dot.radius - base4FocusRadius) < 0.15));
   assert.ok(Math.abs(touchL2Viewport.x - touchL2.width / 2) < 0.01);
   assert.ok(Math.abs(touchL2Viewport.y - touchL2.height / 2) < 0.01);
-  assert.ok(touchL2Viewport.frameRadius > touchL2.width / 2);
+  assert.ok(touchL2Viewport.frameRadius > base4Overview.pack.viewports.find((view) => view.level === 2).frameRadius);
   assert.ok(emptyL1Viewport && !emptyL1Viewport.ghost);
   assert.deepEqual([...touchL2.pack.rawIds].sort((a, b) => a - b), finalRawIds);
   assert.deepEqual(touchL2.pack.items.find((item) => item.level === 2).tree, base4Top.tree);
   assert.ok(touchL2.pack.viewports.every((view, i, all) =>
     i === 0 || all[i - 1].level > view.level,
   ));
-  await page.screenshot({ path: resolve(root, "artifacts/pack-scale-focused-l2.png") });
-  await touchScaleSwipe(110);
-  assert.equal((await read()).pack.camera.focusLevel, 1);
-  await touchScaleSwipe(110);
-  assert.equal((await read()).pack.camera.focusLevel, 0);
-  await touchScaleSwipe(110);
-  assert.equal((await read()).pack.camera.mode, "overview");
+  assert.equal(nestedInspection.released.pack.camera.mode, "returning");
+  assert.equal(nestedInspection.home.pack.camera.mode, "overview");
+  assert.equal(nestedInspection.home.pack.camera.focusLevel, null);
+  assert.ok(nestedInspection.home.pack.viewports.find((view) => view.level === 1));
   console.log(
-    "PACK Pass 5 verified nested 17→32₅→101₄, shared raw-dot world size, L0/L1/L2 perspective focus, fixed radix camera depth, clipped frames, and the retained zero viewport.",
+    "PACK Pass 5R verified compact nested 17→32₅→101₄, shared raw-dot world size, transient continuous L0/L1/L2 inspection, overview unit frames, and the retained zero viewport.",
   );
   await route("link", (p) => p.ammo[0] === 14 && p.gates[0] === 3);
   let s = await read();
@@ -673,6 +728,7 @@ try {
   for (const [w, h] of [
     [320, 568],
     [390, 844],
+    [412, 915],
     [844, 390],
     [768, 1024],
     [1280, 900],
@@ -710,6 +766,24 @@ try {
                 view.x - all[i - 1].x >= view.radius + all[i - 1].radius),
             ),
         );
+        if (w === 320) {
+          await drag(
+            s.pack.places.find((place) => place.level === 0),
+            s.pack.slots.find((slot) => slot.level === 1),
+            17,
+          );
+          s = await read();
+          const step = focusStep(s.width),
+            inspection = await inspectScaleTouch([-step, -step * 2]),
+            levelOne = inspection.states[1],
+            levelOneDots = levelOne.pack.renderedDots.filter(
+              (dot) => dot.level === 1 && dot.visible,
+            );
+          assert.equal(levelOne.pack.camera.focusLevel, 1);
+          assert.ok(levelOneDots.length > 0);
+          assert.ok(levelOneDots.every((dot) => Math.abs(dot.radius - 7) < 0.2));
+          assert.equal(inspection.home.pack.camera.mode, "overview");
+        }
       }
       await audit();
     }
@@ -729,19 +803,22 @@ try {
   const reducedL0Radius = s.pack.renderedDots.find(
     (dot) => dot.level === 0 && dot.visible,
   ).radius;
-  await scaleSwipe(-110);
-  s = await read();
+  const reducedStep = focusStep(s.width),
+    reducedInspection = await inspectScaleMouse(
+      [-reducedStep, -reducedStep * 1.5, -reducedStep * 2],
+    );
+  s = reducedInspection.states[2];
   const reducedL1Dots = s.pack.renderedDots.filter(
     (dot) => dot.level === 1 && dot.visible,
   );
   assert.equal(s.pack.camera.focusLevel, 1);
-  assert.equal(s.pack.camera.moving, false);
+  assert.equal(s.pack.camera.mode, "inspection");
   assert.ok(reducedL1Dots.length > 0);
   assert.ok(reducedL1Dots.every((dot) => Math.abs(dot.radius - reducedL0Radius) < 0.15));
-  await scaleSwipe(110);
-  await scaleSwipe(110);
-  s = await read();
+  assert.equal(reducedInspection.released.pack.camera.mode, "returning");
+  s = reducedInspection.home;
   assert.equal(s.pack.camera.mode, "overview");
+  assert.equal(s.pack.camera.focusLevel, null);
   assert.equal(s.pack.rawIds.length, 17);
   await page.screenshot({ path: resolve(root, "artifacts/pack-reduced-motion.png") });
   s = await route("pack");

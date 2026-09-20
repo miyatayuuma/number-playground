@@ -27,12 +27,15 @@ import {
   radixFrame,
   packScaleViewports,
   packNestedUnitShape,
-  packScaleGrowth,
   PACK_RAW_DOT_WORLD_RADIUS,
   PACK_FOCUS_DOT_SCREEN_RADIUS,
+  PACK_SCALE_DEPTH_RATIO,
+  PACK_CHILD_GAP_RATIO,
 } from "../src/shapes.mjs";
 import {
   packCameraForFocus,
+  packCameraForInspection,
+  packFocusProgress,
   projectPackPoint,
 } from "../src/pack-view.mjs";
 import {
@@ -329,7 +332,9 @@ test("PACK raw dots share world size and camera projection defines every level",
     initial = packScaleViewports(0, 390, 844, 5),
     recursive4 = packScaleViewports(2, 390, 844, 4),
     recursive5 = packScaleViewports(2, 390, 844, 5),
-    nested = packNestedUnitShape(4, 2),
+    unit0 = packNestedUnitShape(4, 0),
+    unit1 = packNestedUnitShape(4, 1),
+    unit2 = packNestedUnitShape(4, 2),
     collectRawRadii = (unit) =>
       unit.levels === 0
         ? [unit.radius]
@@ -337,7 +342,33 @@ test("PACK raw dots share world size and camera projection defines every level",
   assert.equal(five.points.length, 5);
   assert.equal(four.points.length, 4);
   assert.notDeepEqual(five.points, four.points);
-  assert.equal(packScaleGrowth(4), packScaleGrowth(5));
+  assert.equal(unit1.children.length, 4);
+  assert.equal(unit1.radius < 36, true, "compact L1 content is smaller than Pass 5 geometry");
+  assert.equal(unit2.radius < 162, true, "recursive L2 content is smaller than Pass 5 geometry");
+  assert.ok(unit1.frameRadius < unit1.radius, "the unit frame is not a child container");
+  assert.ok(
+    Math.max(
+      ...unit1.children.map(
+        ({ x, y, radius }) => Math.hypot(x, y) + radius,
+      ),
+    ) > unit1.frameRadius,
+    "compact children may extend beyond their comparison frame",
+  );
+  const childCenters = unit1.children.map(({ x, y }) => ({ x, y }));
+  for (let i = 0; i < childCenters.length; i++)
+    for (let j = i + 1; j < childCenters.length; j++)
+      assert.ok(
+        Math.hypot(
+          childCenters[i].x - childCenters[j].x,
+          childCenters[i].y - childCenters[j].y,
+        ) > 2 * PACK_RAW_DOT_WORLD_RADIUS + 1,
+        "compact 2×2 raw children remain distinct",
+      );
+  const spacingRatio1 = Math.hypot(unit1.children[0].x, unit1.children[0].y) / unit0.radius,
+    spacingRatio2 = Math.hypot(unit2.children[0].x, unit2.children[0].y) / unit1.radius;
+  assert.ok(Math.abs(spacingRatio1 - spacingRatio2) < 1e-12, "L2 reuses the same recursive packing rule");
+  assert.equal(unit1.children[0].radius, unit0.radius);
+  assert.equal(unit2.children[0].radius, unit1.radius);
   assert.deepEqual(
     recursive4.map(({ level, ghost }) => [level, ghost]),
     [
@@ -362,7 +393,19 @@ test("PACK raw dots share world size and camera projection defines every level",
   assert.deepEqual(
     recursive4.map(({ level, depth, x }) => [level, depth, x]),
     recursive5.map(({ level, depth, x }) => [level, depth, x]),
-    "base 5 to base 4 does not alter scale depth or canonical centers",
+    "base 5 to base 4 does not alter the camera depth axis",
+  );
+  assert.ok(
+    recursive4
+      .filter((slot) => slot.level > 0)
+      .every((slot) =>
+        Math.abs(
+          slot.depth /
+            recursive4.find((previous) => previous.level === slot.level - 1).depth -
+            PACK_SCALE_DEPTH_RATIO,
+        ) < 1e-12,
+      ),
+    "neighboring scale planes use the selected short depth ratio",
   );
 
   const overview = packCameraForFocus(initial, null),
@@ -371,7 +414,7 @@ test("PACK raw dots share world size and camera projection defines every level",
     );
   assert.ok(overviewProjection[0].x < overviewProjection[1].x);
   assert.ok(
-    initial.every(
+    recursive4.every(
       (slot) =>
         Math.abs(
           slot.frameWorldRadius *
@@ -403,36 +446,57 @@ test("PACK raw dots share world size and camera projection defines every level",
     );
   }
 
-  const baseCamera = packCameraForFocus(recursive4, 0),
-    levelOneCamera = packCameraForFocus(recursive4, 1),
-    raw0 = projectPackPoint(
-      { x: recursive4[2].x, y: 0, z: recursive4[2].z },
-      baseCamera,
-      390,
-      844,
-    ),
-    raw1 = projectPackPoint(
-      { x: recursive4[1].x, y: 0, z: recursive4[1].z },
-      baseCamera,
-      390,
-      844,
-    ),
-    cluster1 = packNestedUnitShape(4, 1).radius * raw1.scale;
-  assert.ok(Math.abs(PACK_RAW_DOT_WORLD_RADIUS * raw0.scale - cluster1) < 1e-8);
-
   const levelTwo = recursive4.find((slot) => slot.level === 2),
-    topCamera = packCameraForFocus(recursive4, 2),
-    topCenter = projectPackPoint(
-      { x: levelTwo.x, y: 0, z: levelTwo.z },
-      topCamera,
+    overviewFrameRadii = recursive4.map((slot) =>
+      slot.frameWorldRadius * overview.focalLength / slot.depth,
+    );
+  assert.ok(overviewFrameRadii.every((radius) => Math.abs(radius - PACK_FOCUS_DOT_SCREEN_RADIUS) < 1e-8));
+  assert.equal(collectRawRadii(unit2).length, 16);
+  assert.ok(collectRawRadii(unit2).every((radius) => radius === PACK_RAW_DOT_WORLD_RADIUS));
+
+  const cameraAt1 = packCameraForInspection(recursive4, 1, 2),
+    cameraAt15 = packCameraForInspection(recursive4, 1.5, 2),
+    cameraNear1 = packCameraForInspection(recursive4, 1.15, 2),
+    cameraNear2 = packCameraForInspection(recursive4, 1.85, 2),
+    cameraAt3 = packCameraForInspection(recursive4, 3, 2),
+    l0 = packCameraForFocus(recursive4, 0),
+    l1 = packCameraForFocus(recursive4, 1),
+    l2 = packCameraForFocus(recursive4, 2);
+  assert.equal(cameraAt1.z, l0.z);
+  assert.equal(cameraAt1.x, l0.x);
+  assert.ok(cameraAt15.z > l0.z && cameraAt15.z < l1.z, "intermediate drag positions project continuously");
+  assert.ok(cameraNear1.inspectionProgress < 1.15 && cameraNear1.inspectionProgress > 1);
+  assert.ok(cameraNear2.inspectionProgress > 1.85 && cameraNear2.inspectionProgress < 2);
+  assert.equal(cameraNear1.focusLevel, 0);
+  assert.equal(cameraNear2.focusLevel, 1);
+  assert.equal(cameraAt3.z, l2.z);
+  assert.equal(cameraAt3.focusLevel, 2);
+  assert.equal(packFocusProgress(1, 2), 1, "focus wells keep canonical anchors fixed");
+  const focusAt2 = packCameraForFocus(recursive4, 2),
+    focusCenter = projectPackPoint(
+      { x: levelTwo.x, y: levelTwo.y, z: levelTwo.z },
+      focusAt2,
       390,
       844,
     ),
-    croppedFrameRadius = levelTwo.frameWorldRadius * topCenter.scale;
-  assert.ok(croppedFrameRadius > 390 / 2);
-  assert.ok(nested.children.every((child) => child.inner.children.length === 4));
-  assert.equal(collectRawRadii(nested).length, 16);
-  assert.ok(collectRawRadii(nested).every((radius) => radius === PACK_RAW_DOT_WORLD_RADIUS));
+    focusedRawRadius = PACK_RAW_DOT_WORLD_RADIUS * focusCenter.scale,
+    focusedFrameRadius = levelTwo.frameWorldRadius * focusCenter.scale;
+  assert.ok(Math.abs(focusedRawRadius - PACK_FOCUS_DOT_SCREEN_RADIUS) < 1e-8);
+  assert.ok(
+    Math.abs(focusedFrameRadius / focusedRawRadius - PACK_SCALE_DEPTH_RATIO ** 2) < 1e-8,
+    "focus uses the same projection for dots and unit frame without fit scaling",
+  );
+  assert.ok(
+    packNestedUnitShape(5, 1).children.every((child, i, all) =>
+      all.every((other, j) =>
+        i === j ||
+        Math.hypot(child.x - other.x, child.y - other.y) >
+          2 * child.radius + 1,
+      ),
+    ),
+    "base-five children keep visually separate raw identities too",
+  );
+  assert.equal(PACK_CHILD_GAP_RATIO, 0.16);
 
   assert.ok(
     [320, 390, 844].every((width) => {
