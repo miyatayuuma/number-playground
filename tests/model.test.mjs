@@ -12,7 +12,7 @@ import {
   activePackItems,
   packableGroups,
   packDigits,
-  packGroup,
+  normalizePackSelection,
   unpackPackItem,
   setPackBase,
 } from "../src/model.mjs";
@@ -56,9 +56,17 @@ function combineAll(run) {
 }
 function packAll(run) {
   while (run.pack.phase === "pack") {
-    const group = packableGroups(run)[0];
-    assert.ok(group, "PACK has a packable group before lock");
-    const result = packGroup(run, group.itemIds);
+    const counts = new Map();
+    for (const item of activePackItems(run))
+      counts.set(item.level, (counts.get(item.level) || 0) + 1);
+    const level = [...counts]
+      .filter(([, count]) => count >= run.pack.base)
+      .sort((a, b) => a[0] - b[0])[0]?.[0];
+    assert.notEqual(level, undefined, "PACK has a carryable place before lock");
+    const itemIds = activePackItems(run)
+      .filter((item) => item.level === level)
+      .map((item) => item.id);
+    const result = normalizePackSelection(run, itemIds);
     assert.ok(result.ok);
     audit(run);
     if (result.locked) return result;
@@ -140,7 +148,150 @@ test("seeded generation spans all production difficulties without repeating the 
     }
   assert.throws(() => generateProblem("missing"));
 });
-test("PACK keeps 17 raw identities while locking 32₅ then 101₄", () => {
+test("PACK normalizes arbitrary same-level selections without preselecting a bundle", () => {
+  {
+    const run = createRun(structuredClone(PROBLEM_BANK.pack[0])),
+      original = [...run.pieces[0].ids],
+      selected = activePackItems(run).map((item) => item.id),
+      result = normalizePackSelection(run, selected);
+    assert.ok(result.ok);
+    assert.equal(result.bundles.length, 3);
+    assert.equal(result.remainderItemIds.length, 2);
+    assert.equal(result.locked, true);
+    assert.deepEqual(result.lock.digits, [3, 2]);
+    assert.equal(result.lock.notation, "32₅");
+    assert.deepEqual(
+      activePackItems(run).map((item) => item.ids.length),
+      [1, 1, 5, 5, 5],
+    );
+    assert.deepEqual(run.pieces[0].ids, original);
+    audit(run);
+  }
+
+  {
+    const run = createRun(structuredClone(PROBLEM_BANK.pack[0])),
+      selected = activePackItems(run)
+        .slice(0, 7)
+        .map((item) => item.id),
+      result = normalizePackSelection(run, selected);
+    assert.ok(result.ok);
+    assert.equal(result.bundles.length, 1);
+    assert.equal(result.remainderItemIds.length, 2);
+    assert.equal(result.locked, false);
+    assert.equal(activePackItems(run).filter((item) => item.level === 1).length, 1);
+    assert.equal(activePackItems(run).filter((item) => item.level === 0).length, 12);
+    audit(run);
+  }
+
+  {
+    const run = createRun(structuredClone(PROBLEM_BANK.pack[0])),
+      before = activePackItems(run).map((item) => item.id),
+      selected = before.slice(0, 3),
+      result = normalizePackSelection(run, selected);
+    assert.ok(result.ok);
+    assert.equal(result.bundles.length, 0);
+    assert.deepEqual(result.remainderItemIds, selected);
+    assert.deepEqual(
+      activePackItems(run).map((item) => item.id),
+      before,
+    );
+    assert.equal(run.pack.phase, "pack");
+    audit(run);
+  }
+});
+
+test("PACK applies the same carry rule recursively to make 101₄", () => {
+  const stage = {
+      ...structuredClone(PROBLEM_BANK.pack[0]),
+      id: "pack:17:4",
+      radices: [4],
+    },
+    run = createRun(stage),
+    original = [...run.pieces[0].ids];
+
+  const first = normalizePackSelection(
+    run,
+    activePackItems(run).map((item) => item.id),
+  );
+  assert.ok(first.ok);
+  assert.equal(first.bundles.length, 4);
+  assert.equal(first.remainderItemIds.length, 1);
+  assert.equal(first.locked, false);
+  assert.equal(activePackItems(run).filter((item) => item.level === 1).length, 4);
+  assert.equal(activePackItems(run).filter((item) => item.level === 0).length, 1);
+
+  const second = normalizePackSelection(
+    run,
+    activePackItems(run)
+      .filter((item) => item.level === 1)
+      .map((item) => item.id),
+  );
+  assert.ok(second.ok);
+  assert.equal(second.bundles.length, 1);
+  assert.equal(second.remainderItemIds.length, 0);
+  assert.equal(second.complete, true);
+  assert.deepEqual(second.lock.digits, [1, 0, 1]);
+  assert.equal(second.lock.notation, "101₄");
+  assert.deepEqual(packDigits(run), [1, 0, 1]);
+  assert.equal(activePackItems(run).filter((item) => item.level === 1).length, 0);
+  assert.deepEqual(run.pieces[0].ids, original);
+  assert.equal(new Set(run.pieces[0].ids).size, 17);
+  audit(run);
+});
+
+test("PACK unpack restores the exact children and raw ID set", () => {
+  const run = createRun(structuredClone(PROBLEM_BANK.pack[0])),
+    original = [...run.pieces[0].ids],
+    selected = activePackItems(run)
+      .slice(0, 5)
+      .map((item) => item.id),
+    packed = normalizePackSelection(run, selected);
+  assert.ok(packed.ok);
+  assert.equal(packed.bundles.length, 1);
+
+  const macroId = packed.bundles[0].itemId,
+    macro = run.pack.nodes[macroId];
+  assert.equal(macro.children.length, 5);
+  assert.deepEqual(macro.ids, original.slice(0, 5));
+
+  const unpacked = unpackPackItem(run, macroId);
+  assert.ok(unpacked.ok);
+  assert.deepEqual(unpacked.childItemIds, macro.children);
+  assert.deepEqual(
+    activePackItems(run)
+      .flatMap((item) => item.ids)
+      .sort((a, b) => a - b),
+    [...original].sort((a, b) => a - b),
+  );
+  assert.equal(new Set(activePackItems(run).flatMap((item) => item.ids)).size, 17);
+  audit(run);
+});
+
+test("PACK keeps the empty middle place explicit after recursive carry", () => {
+  const slots = placeSlotLayout(17, 4, 390, 600);
+  assert.deepEqual(slots.map((slot) => slot.level), [0, 1, 2]);
+
+  const stage = {
+      ...structuredClone(PROBLEM_BANK.pack[0]),
+      id: "pack:17:4-zero",
+      radices: [4],
+    },
+    run = createRun(stage);
+  normalizePackSelection(
+    run,
+    activePackItems(run).map((item) => item.id),
+  );
+  normalizePackSelection(
+    run,
+    activePackItems(run)
+      .filter((item) => item.level === 1)
+      .map((item) => item.id),
+  );
+  assert.deepEqual(packDigits(run), [1, 0, 1]);
+  assert.equal(activePackItems(run).filter((item) => item.level === 1).length, 0);
+});
+
+test("PACK full vertical slice keeps all 17 raw identities through radix change", () => {
   const run = createRun(structuredClone(PROBLEM_BANK.pack[0])),
     original = [...run.pieces[0].ids];
 
@@ -148,78 +299,30 @@ test("PACK keeps 17 raw identities while locking 32₅ then 101₄", () => {
   assert.deepEqual(packDigits(run), [0, 17]);
   const first = packAll(run);
   assert.deepEqual(first.lock.digits, [3, 2]);
-  assert.equal(first.lock.notation, "32₅");
   assert.equal(run.pack.phase, "unpack");
-  assert.deepEqual(run.pieces[0].ids, original);
-  assert.deepEqual(
-    activePackItems(run).map((item) => item.ids.length),
-    [1, 1, 5, 5, 5],
-  );
-
   unpackAll(run);
-  assert.deepEqual(run.pieces[0].ids, original);
+
   assert.equal(activePackItems(run).length, 17);
   assert.ok(activePackItems(run).every((item) => item.level === 0));
   assert.ok(setPackBase(run, 4));
-  assert.equal(setPackBase(run, 5), false);
 
   const second = packAll(run);
   assert.equal(second.complete, true);
   assert.deepEqual(second.lock.digits, [1, 0, 1]);
-  assert.equal(second.lock.notation, "101₄");
   assert.equal(run.status, "won");
   assert.deepEqual(run.pieces[0].ids, original);
   assert.equal(new Set(run.pieces[0].ids).size, 17);
-
-  const top = activePackItems(run).find((item) => item.level === 2);
-  assert.ok(top);
-  assert.equal(top.ids.length, 16);
-  assert.equal(top.children.length, 4);
-  assert.ok(top.children.every((id) => run.pack.nodes[id].level === 1));
-  assert.equal(activePackItems(run).filter((item) => item.level === 1).length, 0);
   audit(run);
 });
 
-test("PACK unpack is reversible and zero places remain explicit", () => {
-  const run = createRun(structuredClone(PROBLEM_BANK.pack[0])),
-    firstGroup = packableGroups(run)[0],
-    before = [...run.pieces[0].ids],
-    packed = packGroup(run, firstGroup.itemIds);
-  assert.ok(packed.ok);
-  const macro = run.pack.nodes[packed.itemId];
-  assert.deepEqual(macro.ids, firstGroup.ids);
-  assert.equal(macro.children.length, 5);
-  const unpacked = unpackPackItem(run, packed.itemId);
-  assert.ok(unpacked.ok);
-  assert.deepEqual(
-    activePackItems(run)
-      .flatMap((item) => item.ids)
-      .sort((a, b) => a - b),
-    before,
-  );
-
-  packAll(run);
-  unpackAll(run);
-  assert.ok(setPackBase(run, 4));
-  const second = packAll(run);
-  assert.deepEqual(second.lock.digits, [1, 0, 1]);
-  const slots = placeSlotLayout(17, 4, 390, 600);
-  assert.deepEqual(slots.map((slot) => slot.level), [0, 1, 2]);
-  assert.equal(activePackItems(run).filter((item) => item.level === 1).length, 0);
-});
-
-test("PACK digit geometry reuses Prime Dot shapes without inventing quantity dots", () => {
-  const three = packCoefficientShape(3, 5, 48),
-    zero = packCoefficientShape(0, 4, 48),
-    seventeen = packCoefficientShape(17, 5, 48);
-  assert.equal(three.dots.length, 3);
-  assert.equal(zero.dots.length, 0);
+test("PACK factorization geometry does not depend on the active radix", () => {
+  const seventeen = shape(17, 48),
+    four = shape(4, 48),
+    zero = packCoefficientShape(0, 4, 48);
   assert.equal(seventeen.dots.length, 17);
-  assert.deepEqual(
-    seventeen.groups.map((group) => group.indices.length),
-    [5, 5, 5, 2],
-  );
-  assert.equal(seventeen.groups.filter((group) => group.packable).length, 3);
+  assert.equal(four.dots.length, 4);
+  assert.equal(zero.dots.length, 0);
+  assert.deepEqual(factors(17), [17]);
 });
 
 test("PACK remains outside adaptive saved progress", () => {

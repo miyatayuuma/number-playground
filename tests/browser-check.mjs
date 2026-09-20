@@ -54,6 +54,14 @@ try {
   await page.locator("[data-rule]").first().waitFor();
   assert.equal(await page.locator("[data-rule]").count(), 4);
   assert.equal(await page.locator("[data-stage]").count(), 0);
+  assert.equal(
+    await page.locator('[data-rule="pack"] .pack-demo-dot').count(),
+    13,
+  );
+  assert.equal(
+    await page.locator('[data-rule="pack"] .pack-demo-slot').count(),
+    4,
+  );
   await page.locator('[data-rule="spark"]').click();
   await settled();
   assert.equal((await read()).rule, "spark");
@@ -81,28 +89,59 @@ try {
     "Real drags solved merge, remainder, chained division, common widths; automatic continuation verified.",
   );
 
-  // PACK vertical slice: the same 17 raw IDs become 32₅, return to raw,
-  // then become 101₄ through one nested carry.
+  // PACK Pass 2: start from one factorization-shaped 17, let an
+  // insufficient transfer rebound, carry all 17 in one gesture, unpack, then
+  // apply the same boundary rule recursively to produce the empty middle place.
   let packState = await route("pack");
   assert.equal(packState.total, 17);
   assert.equal(packState.progress.pack, undefined);
   assert.equal(packState.pack.base, 5);
   assert.equal(packState.pack.phase, "pack");
-  const originalPackIds = [...packState.pieces[0].ids];
+  assert.equal(packState.pack.groups, undefined);
+  assert.equal(
+    packState.pack.places.find((place) => place.level === 0).n,
+    17,
+  );
+  assert.ok(
+    packState.pack.places
+      .filter((place) => place.level > 0)
+      .every((place) => place.n === 0),
+  );
+  const originalPackIds = [...packState.pieces[0].ids],
+    base5Upper = packState.pack.slots.find((slot) => slot.level === 1),
+    packSingle = packState.pack.items.find((item) => item.level === 0);
+  assert.ok(base5Upper && packSingle);
 
-  while (packState.pack.phase === "pack") {
-    const group = packState.pack.groups[0],
-      slot = packState.pack.slots.find(
-        (candidate) => candidate.level === group.level + 1,
-      );
-    assert.ok(group && slot);
-    await drag(group, slot, group.n);
-    packState = await read();
-  }
+  // Less than one base unit crosses the boundary, reacts, and returns without
+  // becoming an error or changing the mathematical state.
+  await drag(packSingle, base5Upper, 1);
+  packState = await read();
+  assert.equal(packState.pack.phase, "pack");
+  assert.equal(packState.pack.items.length, 17);
+  assert.equal(
+    packState.pack.items.filter((item) => item.macro).length,
+    0,
+  );
+  assert.deepEqual(packState.pack.digits, [0, 17]);
+
+  // The whole place can cross once: 15 raw dots collapse to three macros while
+  // the two remainders return to the lower place.
+  const base5Place = packState.pack.places.find((place) => place.level === 0);
+  assert.equal(base5Place.n, 17);
+  await drag(base5Place, base5Upper, 17);
+  packState = await read();
   assert.equal(packState.pack.phase, "unpack");
   assert.equal(packState.pack.locks.length, 1);
   assert.equal(packState.pack.locks[0].notation, "32₅");
   assert.deepEqual(packState.pack.locks[0].digits, [3, 2]);
+  assert.equal(
+    packState.pack.places.find((place) => place.level === 1).n,
+    3,
+  );
+  assert.equal(
+    packState.pack.places.find((place) => place.level === 0).n,
+    2,
+  );
   assert.deepEqual(packState.pieces[0].ids, originalPackIds);
   await audit();
 
@@ -125,40 +164,55 @@ try {
   assert.equal(packState.pack.base, 4);
   assert.equal(packState.pack.phase, "pack");
 
-  while (true) {
-    const group = packState.pack.groups[0],
-      slot = packState.pack.slots.find(
-        (candidate) => candidate.level === group.level + 1,
-      );
-    assert.ok(group && slot);
-    if (group.level === 1) {
-      await drag(group, slot, group.n, false);
-      await page.waitForFunction(() => {
-        const state = window.__readFlow?.();
-        return (
-          state?.rule === "pack" &&
-          state.status === "won" &&
-          state.pack?.locks?.length === 2
-        );
-      });
-      packState = await read();
-      assert.equal(packState.pack.locks[1].notation, "101₄");
-      assert.deepEqual(packState.pack.locks[1].digits, [1, 0, 1]);
-      assert.equal(
-        packState.pack.items.filter((item) => item.level === 1).length,
-        0,
-      );
-      assert.deepEqual(packState.pieces[0].ids, originalPackIds);
-      await audit();
-      break;
-    }
-    await drag(group, slot, group.n);
-    packState = await read();
-  }
+  const base4Lower = packState.pack.places.find((place) => place.level === 0),
+    base4MiddleSlot = packState.pack.slots.find((slot) => slot.level === 1);
+  assert.equal(base4Lower.n, 17);
+  assert.ok(base4MiddleSlot);
+  await drag(base4Lower, base4MiddleSlot, 17);
+  packState = await read();
+  assert.equal(packState.pack.phase, "pack");
+  assert.equal(
+    packState.pack.places.find((place) => place.level === 0).n,
+    1,
+  );
+  assert.equal(
+    packState.pack.places.find((place) => place.level === 1).n,
+    4,
+  );
+
+  const middle = packState.pack.places.find((place) => place.level === 1),
+    topSlot = packState.pack.slots.find((slot) => slot.level === 2);
+  assert.ok(middle && topSlot);
+  await drag(middle, topSlot, 4);
+  packState = await read();
+  assert.equal(packState.status, "won");
+  assert.equal(packState.pack.phase, "break");
+  assert.equal(packState.pack.locks[1].notation, "101₄");
+  assert.deepEqual(packState.pack.locks[1].digits, [1, 0, 1]);
+  assert.equal(
+    packState.pack.places.find((place) => place.level === 2).n,
+    1,
+  );
+  assert.equal(
+    packState.pack.places.find((place) => place.level === 1).n,
+    0,
+  );
+  assert.equal(
+    packState.pack.places.find((place) => place.level === 0).n,
+    1,
+  );
+  assert.ok(packState.pack.slots.some((slot) => slot.level === 1));
+  assert.deepEqual(packState.pieces[0].ids, originalPackIds);
+  await audit();
+
+  // Prototype completion stays on the representation; no enemy attack or
+  // automatic next problem is introduced by this pass.
   await settled();
-  assert.equal((await read()).rule, "pack");
+  packState = await read();
+  assert.equal(packState.rule, "pack");
+  assert.equal(packState.status, "won");
   console.log(
-    "PACK real drags verified 17 → 32₅ → raw 17 → 101₄, nested carry and BREAK.",
+    "PACK Pass 2 real drags verified rebound, 17→32₅ in one carry, unpack, and recursive 17→101₄ with an empty middle place.",
   );
   await route("link", (p) => p.ammo[0] === 14 && p.gates[0] === 3);
   let s = await read();

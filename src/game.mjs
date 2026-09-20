@@ -8,7 +8,7 @@ import {
   fire,
   divide,
   setWidth,
-  packGroup,
+  normalizePackSelection,
   unpackPackItem,
   setPackBase,
 } from "./model.mjs";
@@ -122,10 +122,15 @@ function keyboardUI() {
     const state = world.read().pack;
     controls.innerHTML =
       state.phase === "pack"
-        ? state.groups
+        ? state.places
+            .filter(
+              (place) =>
+                place.n &&
+                state.slots.some((slot) => slot.level === place.level + 1),
+            )
             .map(
-              (g, i) =>
-                `<button data-pack-group="${i}">${state.base}個のまとまりを上位へ送る</button>`,
+              (place) =>
+                `<button data-pack-place="${place.level}">この位を左へ送る</button>`,
             )
             .join("")
         : state.phase === "unpack"
@@ -133,7 +138,7 @@ function keyboardUI() {
               .filter((item) => item.macro)
               .map(
                 (item) =>
-                  `<button data-pack-item="${item.id}">上位のまとまりをほどく</button>`,
+                  `<button data-pack-item="${item.id}">右の位へほどく</button>`,
               )
               .join("")
           : state.phase === "choose" && state.control
@@ -203,7 +208,53 @@ function openPanel(html, kind) {
   overlay.hidden = false;
   overlay.querySelector("button")?.focus();
 }
+function packGlyphPositions(total, base) {
+  const places = Math.floor(Math.log(total) / Math.log(base)) + 1,
+    slotXs = [-36, -12, 12, 36].slice(4 - places),
+    positions = Array(total);
+  let remaining = total,
+    raw = 0;
+  for (let level = places - 1; level >= 0; level--) {
+    const power = base ** level,
+      digit = Math.floor(remaining / power),
+      slotIndex = places - 1 - level,
+      centers = digit ? shape(digit, digit === 1 ? 1 : 7.5).dots : [];
+    remaining %= power;
+    for (let unit = 0; unit < digit; unit++) {
+      const children = shape(power, Math.min(6.2, 2.4 + level * 1.9)).dots;
+      for (const child of children)
+        positions[raw++] = {
+          x: slotXs[slotIndex] + centers[unit].x + child.x,
+          y: centers[unit].y + child.y,
+        };
+    }
+  }
+  return positions;
+}
+
+function packGlyph() {
+  const bases = [2, 3, 4, 5],
+    layouts = Object.fromEntries(
+      bases.map((base) => [base, packGlyphPositions(13, base)]),
+    ),
+    slots = [-36, -12, 12, 36]
+      .map(
+        (x) =>
+          `<rect class="pack-demo-slot" x="${x - 9}" y="-18" width="18" height="36" rx="7"/>`,
+      )
+      .join(""),
+    dots = Array.from({ length: 13 }, (_, i) => {
+      const p2 = layouts[2][i],
+        p3 = layouts[3][i],
+        p4 = layouts[4][i],
+        p5 = layouts[5][i];
+      return `<circle class="pack-demo-dot" cx="0" cy="0" r="1.55" style="--p2x:${p2.x}px;--p2y:${p2.y}px;--p3x:${p3.x}px;--p3y:${p3.y}px;--p4x:${p4.x}px;--p4y:${p4.y}px;--p5x:${p5.x}px;--p5y:${p5.y}px;animation-delay:${(i % 4) * 18}ms"/>`;
+    }).join("");
+  return `<svg class="pack-demo" viewBox="-55 -48 110 96" aria-hidden="true"><g class="pack-demo-slots">${slots}</g>${dots}</svg>`;
+}
+
 function areaGlyph(rule) {
+  if (rule === "pack") return packGlyph();
   const dots = [];
   if (rule === "spark") {
     const end = shape(8, 27);
@@ -239,20 +290,6 @@ function areaGlyph(rule) {
           y = (Math.floor(i / 4) - (n / 4 - 1) / 2) * 6;
         dots.push({ x: p.x + cx, y: p.y, mx: x, my: y, ex: x, ey: y - 20 });
       });
-  } else if (rule === "pack") {
-    const start = shape(5, 25).dots,
-      regroup = [...shape(4, 15).dots.map((p) => ({ x: p.x - 20, y: p.y })), { x: 24, y: 0 }];
-    start.forEach((p, i) => {
-      const compact = { x: p.x * 0.3 - 18, y: p.y * 0.3 };
-      dots.push({
-        x: p.x,
-        y: p.y,
-        mx: compact.x,
-        my: compact.y,
-        ex: regroup[i].x,
-        ey: regroup[i].y,
-      });
-    });
   }
   return `<svg viewBox="-55 -48 110 96" aria-hidden="true">${dots.map((d, i) => `<circle class="demo-dot" cx="${d.x}" cy="${d.y}" r="${rule === "gear" ? 1.7 : 2.5}" style="--mx:${d.mx - d.x}px;--my:${d.my - d.y}px;--dx:${d.ex - d.x}px;--dy:${d.ey - d.y}px;animation-delay:${Math.floor(i / 4) * 25}ms"/>`).join("")}</svg>`;
 }
@@ -320,11 +357,11 @@ async function drop(destination) {
   }
   if (
     run.stage.area === "pack" &&
-    (destination.kind === "pack" || destination.kind === "unpack")
+    (destination.kind === "normalize" || destination.kind === "unpack")
   ) {
     const result =
-      destination.kind === "pack"
-        ? packGroup(run, destination.itemIds)
+      destination.kind === "normalize"
+        ? normalizePackSelection(run, destination.itemIds)
         : unpackPackItem(run, destination.itemId);
     if (!result.ok) {
       tone("miss");
@@ -333,13 +370,19 @@ async function drop(destination) {
       keyboardUI();
       return;
     }
-    tone(result.type === "pack" ? "merge" : "split");
+    tone(
+      result.type === "normalize"
+        ? result.bundles.length
+          ? "merge"
+          : "pick"
+        : "split",
+    );
     await world.animatePack(result);
     if (token !== epoch) return;
     selected = null;
     keyboardUI();
     announce(result.lock?.notation || (result.complete ? "BREAK" : ""));
-    if (run.status === "won") nextProblem();
+    if (run.status === "won" && run.stage.area !== "pack") nextProblem();
     return;
   }
   if (destination.kind === "space") {
@@ -436,7 +479,9 @@ canvas.addEventListener("pointerdown", (e) => {
   tone("pick", hit.ids.length);
   world.begin(hit, p.x, p.y);
   peel =
-    run.stage.area === "spark" && hit.kind !== "grip"
+    (run.stage.area === "spark" || run.stage.area === "pack") &&
+    hit.kind !== "grip" &&
+    hit.children?.length
       ? {
           gesture: new PeelGesture(p.x, p.y, e.timeStamp),
           normal: hit,
@@ -607,21 +652,25 @@ document.querySelector("#keyboard-controls").addEventListener("click", (e) => {
   if (!b) return;
   if (run.stage.area === "pack") {
     const state = world.read().pack;
-    if (b.dataset.packGroup !== undefined) {
-      const group = state.groups[Number(b.dataset.packGroup)];
-      if (!group) return;
+    if (b.dataset.packPlace !== undefined) {
+      const place = state.places.find(
+        (candidate) => candidate.level === Number(b.dataset.packPlace),
+      );
+      if (!place?.n) return;
       const selection = {
         pieceId: run.pieces[0].id,
-        ids: [...group.ids],
-        rawIds: [...group.rawIds],
-        itemIds: [...group.itemIds],
-        kind: "pack-group",
-        level: group.level,
-        anchor: { x: group.x, y: group.y },
+        ids: [...place.ids],
+        rawIds: [...place.rawIds],
+        itemIds: [...place.itemIds],
+        kind: "pack-selection",
+        level: place.level,
+        macro: false,
+        children: [],
+        anchor: { x: place.x, y: place.y },
       };
       selected = selection;
-      world.begin(selection, group.x, group.y);
-      drop({ kind: "pack", itemIds: [...group.itemIds] }).catch(failSafe);
+      world.begin(selection, place.x, place.y);
+      drop({ kind: "normalize", itemIds: [...place.itemIds] }).catch(failSafe);
       return;
     }
     if (b.dataset.packItem !== undefined) {
@@ -633,7 +682,7 @@ document.querySelector("#keyboard-controls").addEventListener("click", (e) => {
         rawIds: [...item.rawIds],
         itemIds: [item.id],
         itemId: item.id,
-        kind: "pack-item",
+        kind: "pack-selection",
         level: item.level,
         macro: true,
         anchor: { x: item.x, y: item.y },

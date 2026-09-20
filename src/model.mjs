@@ -40,6 +40,8 @@ export function activePackItems(run) {
     .sort((a, b) => a.level - b.level || a.order - b.order);
 }
 
+// Deterministic complete bundles are useful for model inspection and keyboard
+// access, but the pointer interaction never exposes these as preselected groups.
 export function packableGroups(run) {
   const pack = requirePack(run);
   if (run.status !== "play" || pack.phase !== "pack") return [];
@@ -105,43 +107,81 @@ function settlePack(run, result) {
   return result;
 }
 
-export function packGroup(run, itemIds) {
+export function normalizePackSelection(run, itemIds) {
   const pack = requirePack(run);
   if (run.status !== "play" || pack.phase !== "pack")
     return { ok: false, ignored: true };
-  const key = itemIds.join("|"),
-    group = packableGroups(run).find((candidate) => candidate.itemIds.join("|") === key);
-  if (!group) return { ok: false, type: "miss" };
-  const children = group.itemIds.map((id) => pack.nodes[id]),
-    level = group.level + 1,
-    id = `m${pack.step}-${pack.nextMacroId++}`,
-    node = {
-      id,
+
+  const unique = [...new Set(itemIds)];
+  if (!unique.length || unique.length !== itemIds.length)
+    return { ok: false, type: "miss" };
+  const items = unique.map((id) => pack.nodes[id]);
+  if (
+    items.some((item, index) => !item || !pack.active.includes(unique[index]))
+  )
+    return { ok: false, type: "miss" };
+
+  const level = items[0].level;
+  if (items.some((item) => item.level !== level))
+    return { ok: false, type: "miss" };
+  items.sort((a, b) => a.order - b.order);
+
+  const bundleCount = Math.floor(items.length / pack.base),
+    carryCount = bundleCount * pack.base,
+    carried = items.slice(0, carryCount),
+    remainder = items.slice(carryCount),
+    selectedIds = items.flatMap((item) => item.ids),
+    result = {
+      ok: true,
+      type: "normalize",
       level,
-      ids: children.flatMap((item) => item.ids),
-      children: [...group.itemIds],
-      order: Math.min(...children.map((item) => item.order)),
-      macro: true,
-      base: pack.base,
-    },
-    childSet = new Set(group.itemIds);
-  pack.nodes[id] = node;
-  pack.active = pack.active.filter((activeId) => !childSet.has(activeId));
-  pack.active.push(id);
+      carryLevel: level + 1,
+      selectedItemIds: items.map((item) => item.id),
+      ids: selectedIds,
+      bundles: [],
+      remainderItemIds: remainder.map((item) => item.id),
+      complete: false,
+      locked: false,
+    };
+
+  if (!bundleCount) return result;
+
+  const childSet = new Set(carried.map((item) => item.id));
+  pack.active = pack.active.filter((id) => !childSet.has(id));
+
+  for (let index = 0; index < bundleCount; index++) {
+    const children = carried.slice(index * pack.base, (index + 1) * pack.base),
+      id = `m${pack.step}-${pack.nextMacroId++}`,
+      node = {
+        id,
+        level: level + 1,
+        ids: children.flatMap((item) => item.ids),
+        children: children.map((item) => item.id),
+        order: Math.min(...children.map((item) => item.order)),
+        macro: true,
+        base: pack.base,
+      };
+    pack.nodes[id] = node;
+    pack.active.push(id);
+    result.bundles.push({
+      itemId: id,
+      childItemIds: [...node.children],
+      ids: [...node.ids],
+      representative: node.ids[0],
+    });
+  }
+
   pack.active.sort(
-    (a, b) => pack.nodes[a].order - pack.nodes[b].order || pack.nodes[a].level - pack.nodes[b].level,
+    (a, b) =>
+      pack.nodes[a].order - pack.nodes[b].order ||
+      pack.nodes[a].level - pack.nodes[b].level,
   );
-  return settlePack(run, {
-    ok: true,
-    type: "pack",
-    itemId: id,
-    itemIds: [...group.itemIds],
-    ids: [...node.ids],
-    level,
-    representative: node.ids[0],
-    complete: false,
-    locked: false,
-  });
+  return settlePack(run, result);
+}
+
+// Kept as a thin compatibility alias for the first prototype's test helpers.
+export function packGroup(run, itemIds) {
+  return normalizePackSelection(run, itemIds);
 }
 
 export function unpackPackItem(run, itemId) {
@@ -157,7 +197,9 @@ export function unpackPackItem(run, itemId) {
   const index = pack.active.indexOf(itemId);
   pack.active.splice(index, 1, ...node.children);
   pack.active.sort(
-    (a, b) => pack.nodes[a].order - pack.nodes[b].order || pack.nodes[a].level - pack.nodes[b].level,
+    (a, b) =>
+      pack.nodes[a].order - pack.nodes[b].order ||
+      pack.nodes[a].level - pack.nodes[b].level,
   );
   if (
     pack.phase === "unpack" &&
