@@ -10,6 +10,12 @@ import {
   setWidth,
   pourPackMass,
   setPackBase,
+  beginPackTransition,
+  settlePackTransition,
+  matchPackDefense,
+  beginPackAttack,
+  resolvePackAttackPayload,
+  completePackBreak,
 } from "./model.mjs";
 import { shape, arrayShape } from "./shapes.mjs";
 import { PeelGesture, finerSelection } from "./gestures.mjs";
@@ -119,6 +125,10 @@ function announce(text) {
 function keyboardUI() {
   const controls = document.querySelector("#keyboard-controls");
   if (run.stage.area === "pack") {
+    if (run.status !== "play" || world.busy) {
+      controls.innerHTML = "";
+      return;
+    }
     const state = world.read().pack;
     const options = state.allowedRadices,
       index = options.indexOf(state.base),
@@ -305,7 +315,7 @@ function start(id, changeHash = true) {
   selected = null;
   ruleId = id;
   document.body.classList.remove("entrance");
-  const p = id === "pack" ? null : progress[id],
+  const p = progress[id],
     problem = generateProblem(
       id,
       p?.difficulty || 1,
@@ -337,13 +347,49 @@ async function transferPackMass(level) {
     return false;
   const result = pourPackMass(run, level);
   if (!result.ok) return false;
+  beginPackTransition(run);
   const token = epoch;
   tone("merge");
-  await world.animatePack(result);
-  if (token !== epoch) return false;
-  selected = null;
+  const packing = world.animatePack(result);
   keyboardUI();
+  await packing;
+  if (token !== epoch) return false;
+  settlePackTransition(run);
+  selected = null;
   announce("");
+  const match = matchPackDefense(run);
+  if (match.ok) {
+    const activating = world.playPackLockActivation(match);
+    keyboardUI();
+    if (!(await activating) || token !== epoch) return false;
+    if (match.allActivated) {
+      const collapse = world.animatePackDefenseCollapse();
+      keyboardUI();
+      if (!(await collapse) || token !== epoch) return false;
+      const plan = beginPackAttack(run);
+      if (!plan.ok)
+        throw new Error(`PACK defense cleared without attack plan: ${plan.reason}`);
+      keyboardUI();
+      world.sync();
+      if (
+        !(await world.animatePackAttack(
+          plan,
+          (itemId) => resolvePackAttackPayload(run, itemId),
+        )) || token !== epoch
+      )
+        return false;
+      if (!(await world.animatePackBreak()) || token !== epoch) return false;
+      if (!completePackBreak(run)) throw new Error("PACK BREAK failed to settle");
+      recordResult(progress.pack, true);
+      save();
+      syncHUD();
+      announce("防御解除。攻撃。BREAK。");
+      keyboardUI();
+      nextProblem();
+      return true;
+    }
+  }
+  keyboardUI();
   return true;
 }
 async function drop(destination) {
@@ -556,10 +602,17 @@ canvas.addEventListener("pointerup", (e) => {
     const previousBase = run.pack.base;
     if (nextBase && setPackBase(run, nextBase)) {
       tone("merge");
-      world.radixChanged?.(previousBase, nextBase);
+      const token = epoch,
+        transition = world.radixChanged?.(previousBase, nextBase);
       world.sync();
       keyboardUI();
       announce("");
+      Promise.resolve(transition).then((completed) => {
+        if (completed && token === epoch) {
+          settlePackTransition(run);
+          keyboardUI();
+        }
+      });
     }
     return;
   }
@@ -625,6 +678,8 @@ world.onResize = () => {
       d.vy = 0;
     }
     world.sync();
+    if (run.stage.area === "pack" && run.status === "play")
+      settlePackTransition(run);
     keyboardUI();
     if (run.status === "won") nextProblem();
   }
@@ -638,6 +693,8 @@ function failSafe(error) {
     world.massAnchorOverride = null;
     world.carryPulse = null;
     for (const d of world.units.values()) d.manual = false;
+    if (run?.stage.area === "pack" && run.status === "play")
+      settlePackTransition(run);
     world.sync();
     keyboardUI();
     return;
@@ -659,10 +716,8 @@ overlay.addEventListener("click", (e) => {
   const action = button.dataset.menu;
   if (action === "close") closeMenu();
   if (action === "retry") {
-    if (ruleId !== "pack") {
-      recordResult(progress[ruleId], false);
-      save();
-    }
+    recordResult(progress[ruleId], false);
+    save();
     start(ruleId);
   }
   if (action === "areas") areaMenu();
@@ -727,15 +782,23 @@ document.querySelector("#keyboard-controls").addEventListener("click", (e) => {
 });
 document.querySelector("#keyboard-controls").addEventListener("change", (e) => {
   const input = e.target.closest("input[data-pack-radix]");
-  if (!input || run.stage.area !== "pack" || world.busy) return;
+  if (!input || run.stage.area !== "pack" || run.status !== "play" || world.busy)
+    return;
   const options = [...new Set(run.stage.radices)].sort((a, b) => a - b),
     previous = run.pack.base,
     next = options[Number(input.value)];
   if (next !== undefined && setPackBase(run, next)) {
     tone("merge");
-    world.radixChanged?.(previous, next);
+    const token = epoch,
+      transition = world.radixChanged?.(previous, next);
     world.sync();
     keyboardUI();
+    Promise.resolve(transition).then((completed) => {
+      if (completed && token === epoch) {
+        settlePackTransition(run);
+        keyboardUI();
+      }
+    });
   }
 });
 document.addEventListener("keydown", (e) => {

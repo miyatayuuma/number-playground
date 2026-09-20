@@ -15,6 +15,15 @@ import {
   pourPackMass,
   setPackBase,
   isCanonicalPack,
+  packCanonicalDigits,
+  matchPackDefense,
+  beginPackTransition,
+  settlePackTransition,
+  packDefenseCleared,
+  buildPackAttackPlan,
+  beginPackAttack,
+  resolvePackAttackPayload,
+  completePackBreak,
 } from "../src/model.mjs";
 import { PROBLEM_BANK, generateProblem, divisors } from "../src/stages.mjs";
 import { gcd } from "../src/math.mjs";
@@ -146,6 +155,123 @@ test("PACK starts with one Number Mass and only an empty L0", () => {
   assert.deepEqual(packDigits(run), [0]);
   assert.equal(isCanonicalPack(run), true);
   audit(run);
+});
+
+test("PACK derives hidden, unique defense structures from the shared difficulty", () => {
+  assert.deepEqual(packCanonicalDigits(17, 4), [1, 0, 1]);
+  assert.deepEqual(packCanonicalDigits(17, 5), [3, 2]);
+  assert.deepEqual(packCanonicalDigits(17, 3), [1, 2, 2]);
+  assert.deepEqual(generateProblem("pack", 1, 0).targetRadices, [5]);
+  assert.deepEqual(generateProblem("pack", 2, 0).targetRadices, [5]);
+  assert.deepEqual(generateProblem("pack", 3, 0).targetRadices, [5, 4]);
+  assert.deepEqual(generateProblem("pack", 5, 0).targetRadices, [5, 4, 3]);
+  for (const difficulty of [1, 3, 5]) {
+    const run = createRun(generateProblem("pack", difficulty, "targets")),
+      locks = run.pack.defenseLocks;
+    assert.equal(locks.length, difficulty <= 2 ? 1 : difficulty === 3 ? 2 : 3);
+    assert.equal(new Set(locks.map((lock) => lock.radix)).size, locks.length);
+    assert.equal(new Set(locks.map((lock) => lock.digits.join(","))).size, locks.length);
+    assert.ok(locks.every((lock) => lock.activated === false));
+  }
+  const base4Target = createRun(generateProblem("pack", 3, 1)).pack.defenseLocks
+    .find((lock) => lock.radix === 4);
+  assert.deepEqual(base4Target.digits, [1, 0, 1]);
+});
+
+test("PACK defense matching waits for the full settled canonical structure", () => {
+  const run = createRun(generateProblem("pack", 1, "settle"));
+  assert.equal(matchPackDefense(run).ok, false, "Number Mass is not yet packed");
+  assert.ok(setPackBase(run, 4));
+  assert.ok(pourPackMass(run, 0).ok);
+  assert.ok(beginPackTransition(run));
+  assert.equal(matchPackDefense(run).ok, false, "carry presentation has not settled");
+  assert.equal(run.pack.defenseLocks[0].activated, false);
+  assert.ok(settlePackTransition(run));
+  assert.deepEqual(packDigits(run), [1, 0, 1]);
+  assert.equal(matchPackDefense(run).reason, "no-match", "the wrong radix stays exploratory");
+  assert.equal(run.pack.defenseLocks[0].activated, false);
+});
+
+test("PACK multi-ghost locks activate independently in either order and persist across radix resets", () => {
+  function explore(order) {
+    const run = createRun(generateProblem("pack", 3, `order-${order.join("")}`)),
+      original = run.dots.map((dot) => dot.id);
+    assert.equal(buildPackAttackPlan(run).ok, false);
+    for (const [index, radix] of order.entries()) {
+      if (run.pack.base !== radix) assert.ok(setPackBase(run, radix));
+      const result = pourPackMass(run, 0);
+      assert.ok(result.ok);
+      beginPackTransition(run);
+      assert.equal(matchPackDefense(run).ok, false);
+      settlePackTransition(run);
+      const match = matchPackDefense(run);
+      assert.equal(match.ok, true, `radix ${radix} activates its matching lock`);
+      assert.equal(match.allActivated, index === order.length - 1);
+      assert.equal(packDefenseCleared(run), index === order.length - 1);
+      assert.equal(
+        buildPackAttackPlan(run).ok,
+        index === order.length - 1,
+        "the attack waits until every lock has activated",
+      );
+      assert.deepEqual(
+        [...accountedIds(run)].sort((a, b) => a - b),
+        original,
+        "activation retains the one raw identity set",
+      );
+      if (index + 1 < order.length) {
+        const activeLockIds = run.pack.defenseLocks
+          .filter((lock) => lock.activated)
+          .map((lock) => lock.id);
+        assert.ok(setPackBase(run, order[index + 1]));
+        assert.deepEqual(
+          run.pack.numberMassRawIds,
+          original,
+          "radix changes restore all raw identities to Number Mass",
+        );
+        assert.deepEqual(
+          run.pack.defenseLocks.filter((lock) => lock.activated).map((lock) => lock.id),
+          activeLockIds,
+          "activated defense state persists while player structure resets",
+        );
+        assert.deepEqual(run.pack.discoveredLevels, [0]);
+      }
+    }
+    assert.equal(buildPackAttackPlan(run).ok, true);
+    return run;
+  }
+
+  const fiveThenFour = explore([5, 4]),
+    fourThenFive = explore([4, 5]);
+  assert.deepEqual(
+    fiveThenFour.pack.defenseLocks.map((lock) => lock.activated),
+    fourThenFive.pack.defenseLocks.map((lock) => lock.activated),
+  );
+});
+
+test("PACK refuses duplicate activation and attack input, then resolves one final identity-preserving attack", () => {
+  const run = createRun(generateProblem("pack", 1, "attack")),
+    original = run.dots.map((dot) => dot.id);
+  assert.ok(setPackBase(run, 5));
+  assert.ok(pourPackMass(run, 0).ok);
+  settlePackTransition(run);
+  const match = matchPackDefense(run);
+  assert.equal(match.ok, true);
+  assert.equal(match.allActivated, true);
+  assert.equal(matchPackDefense(run).ok, false, "rebuilding the active target adds no progress");
+  assert.equal(buildPackAttackPlan(run).ok, true);
+  const plan = beginPackAttack(run);
+  assert.equal(plan.ok, true);
+  assert.equal(run.status, "attack");
+  assert.equal(setPackBase(run, 4), false);
+  assert.equal(pourPackMass(run, 0).ok, false);
+  assert.deepEqual([...plan.rawIds].sort((a, b) => a - b), original);
+  assert.equal(new Set(plan.rawIds).size, original.length);
+  for (const payload of plan.payloads)
+    assert.equal(resolvePackAttackPayload(run, payload.itemId).ok, true);
+  assert.equal(run.status, "break");
+  assert.equal(completePackBreak(run), true);
+  assert.equal(run.status, "won");
+  assert.deepEqual([...accountedIds(run)].sort((a, b) => a - b), original);
 });
 
 test("PACK streams all L0 input and automatically carries recursively", () => {
@@ -512,14 +638,25 @@ test("PACK factorization geometry does not depend on the active radix", () => {
   assert.deepEqual(factors(17), [17]);
 });
 
-test("PACK remains outside adaptive saved progress", () => {
-  assert.equal(freshProgress().pack, undefined);
-  assert.equal(
+test("PACK lock count follows the existing saved difficulty progression", () => {
+  assert.deepEqual(freshProgress().pack, {
+    difficulty: 1,
+    wins: 0,
+    retries: 0,
+    recent: [],
+  });
+  assert.deepEqual(
     restoreProgress({ pack: { difficulty: 5, wins: 2, retries: 1 } }).pack,
-    undefined,
+    { difficulty: 5, wins: 2, retries: 1, recent: [] },
   );
-  assert.equal(generateProblem("pack", 5, 999).id, "pack:17:5-4");
-  assert.equal(generateProblem("pack", 5, 999).difficulty, 1);
+  assert.equal(generateProblem("pack", 5, 999).targetRadices.length, 3);
+  assert.equal(generateProblem("pack", 5, 999).difficulty, 5);
+  const progress = freshProgress().pack;
+  recordResult(progress, true);
+  recordResult(progress, true);
+  recordResult(progress, true);
+  assert.equal(progress.difficulty, 2);
+  assert.equal(generateProblem("pack", progress.difficulty, "next").targetRadices.length, 1);
 });
 
 test("gear only clears on the greatest common divisor", () => {

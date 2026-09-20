@@ -114,6 +114,10 @@ export class PackWorld extends FlowWorld {
     this.previewPackState = null;
     this.carryPulse = null;
     this.massAnchorOverride = null;
+    this.activationVisual = null;
+    this.defenseCollapse = null;
+    this.packImpacts = [];
+    this.activePackProjectileId = null;
   }
 
   setRun(run) {
@@ -128,6 +132,10 @@ export class PackWorld extends FlowWorld {
     this.previewPackState = null;
     this.carryPulse = null;
     this.massAnchorOverride = null;
+    this.activationVisual = null;
+    this.defenseCollapse = null;
+    this.packImpacts = [];
+    this.activePackProjectileId = null;
     super.setRun(run);
     if (run?.stage.area === "pack")
       this.revealedLevels = new Set(run.pack.discoveredLevels);
@@ -169,8 +177,321 @@ export class PackWorld extends FlowWorld {
   }
 
   drawTargets() {
-    if (this.run?.stage.area === "pack") return;
+    if (this.run?.stage.area === "pack") {
+      if (this.run.pack.phase === "attack" || this.run.pack.phase === "break")
+        this.drawPackAttackLayers();
+      else this.drawPackDefense();
+      return;
+    }
     return super.drawTargets();
+  }
+
+  packDefenseLayout() {
+    const pack = this.run.pack,
+      locks = pack.defenseLocks,
+      count = locks.length,
+      enemy = this.enemyPoint(),
+      rx = Math.min(this.w * 0.48, 170),
+      ry = Math.min(88, Math.max(48, this.h * 0.16)),
+      start = Math.PI * 0.2,
+      span = Math.PI * 0.6,
+      groupWidth = Math.min(
+        count === 1 ? 210 : count === 2 ? 138 : 99,
+        (this.w - 24) / count,
+      );
+    return locks.map((lock, index) => {
+      const part = (index + 0.5) / count,
+        angle = start + span * part,
+        x = enemy.x + rx * Math.cos(angle),
+        y = enemy.y + 5 + ry * Math.sin(angle),
+        step = lock.digits.length > 1
+          ? Math.min(
+              count === 1 ? 58 : count === 2 ? 47 : 38,
+              (groupWidth - 12) / (lock.digits.length - 1),
+            )
+          : 0,
+        rawRadius = count === 1 ? 2.7 : count === 2 ? 2.4 : 2.15,
+        places = lock.digits.map((digit, placeIndex) => {
+          const level = lock.digits.length - placeIndex - 1,
+            placeX = x + ((lock.digits.length - 1) / 2 - placeIndex) * step,
+            spread = Math.min(12, Math.max(0, step * 0.3)),
+            centers = digit ? shape(digit, spread).dots : [],
+            unitRadius = digit
+              ? packNestedUnitShape(lock.radix, level, rawRadius).radius
+              : 0,
+            frameRadius = Math.min(
+              groupWidth * 0.25,
+              Math.max(9, unitRadius + spread + 3),
+            );
+          return {
+            level,
+            digit,
+            x: placeX,
+            y,
+            frameRadius,
+            units: centers.map((center) => ({
+              x: placeX + center.x,
+              y: y + center.y,
+            })),
+          };
+        });
+      return {
+        id: lock.id,
+        active: lock.activated,
+        x,
+        y,
+        angle,
+        groupWidth,
+        rawRadius,
+        places,
+      };
+    });
+  }
+
+  drawPackDefense() {
+    const c = this.ctx,
+      enemy = this.enemyPoint(),
+      ghosts = this.packDefenseLayout(),
+      collapse = this.defenseCollapse,
+      collapseProgress = collapse
+        ? clamp((this.clock - collapse.started) / collapse.duration, 0, 1)
+        : 0,
+      alpha = collapse ? 1 - ease(collapseProgress) : 1,
+      rx = Math.min(this.w * 0.48, 170),
+      ry = Math.min(88, Math.max(48, this.h * 0.16)),
+      start = Math.PI * 0.2,
+      span = Math.PI * 0.6;
+    if (!ghosts.length || alpha <= 0) return;
+    c.save();
+    c.globalAlpha = alpha;
+    c.strokeStyle = this.color;
+    c.lineWidth = 1.35;
+    c.setLineDash([4, 5]);
+    c.beginPath();
+    c.ellipse(enemy.x, enemy.y + 5, rx, ry, 0, start, start + span);
+    c.stroke();
+    c.setLineDash([]);
+    ghosts.forEach((ghost, index) => {
+      const pulse = this.activationVisual?.lockId === ghost.id
+        ? clamp((this.clock - this.activationVisual.started) / this.activationVisual.duration, 0, 1)
+        : null;
+      if (pulse !== null) {
+        const eased = ease(pulse),
+          x = ghost.x + (enemy.x - ghost.x) * eased,
+          y = ghost.y + (enemy.y + enemy.radius * 0.55 - ghost.y) * eased;
+        c.globalAlpha = 0.92 * (1 - pulse * 0.45);
+        c.strokeStyle = this.color;
+        c.lineWidth = 1.5;
+        c.beginPath();
+        c.moveTo(ghost.x, ghost.y);
+        c.lineTo(x, y);
+        c.stroke();
+        this.circle(x, y, 3.2, this.color, 1);
+      }
+      if (ghost.active) return;
+      const segment = span / ghosts.length,
+        a0 = start + segment * index + segment * 0.12,
+        a1 = start + segment * (index + 1) - segment * 0.12;
+      c.globalAlpha = alpha * 0.72;
+      c.lineWidth = 2;
+      c.beginPath();
+      c.ellipse(enemy.x, enemy.y + 5, rx, ry, 0, a0, a1);
+      c.stroke();
+      c.globalAlpha = alpha * 0.62;
+      c.beginPath();
+      c.moveTo(ghost.x, ghost.y - 5);
+      c.lineTo(enemy.x, enemy.y + enemy.radius * 0.7);
+      c.stroke();
+      for (const place of ghost.places) {
+        c.save();
+        c.globalAlpha = alpha * (place.digit ? 0.48 : 0.26);
+        c.lineWidth = 0.8;
+        c.setLineDash(place.digit ? [] : [2, 3]);
+        c.beginPath();
+        c.arc(place.x, place.y, place.frameRadius, 0, Math.PI * 2);
+        c.stroke();
+        c.setLineDash([]);
+        c.restore();
+        for (const unit of place.units)
+          this.drawPackGhostUnit(
+            this.run.pack.defenseLocks[index].radix,
+            place.level,
+            unit.x,
+            unit.y,
+            ghost.rawRadius,
+            alpha * 0.34,
+          );
+      }
+    });
+    c.restore();
+  }
+
+  drawPackGhostUnit(base, level, x, y, rawRadius, alpha) {
+    const c = this.ctx,
+      geometry = packNestedUnitShape(base, level, rawRadius),
+      radius = geometry.frameRadius * 0.9;
+    c.save();
+    c.globalAlpha = alpha;
+    c.strokeStyle = this.color;
+    c.lineWidth = Math.max(0.65, rawRadius * 0.34);
+    c.beginPath();
+    c.arc(x, y, level === 0 ? rawRadius * 0.72 : radius, 0, Math.PI * 2);
+    c.stroke();
+    c.restore();
+    for (const child of geometry.children)
+      this.drawPackGhostUnit(
+        base,
+        level - 1,
+        x + child.x,
+        y + child.y,
+        rawRadius,
+        alpha,
+      );
+  }
+
+  packLayerGeometry(placeCount = packDigits(this.run).length) {
+    const enemy = this.enemyPoint();
+    return Array.from({ length: placeCount }, (_, level) => {
+      const radius = enemy.radius + (placeCount - level) * 8;
+      return {
+        level,
+        x: enemy.x,
+        y: enemy.y,
+        radius,
+        target: { x: enemy.x, y: enemy.y + radius },
+      };
+    });
+  }
+
+  drawPackAttackLayers() {
+    const c = this.ctx,
+      pack = this.run.pack,
+      layers = this.packLayerGeometry(
+        pack.attack?.placeCount || packDigits(this.run).length,
+      );
+    for (const layer of layers) {
+      const impact = this.packImpacts.findLast(
+          (candidate) => candidate.level === layer.level,
+        ),
+        age = impact ? Math.max(0, this.clock - impact.born) : Infinity;
+      c.save();
+      c.globalAlpha = impact ? 0.78 * clamp(1 - age / 700, 0.24, 1) : 0.56;
+      c.strokeStyle = impact ? "#ffd5d7" : this.color;
+      c.lineWidth = impact ? 2.5 : 1.8;
+      c.setLineDash(impact ? [] : [5, 5]);
+      c.beginPath();
+      c.arc(layer.x, layer.y, layer.radius, -Math.PI * 0.82, Math.PI * 0.82);
+      c.stroke();
+      c.restore();
+    }
+  }
+
+  async playPackLockActivation(match) {
+    const token = this.token,
+      ghost = this.packDefenseLayout().find((candidate) => candidate.id === match.lockId);
+    if (!ghost) return false;
+    this.busy = true;
+    this.drag = null;
+    this.hover = null;
+    this.activationVisual = {
+      lockId: match.lockId,
+      started: this.clock,
+      duration: this.motion ? 430 : 120,
+    };
+    this.sync();
+    this.burst(ghost.x, ghost.y, this.color, 0.38);
+    await this.waitPackMotion(this.activationVisual.duration, token);
+    if (token !== this.token) return false;
+    this.activationVisual = null;
+    if (!match.allActivated) this.busy = false;
+    this.sync();
+    return true;
+  }
+
+  async animatePackDefenseCollapse() {
+    const token = this.token;
+    this.busy = true;
+    this.defenseCollapse = {
+      started: this.clock,
+      duration: this.motion ? 500 : 130,
+    };
+    await this.waitPackMotion(this.defenseCollapse.duration, token);
+    if (token !== this.token) return false;
+    this.defenseCollapse = null;
+    this.sync();
+    return true;
+  }
+
+  async animatePackAttack(plan, onImpact) {
+    this.busy = true;
+    this.hover = null;
+    this.drag = null;
+    this.packImpacts = [];
+    const token = this.token,
+      layers = this.packLayerGeometry(plan.placeCount);
+    for (const payload of plan.payloads) {
+      if (token !== this.token) return false;
+      const layer = layers.find((candidate) => candidate.level === payload.targetLayer),
+        dots = payload.rawIds.map((id) => this.units.get(id));
+      if (!layer || dots.some((dot) => !dot))
+        throw new Error(`PACK attack payload has no visible unit: ${payload.itemId}`);
+      this.activePackProjectileId = payload.itemId;
+      for (const dot of dots) {
+        dot.visible = true;
+        dot.manual = true;
+        dot.flight = true;
+      }
+      const center = {
+          x: dots.reduce((sum, dot) => sum + dot.wx, 0) / dots.length,
+          y: dots.reduce((sum, dot) => sum + dot.wy, 0) / dots.length,
+          z: dots[0].wz,
+        },
+        target = this.unprojectPackPoint(layer.target.x, layer.target.y, center.z),
+        dx = target.x - center.x,
+        dy = target.y - center.y;
+      await this.tweenPackWorld(
+        payload.rawIds,
+        dots.map((dot) => ({ x: dot.wx + dx, y: dot.wy + dy, z: dot.wz })),
+        this.motion ? 265 : 88,
+        token,
+        true,
+      );
+      if (token !== this.token) return false;
+      for (const dot of dots) dot.flight = false;
+      this.activePackProjectileId = null;
+      this.packImpacts.push({ level: payload.targetLayer, born: this.clock });
+      this.burst(layer.target.x, layer.target.y, "#ffd5d7", 0.48);
+      if (!onImpact(payload.itemId).ok)
+        throw new Error(`PACK attack payload failed: ${payload.itemId}`);
+      this.onCue?.("hit");
+      if (plan.payloads.length > 1)
+        await this.waitPackMotion(this.motion ? 58 : 12, token);
+    }
+    return token === this.token;
+  }
+
+  async animatePackBreak() {
+    const token = this.token,
+      enemy = this.enemyPoint();
+    this.deadAt = this.clock;
+    this.flash = 0.9;
+    this.burst(enemy.x, enemy.y, "#fff0c2", 0.75);
+    await this.waitPackMotion(this.motion ? 465 : 220, token);
+    if (token !== this.token) return false;
+    this.busy = false;
+    return true;
+  }
+
+  async waitPackMotion(ms, token) {
+    const start = this.clock;
+    await new Promise((resolve) => {
+      const tick = () => {
+        if (token !== this.token || this.clock - start >= ms) resolve();
+        else requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+    return token === this.token;
   }
 
   resize() {
@@ -184,11 +505,11 @@ export class PackWorld extends FlowWorld {
   }
 
   radixChanged(from, to) {
-    if (from === to) return;
+    if (from === to) return Promise.resolve(false);
     this.radixTransition = this.motion
       ? { from, to, started: this.clock, duration: 240 }
       : null;
-    if (this.run?.stage.area !== "pack") return;
+    if (this.run?.stage.area !== "pack") return Promise.resolve(false);
     this.busy = true;
     this.previewPackState = null;
     this.sync();
@@ -198,16 +519,18 @@ export class PackWorld extends FlowWorld {
         const dot = this.units.get(id);
         return { x: dot.twx, y: dot.twy, z: dot.twz };
       });
-    this.tweenPackWorld(ids, targets, this.motion ? 230 : 45, token, true)
+    return this.tweenPackWorld(ids, targets, this.motion ? 230 : 45, token, true)
       .then(() => {
-        if (token !== this.token) return;
+        if (token !== this.token) return false;
         for (const dot of this.units.values()) dot.manual = false;
         this.busy = false;
         this.sync();
+        return true;
       })
       .catch((error) => {
         if (token === this.token) this.busy = false;
         console.error(error);
+        return false;
       });
   }
 
@@ -791,7 +1114,8 @@ export class PackWorld extends FlowWorld {
       displayDigits = this.previewPackState
         ? [...(this.previewPackState.lowToHighDigits || [0])].reverse()
         : packDigits(this.run),
-      control = this.packControl();
+      control = this.packControl(),
+      ghosts = this.packDefenseLayout();
     return {
       width: this.w,
       height: this.h,
@@ -815,11 +1139,39 @@ export class PackWorld extends FlowWorld {
         base: pack.base,
         allowedRadices: [...new Set(this.run.stage.radices)].sort((a, b) => a - b),
         phase: pack.phase,
-        attack: null,
-        layers: [],
+        attack: pack.attack
+          ? {
+              placeCount: pack.attack.placeCount,
+              payloads: structuredClone(pack.attack.payloads),
+              impactedItemIds: [...pack.attack.impactedItemIds],
+              resolvedRawIds: [...pack.attack.resolvedRawIds],
+              activeItemId: this.activePackProjectileId,
+            }
+          : null,
+        layers: pack.phase === "attack" || pack.phase === "break"
+          ? this.packLayerGeometry(pack.attack?.placeCount || packDigits(this.run).length)
+          : [],
         digits: displayDigits,
         notation: null,
-        locks: [],
+        locks: pack.defenseLocks.map(({ id, activated }) => ({ id, activated })),
+        defenseCleared: pack.defenseLocks.every((lock) => lock.activated),
+        defenseCollapsing: !!this.defenseCollapse,
+        settled: pack.settled,
+        ghosts: ghosts.map((ghost) => ({
+          id: ghost.id,
+          active: ghost.active,
+          x: ghost.x,
+          y: ghost.y,
+          radius: ghost.groupWidth * 0.5,
+          places: ghost.places.map((place) => ({
+            level: place.level,
+            unitCount: place.units.length,
+            empty: place.units.length === 0,
+            x: place.x,
+            y: place.y,
+            frameRadius: place.frameRadius,
+          })),
+        })),
         slots: layout.slots.map((slot) => ({ ...slot })),
         radixPoints: pack.base,
         radixGeometry: packNestedUnitShape(pack.base, 1).children.map(
@@ -1081,7 +1433,11 @@ export class PackWorld extends FlowWorld {
   }
 
   packControl() {
-    if (this.run?.stage.area !== "pack") return null;
+    if (
+      this.run?.stage.area !== "pack" ||
+      this.run.status !== "play" ||
+      this.busy
+    ) return null;
     const y = Math.min(this.h - 37, this.h * 0.9),
       x1 = this.w * 0.23,
       x2 = this.w * 0.77,

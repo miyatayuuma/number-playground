@@ -115,15 +115,18 @@ gearSpecs.forEach((spec, i) => {
   bank.gear.push({ ...clean, id, area: "gear", difficulty });
 });
 
-// PACK is intentionally a fixed vertical-slice problem. It is not part of the
-// adaptive difficulty bank until the interaction itself has been validated.
+// PACK keeps the same quantity while difficulty adds hidden defense locks.
+// Radix 3 is a safe exploratory choice; the supported targets use 5, 4, and 3.
 bank.pack.push({
   id: "pack:17:5-4",
   area: "pack",
   difficulty: 1,
   ammo: [17],
   quantity: 17,
-  radices: [5, 4],
+  radices: [3, 4, 5],
+  startRadix: 3,
+  targetRadixPool: [5, 4, 3],
+  targetRadices: [5],
   family: "radix",
   targets: [],
 });
@@ -136,8 +139,18 @@ export function generateProblem(
   recentHistory = [],
 ) {
   if (!bank[ruleId]) throw new RangeError("Unknown rule");
-  if (ruleId === "pack")
-    return { ...structuredClone(bank.pack[0]), difficulty: 1, seed };
+  if (ruleId === "pack") {
+    difficulty = Math.max(1, Math.min(5, Math.trunc(difficulty) || 1));
+    const problem = structuredClone(bank.pack[0]),
+      lockCount = difficulty <= 2 ? 1 : difficulty <= 3 ? 2 : 3;
+    return {
+      ...problem,
+      id: `${problem.id}:d${difficulty}-locks-${lockCount}`,
+      difficulty,
+      targetRadices: problem.targetRadixPool.slice(0, lockCount),
+      seed,
+    };
+  }
   difficulty = Math.max(1, Math.min(5, Math.trunc(difficulty) || 1));
   const candidates = bank[ruleId].filter((p) => p.difficulty === difficulty);
   const pool = candidates.length
