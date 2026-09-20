@@ -18,12 +18,13 @@ function createPackState(stage, ids) {
   );
   return {
     base: stage.radices[0],
-    step: 0,
     phase: "pack",
-    active: ids.map((id) => `d${id}`),
+    numberMassRawIds: [...ids],
+    discoveredLevels: [0],
+    active: [],
     nodes,
     nextMacroId: 0,
-    locks: [],
+    nextOrder: ids.length,
   };
 }
 
@@ -38,6 +39,17 @@ export function activePackItems(run) {
   return pack.active
     .map((id) => pack.nodes[id])
     .sort((a, b) => a.level - b.level || a.order - b.order);
+}
+
+export function packUnitSize(base, level) {
+  if (!Number.isInteger(base) || base < 2 || !Number.isInteger(level) || level < 0)
+    throw new RangeError("PACK unit size requires a radix and non-negative level");
+  return base ** level;
+}
+
+export function packLevelItems(run, level) {
+  if (!Number.isInteger(level) || level < 0) return [];
+  return activePackItems(run).filter((item) => item.level === level);
 }
 
 function packNodeRawIds(pack, itemId, visiting = new Set()) {
@@ -73,312 +85,217 @@ function packNodeRawIds(pack, itemId, visiting = new Set()) {
   return children;
 }
 
+function packStateSnapshot(pack) {
+  const active = [...pack.active],
+    discoveredLevels = [...pack.discoveredLevels],
+    counts = new Map();
+  for (const id of active) {
+    const item = pack.nodes[id];
+    counts.set(item.level, (counts.get(item.level) || 0) + 1);
+  }
+  const max = Math.max(0, ...discoveredLevels);
+  return {
+    active,
+    numberMassRawIds: [...pack.numberMassRawIds],
+    discoveredLevels,
+    lowToHighDigits: Array.from({ length: max + 1 }, (_, level) =>
+      counts.get(level) || 0,
+    ),
+  };
+}
+
 export function isCanonicalPack(run) {
   if (run?.stage?.area !== "pack" || !run.pack) return false;
   const pack = run.pack;
-  if (!Array.isArray(pack.active) || pack.active.some((id) => !pack.nodes[id]))
+  if (
+    !Array.isArray(pack.active) ||
+    !Array.isArray(pack.numberMassRawIds) ||
+    !Array.isArray(pack.discoveredLevels) ||
+    pack.active.some((id) => !pack.nodes[id])
+  )
     return false;
-  const active = pack.active
-      .map((id) => pack.nodes[id])
-      .sort((a, b) => a.level - b.level || a.order - b.order),
-    byLevel = new Map();
+  const active = activePackItems(run),
+    levels = [...pack.discoveredLevels].sort((a, b) => a - b),
+    expectedLevels = Array.from({ length: levels.length }, (_, index) => index);
+  if (
+    levels.some((level, index) => level !== expectedLevels[index]) ||
+    levels[0] !== 0
+  )
+    return false;
   for (const item of active) {
-    if (!item || pack.nodes[item.id] !== item) return false;
-    byLevel.set(item.level, (byLevel.get(item.level) || 0) + 1);
-    if (!packNodeRawIds(pack, item.id)) return false;
+    if (
+      pack.nodes[item.id] !== item ||
+      !levels.includes(item.level) ||
+      !packNodeRawIds(pack, item.id)
+    )
+      return false;
   }
-  if ([...byLevel.values()].some((count) => count >= pack.base)) return false;
-  const ids = active.flatMap((item) => item.ids),
-    expected = run.dots.map((dot) => dot.id);
+  const allIds = [
+      ...pack.numberMassRawIds,
+      ...active.flatMap((item) => item.ids),
+    ],
+    expected = run.dots.map((dot) => dot.id),
+    counts = new Map();
+  for (const item of active)
+    counts.set(item.level, (counts.get(item.level) || 0) + 1);
   return (
-    ids.length === expected.length &&
-    new Set(ids).size === ids.length &&
-    ids.every((id) => expected.includes(id))
+    allIds.length === expected.length &&
+    new Set(allIds).size === allIds.length &&
+    allIds.every((id) => expected.includes(id)) &&
+    [...counts.values()].every((count) => count < pack.base)
   );
-}
-
-export function isPackAttackReady(run) {
-  return (
-    run?.status === "settling" &&
-    run.pack?.phase === "attack-ready" &&
-    isCanonicalPack(run)
-  );
-}
-
-export function buildPackAttackPlan(run) {
-  if (!isPackAttackReady(run))
-    return { ok: false, reason: "not-canonical-or-unsettled" };
-  const pack = run.pack,
-    digits = packDigits(run),
-    payloads = activePackItems(run)
-      .sort((a, b) => b.level - a.level || a.order - b.order)
-      .map((item) => ({
-        itemId: item.id,
-        level: item.level,
-        targetLayer: item.level,
-        rawIds: [...item.ids],
-        weight: item.ids.length,
-      })),
-    rawIds = payloads.flatMap((payload) => payload.rawIds);
-  if (rawIds.length !== run.dots.length || new Set(rawIds).size !== rawIds.length)
-    return { ok: false, reason: "identity-accounting-failed" };
-  return {
-    ok: true,
-    base: pack.base,
-    placeCount: digits.length,
-    rawIds,
-    payloads,
-  };
-}
-
-export function beginPackAttack(run) {
-  const plan = buildPackAttackPlan(run);
-  if (!plan.ok) return plan;
-  run.pack.phase = "attack";
-  run.pack.attack = {
-    placeCount: plan.placeCount,
-    payloads: plan.payloads.map((payload) => ({
-      ...payload,
-      rawIds: [...payload.rawIds],
-    })),
-    impactedItemIds: [],
-    resolvedRawIds: [],
-  };
-  run.status = "attack";
-  return plan;
-}
-
-export function resolvePackAttackPayload(run, itemId) {
-  const pack = run?.pack,
-    attack = pack?.attack,
-    payload = attack?.payloads.find((candidate) => candidate.itemId === itemId);
-  if (
-    run?.status !== "attack" ||
-    pack.phase !== "attack" ||
-    !payload ||
-    attack.impactedItemIds.includes(itemId) ||
-    payload.rawIds.some((id) => attack.resolvedRawIds.includes(id))
-  )
-    return { ok: false };
-  attack.impactedItemIds.push(itemId);
-  attack.resolvedRawIds.push(...payload.rawIds);
-  const complete =
-    attack.resolvedRawIds.length === run.dots.length &&
-    new Set(attack.resolvedRawIds).size === run.dots.length &&
-    run.dots.every((dot) => attack.resolvedRawIds.includes(dot.id));
-  if (complete) {
-    pack.phase = "break";
-    run.status = "break";
-  }
-  return { ok: true, complete, resolvedCount: attack.resolvedRawIds.length };
-}
-
-export function completePackBreak(run) {
-  const attack = run?.pack?.attack;
-  if (
-    run?.stage?.area !== "pack" ||
-    run.status !== "break" ||
-    run.pack.phase !== "break" ||
-    !attack ||
-    attack.resolvedRawIds.length !== run.dots.length ||
-    new Set(attack.resolvedRawIds).size !== run.dots.length ||
-    !run.dots.every((dot) => attack.resolvedRawIds.includes(dot.id))
-  )
-    return false;
-  run.pack.phase = "next";
-  run.status = "won";
-  return true;
-}
-
-// Deterministic complete bundles are useful for model inspection and keyboard
-// access, but the pointer interaction never exposes these as preselected groups.
-export function packableGroups(run) {
-  const pack = requirePack(run);
-  if (run.status !== "play" || pack.phase !== "pack") return [];
-  const levels = [...new Set(activePackItems(run).map((item) => item.level))],
-    groups = [];
-  for (const level of levels) {
-    const items = activePackItems(run)
-      .filter((item) => item.level === level)
-      .sort((a, b) => a.order - b.order);
-    for (let i = 0; i + pack.base <= items.length; i += pack.base) {
-      const chunk = items.slice(i, i + pack.base);
-      groups.push({
-        level,
-        itemIds: chunk.map((item) => item.id),
-        ids: chunk.flatMap((item) => item.ids),
-      });
-    }
-  }
-  return groups;
 }
 
 export function packDigits(run) {
   const pack = requirePack(run),
-    items = activePackItems(run),
-    expectedMax = Math.floor(
-      Math.log(run.stage.quantity || run.dots.length) / Math.log(pack.base),
-    ),
-    maxLevel = Math.max(expectedMax, ...items.map((item) => item.level), 0),
-    lowToHigh = Array.from({ length: maxLevel + 1 }, (_, level) =>
-      items.filter((item) => item.level === level).length,
-    );
-  return lowToHigh.reverse();
+    counts = new Map();
+  for (const item of activePackItems(run))
+    counts.set(item.level, (counts.get(item.level) || 0) + 1);
+  const max = Math.max(0, ...pack.discoveredLevels);
+  return Array.from({ length: max + 1 }, (_, level) =>
+    counts.get(level) || 0,
+  ).reverse();
 }
 
-const SUBSCRIPT = "₀₁₂₃₄₅₆₇₈₉";
-export function radixNotation(digits, base) {
-  return `${digits.join("")}${String(base)
-    .split("")
-    .map((digit) => SUBSCRIPT[Number(digit)])
-    .join("")}`;
-}
-
-function settlePack(run, result) {
-  const pack = requirePack(run);
-  if (packableGroups(run).length) return result;
-  const digits = packDigits(run);
-  if (digits.some((digit) => digit >= pack.base)) return result;
-  const lock = {
-    base: pack.base,
-    digits,
-    notation: radixNotation(digits, pack.base),
-  };
-  pack.locks.push(lock);
-  result.lock = structuredClone(lock);
-  result.locked = true;
-  if (pack.step === run.stage.radices.length - 1) {
-    pack.phase = "attack-ready";
-    run.status = "settling";
-    result.attackReady = true;
-  } else {
-    pack.phase = "unpack";
-  }
-  return result;
-}
-
-export function normalizePackSelection(run, itemIds) {
-  const pack = requirePack(run);
-  if (run.status !== "play" || pack.phase !== "pack")
-    return { ok: false, ignored: true };
-
-  const unique = [...new Set(itemIds)];
-  if (!unique.length || unique.length !== itemIds.length)
-    return { ok: false, type: "miss" };
-  const items = unique.map((id) => pack.nodes[id]);
+export function pourPackMass(run, targetLevel = 0, maxRawCount = Infinity) {
+  const pack = requirePack(run),
+    unitSize = packUnitSize(pack.base, targetLevel);
   if (
-    items.some((item, index) => !item || !pack.active.includes(unique[index]))
+    run.status !== "play" ||
+    pack.phase !== "pack" ||
+    !pack.discoveredLevels.includes(targetLevel)
   )
-    return { ok: false, type: "miss" };
+    return { ok: false, reason: "level-not-discovered" };
+  const limit =
+    maxRawCount === Infinity
+      ? Infinity
+      : Number.isInteger(maxRawCount) && maxRawCount > 0
+        ? maxRawCount
+        : 0,
+    available = Math.min(pack.numberMassRawIds.length, limit),
+    consumedCount =
+      targetLevel === 0
+        ? available
+        : Math.floor(available / unitSize) * unitSize;
+  if (!consumedCount) return { ok: false, reason: "insufficient-mass" };
 
-  const level = items[0].level;
-  if (items.some((item) => item.level !== level))
-    return { ok: false, type: "miss" };
-  items.sort((a, b) => a.order - b.order);
+  const initialState = packStateSnapshot(pack),
+    consumedRawIds = pack.numberMassRawIds.slice(0, consumedCount),
+    remaining = pack.numberMassRawIds.slice(consumedCount),
+    steps = [];
+  const snapshot = (type, detail) =>
+    steps.push({ type, ...detail, state: packStateSnapshot(pack) });
+  const carryReadyLevel = (level) => {
+    let nextLevel = level;
+    while (pack.active.filter((id) => pack.nodes[id].level === nextLevel).length >= pack.base) {
+      const children = pack.active
+          .map((id) => pack.nodes[id])
+          .filter((item) => item.level === nextLevel)
+          .sort((a, b) => a.order - b.order)
+          .slice(0, pack.base),
+        childSet = new Set(children.map((item) => item.id)),
+        itemId = `m${pack.nextMacroId++}`,
+        ids = children.flatMap((item) => item.ids),
+        item = {
+          id: itemId,
+          level: nextLevel + 1,
+          ids,
+          children: children.map((child) => child.id),
+          order: pack.nextOrder++,
+          macro: true,
+          base: pack.base,
+        };
+      pack.nodes[itemId] = item;
+      pack.active = pack.active.filter((id) => !childSet.has(id));
+      pack.active.push(itemId);
+      if (!pack.discoveredLevels.includes(item.level)) {
+        pack.discoveredLevels.push(item.level);
+        pack.discoveredLevels.sort((a, b) => a - b);
+      }
+      snapshot("carry", {
+        fromLevel: nextLevel,
+        toLevel: nextLevel + 1,
+        itemId,
+        childItemIds: item.children,
+        rawIds: [...ids],
+      });
+      nextLevel++;
+    }
+  };
 
-  const bundleCount = Math.floor(items.length / pack.base),
-    carryCount = bundleCount * pack.base,
-    carried = items.slice(0, carryCount),
-    remainder = items.slice(carryCount),
-    selectedIds = items.flatMap((item) => item.ids),
-    result = {
-      ok: true,
-      type: "normalize",
-      level,
-      carryLevel: level + 1,
-      selectedItemIds: items.map((item) => item.id),
-      ids: selectedIds,
-      bundles: [],
-      remainderItemIds: remainder.map((item) => item.id),
-      complete: false,
-      locked: false,
-    };
-
-  if (!bundleCount) return result;
-
-  const childSet = new Set(carried.map((item) => item.id));
-  pack.active = pack.active.filter((id) => !childSet.has(id));
-
-  for (let index = 0; index < bundleCount; index++) {
-    const children = carried.slice(index * pack.base, (index + 1) * pack.base),
-      id = `m${pack.step}-${pack.nextMacroId++}`,
-      node = {
-        id,
-        level: level + 1,
-        ids: children.flatMap((item) => item.ids),
-        children: children.map((item) => item.id),
-        order: Math.min(...children.map((item) => item.order)),
+  const buildUnit = (level, rawIds) => {
+    if (level === 0) return `d${rawIds[0]}`;
+    const childRawCount = packUnitSize(pack.base, level - 1),
+      children = Array.from({ length: pack.base }, (_, index) =>
+        buildUnit(
+          level - 1,
+          rawIds.slice(index * childRawCount, (index + 1) * childRawCount),
+        ),
+      ),
+      itemId = `m${pack.nextMacroId++}`,
+      item = {
+        id: itemId,
+        level,
+        ids: children.flatMap((childId) => pack.nodes[childId].ids),
+        children,
+        order: pack.nextOrder++,
         macro: true,
         base: pack.base,
       };
-    pack.nodes[id] = node;
-    pack.active.push(id);
-    result.bundles.push({
-      itemId: id,
-      childItemIds: [...node.children],
-      ids: [...node.ids],
-      representative: node.ids[0],
-    });
+    pack.nodes[itemId] = item;
+    return itemId;
+  };
+
+  if (targetLevel === 0) {
+    for (const rawId of consumedRawIds) {
+      pack.numberMassRawIds.shift();
+      const nodeId = `d${rawId}`;
+      pack.active.push(nodeId);
+      pack.nodes[nodeId].order = pack.nextOrder++;
+      snapshot("input", { rawId, targetLevel, rawIds: [rawId] });
+      carryReadyLevel(0);
+    }
+  } else {
+    const rawPerUnit = packUnitSize(pack.base, targetLevel);
+    for (let offset = 0; offset < consumedRawIds.length; offset += rawPerUnit) {
+      const rawIds = consumedRawIds.slice(offset, offset + rawPerUnit);
+      pack.numberMassRawIds.splice(0, rawPerUnit);
+      const itemId = buildUnit(targetLevel, rawIds),
+        item = pack.nodes[itemId];
+      item.order = pack.nextOrder++;
+      pack.active.push(itemId);
+      snapshot("input", { itemId, targetLevel, rawIds });
+      carryReadyLevel(targetLevel);
+    }
   }
-
   pack.active.sort(
     (a, b) =>
-      pack.nodes[a].order - pack.nodes[b].order ||
-      pack.nodes[a].level - pack.nodes[b].level,
+      pack.nodes[a].level - pack.nodes[b].level ||
+      pack.nodes[a].order - pack.nodes[b].order,
   );
-  return settlePack(run, result);
-}
-
-// Kept as a thin compatibility alias for the first prototype's test helpers.
-export function packGroup(run, itemIds) {
-  return normalizePackSelection(run, itemIds);
-}
-
-export function unpackPackItem(run, itemId) {
-  const pack = requirePack(run),
-    node = pack.nodes[itemId];
-  if (
-    run.status !== "play" ||
-    !node?.macro ||
-    !pack.active.includes(itemId) ||
-    (pack.phase !== "pack" && pack.phase !== "unpack")
-  )
-    return { ok: false, type: "miss" };
-  const index = pack.active.indexOf(itemId);
-  pack.active.splice(index, 1, ...node.children);
-  pack.active.sort(
-    (a, b) =>
-      pack.nodes[a].order - pack.nodes[b].order ||
-      pack.nodes[a].level - pack.nodes[b].level,
-  );
-  if (
-    pack.phase === "unpack" &&
-    pack.active.every((id) => pack.nodes[id].level === 0)
-  )
-    pack.phase = "choose";
   return {
     ok: true,
-    type: "unpack",
-    itemId,
-    childItemIds: [...node.children],
-    ids: [...node.ids],
-    level: node.level - 1,
-    representative: node.ids[0],
+    type: "pour",
+    targetLevel,
+    unitSize,
+    initialState,
+    consumedRawIds,
+    remainingRawIds: remaining,
+    steps,
+    complete: pack.numberMassRawIds.length === 0,
+    canonical: isCanonicalPack(run),
   };
 }
 
 export function setPackBase(run, base) {
   const pack = requirePack(run),
-    next = run.stage.radices[pack.step + 1];
-  if (
-    run.status !== "play" ||
-    pack.phase !== "choose" ||
-    base !== next ||
-    !pack.active.every((id) => pack.nodes[id].level === 0)
-  )
+    allowed = [...new Set(run.stage.radices)];
+  if (run.status !== "play" || !allowed.includes(base) || base === pack.base)
     return false;
-  pack.step++;
   pack.base = base;
+  pack.numberMassRawIds = run.dots.map((dot) => dot.id);
+  pack.active = [];
+  pack.discoveredLevels = [0];
   pack.phase = "pack";
   return true;
 }
@@ -593,5 +510,10 @@ export function divide(run, pieceId, ids) {
   };
 }
 export function accountedIds(run) {
+  if (run?.stage?.area === "pack" && run.pack)
+    return [
+      ...run.pack.numberMassRawIds,
+      ...activePackItems(run).flatMap((item) => item.ids),
+    ];
   return [...run.pieces.flatMap((p) => p.ids), ...run.spent];
 }
