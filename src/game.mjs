@@ -8,13 +8,8 @@ import {
   fire,
   divide,
   setWidth,
-  normalizePackSelection,
-  unpackPackItem,
+  pourPackMass,
   setPackBase,
-  isPackAttackReady,
-  beginPackAttack,
-  resolvePackAttackPayload,
-  completePackBreak,
 } from "./model.mjs";
 import { shape, arrayShape } from "./shapes.mjs";
 import { PeelGesture, finerSelection } from "./gestures.mjs";
@@ -42,7 +37,6 @@ let progress = freshProgress(),
   pointer = null,
   selected = null,
   epoch = 0,
-  packAttackTimer = null,
   menu = null;
 try {
   const data = JSON.parse(localStorage.getItem(KEY) || "{}");
@@ -126,30 +120,16 @@ function keyboardUI() {
   const controls = document.querySelector("#keyboard-controls");
   if (run.stage.area === "pack") {
     const state = world.read().pack;
-    controls.innerHTML =
-      state.phase === "pack"
-        ? state.places
-            .filter(
-              (place) =>
-                place.n &&
-                state.slots.some((slot) => slot.level === place.level + 1),
-            )
-            .map(
-              (place) =>
-                `<button data-pack-place="${place.level}">一段奥の視点へ移す</button>`,
-            )
-            .join("")
-        : state.phase === "unpack"
-          ? state.items
-              .filter((item) => item.macro)
-              .map(
-                (item) =>
-                  `<button data-pack-item="${item.id}">一段手前へ広げる</button>`,
-              )
-              .join("")
-          : state.phase === "choose" && state.control
-            ? `<button data-pack-base="${state.control.next}">束の大きさを変える</button>`
-            : "";
+    const options = state.allowedRadices,
+      index = options.indexOf(state.base),
+      radix = `<label>現在の基数 <input data-pack-radix type="range" min="0" max="${Math.max(0, options.length - 1)}" step="1" value="${Math.max(0, index)}" aria-label="現在の基数"></label>`,
+      inputs = state.directInputLevels
+        .map(
+          (level) =>
+            `<button data-pack-input="${level}">Number MassをL${level}へ流す</button>`,
+        )
+        .join("");
+    controls.innerHTML = radix + inputs;
     return;
   }
 
@@ -315,8 +295,6 @@ function pauseMenu() {
   );
 }
 function start(id, changeHash = true) {
-  clearTimeout(packAttackTimer);
-  packAttackTimer = null;
   epoch++;
   world.token = epoch;
   pointer = null;
@@ -354,39 +332,19 @@ function start(id, changeHash = true) {
 function nextProblem() {
   if (run.status === "won" && !world.busy && !menu) start(ruleId);
 }
-function schedulePackAttack(token) {
-  if (packAttackTimer !== null || !isPackAttackReady(run)) return;
-  packAttackTimer = setTimeout(async () => {
-    packAttackTimer = null;
-    if (token !== epoch || !isPackAttackReady(run)) return;
-    if (menu || world.paused) {
-      schedulePackAttack(token);
-      return;
-    }
-    try {
-      await world.settlePackOverview();
-      if (token !== epoch) return;
-      const plan = beginPackAttack(run);
-      if (!plan.ok) return;
-      keyboardUI();
-      const resolved = await world.animatePackAttack(plan, (itemId) =>
-        resolvePackAttackPayload(run, itemId),
-      );
-      if (token !== epoch) return;
-      if (!resolved) throw new Error("PACK attack animation did not finish");
-      if (run.status !== "break" || run.pack.phase !== "break")
-        throw new Error("PACK attack ended before every raw identity impacted");
-      const collapsed = await world.animatePackBreak();
-      if (token !== epoch) return;
-      if (!collapsed || !completePackBreak(run))
-        throw new Error("PACK BREAK could not resolve its full payload");
-      keyboardUI();
-      announce("BREAK");
-      nextProblem();
-    } catch (error) {
-      failSafe(error);
-    }
-  }, 380);
+async function transferPackMass(level) {
+  if (run.stage.area !== "pack" || world.busy || run.status !== "play")
+    return false;
+  const result = pourPackMass(run, level);
+  if (!result.ok) return false;
+  const token = epoch;
+  tone("merge");
+  await world.animatePack(result);
+  if (token !== epoch) return false;
+  selected = null;
+  keyboardUI();
+  announce("");
+  return true;
 }
 async function drop(destination) {
   const drag = world.drag;
@@ -399,35 +357,13 @@ async function drop(destination) {
     keyboardUI();
     return;
   }
-  if (
-    run.stage.area === "pack" &&
-    (destination.kind === "normalize" || destination.kind === "unpack")
-  ) {
-    const result =
-      destination.kind === "normalize"
-        ? normalizePackSelection(run, destination.itemIds)
-        : unpackPackItem(run, destination.itemId);
-    if (!result.ok) {
+  if (run.stage.area === "pack" && destination.kind === "pack-input") {
+    if (!(await transferPackMass(destination.level))) {
       tone("miss");
       world.cancel();
       selected = null;
       keyboardUI();
-      return;
     }
-    tone(
-      result.type === "normalize"
-        ? result.bundles.length
-          ? "merge"
-          : "pick"
-        : "split",
-    );
-    await world.animatePack(result);
-    if (token !== epoch) return;
-    selected = null;
-    keyboardUI();
-    announce(result.lock?.notation || (result.complete ? "BREAK" : ""));
-    if (isPackAttackReady(run)) schedulePackAttack(token);
-    if (run.status === "won" && run.stage.area !== "pack") nextProblem();
     return;
   }
   if (destination.kind === "space") {
@@ -495,12 +431,11 @@ function point(e) {
   return { x: e.clientX - r.left, y: e.clientY - r.top };
 }
 canvas.addEventListener("pointerdown", (e) => {
-  const terminalPack = run.stage.area === "pack" && run.status === "won";
   if (
     pointer !== null ||
     world.busy ||
     world.paused ||
-    (run.status !== "play" && !terminalPack)
+    run.status !== "play"
   )
     return;
   const p = point(e);
@@ -525,11 +460,6 @@ canvas.addEventListener("pointerdown", (e) => {
   const hit = world.hit(p.x, p.y);
   if (!hit) {
     if (run.stage.area !== "pack") return;
-    if (
-      run.pack.phase === "choose" ||
-      (run.pack.phase === "break" && !terminalPack)
-    )
-      return;
     if (world.packFocusGestureHit?.(p.x, p.y)) return;
     e.preventDefault();
     pointer = e.pointerId;
@@ -682,13 +612,11 @@ canvas.addEventListener("lostpointercapture", cancelPointer);
 world.onResize = () => {
   cancelPointer();
   if (world.busy) {
-    if (
-      run.stage.area === "pack" &&
-      (run.status === "attack" || run.status === "break")
-    )
-      return;
     world.token = ++epoch;
     world.busy = false;
+    world.previewPackState = null;
+    world.massAnchorOverride = null;
+    world.carryPulse = null;
     for (const d of world.units.values()) {
       d.manual = false;
       d.flight = false;
@@ -698,18 +626,20 @@ world.onResize = () => {
     }
     world.sync();
     keyboardUI();
-    if (run.stage.area === "pack" && isPackAttackReady(run))
-      schedulePackAttack(epoch);
     if (run.status === "won") nextProblem();
   }
 };
 function failSafe(error) {
   console.error(error);
-  if (
-    run?.stage.area === "pack" &&
-    (run.status === "settling" || run.status === "attack" || run.status === "break")
-  ) {
-    start(ruleId);
+  if (run?.stage.area === "pack") {
+    world.token = ++epoch;
+    world.busy = false;
+    world.previewPackState = null;
+    world.massAnchorOverride = null;
+    world.carryPulse = null;
+    for (const d of world.units.values()) d.manual = false;
+    world.sync();
+    keyboardUI();
     return;
   }
   world.token = ++epoch;
@@ -748,58 +678,8 @@ document.querySelector("#keyboard-controls").addEventListener("click", (e) => {
   const b = e.target.closest("button");
   if (!b) return;
   if (run.stage.area === "pack") {
-    const state = world.read().pack;
-    if (b.dataset.packPlace !== undefined) {
-      const place = state.places.find(
-        (candidate) => candidate.level === Number(b.dataset.packPlace),
-      );
-      if (!place?.n) return;
-      const selection = {
-        pieceId: run.pieces[0].id,
-        ids: [...place.ids],
-        rawIds: [...place.rawIds],
-        itemIds: [...place.itemIds],
-        kind: "pack-selection",
-        level: place.level,
-        macro: false,
-        children: [],
-        anchor: { x: place.x, y: place.y },
-      };
-      selected = selection;
-      world.begin(selection, place.x, place.y);
-      drop({ kind: "normalize", itemIds: [...place.itemIds] }).catch(failSafe);
-      return;
-    }
-    if (b.dataset.packItem !== undefined) {
-      const item = state.items.find((candidate) => candidate.id === b.dataset.packItem);
-      if (!item) return;
-      const selection = {
-        pieceId: run.pieces[0].id,
-        ids: [...item.ids],
-        rawIds: [...item.rawIds],
-        itemIds: [item.id],
-        itemId: item.id,
-        kind: "pack-selection",
-        level: item.level,
-        macro: true,
-        anchor: { x: item.x, y: item.y },
-      };
-      selected = selection;
-      world.begin(selection, item.x, item.y);
-      drop({ kind: "unpack", itemId: item.id }).catch(failSafe);
-      return;
-    }
-    if (b.dataset.packBase !== undefined) {
-      const previousBase = run.pack.base,
-        nextBase = Number(b.dataset.packBase);
-      if (setPackBase(run, nextBase)) {
-        tone("merge");
-        world.radixChanged?.(previousBase, nextBase);
-        world.sync();
-        keyboardUI();
-      }
-      return;
-    }
+    if (b.dataset.packInput !== undefined)
+      transferPackMass(Number(b.dataset.packInput)).catch(failSafe);
     return;
   }
   if (b.dataset.width !== undefined) {
@@ -843,6 +723,19 @@ document.querySelector("#keyboard-controls").addEventListener("click", (e) => {
       world.move(world.w * 0.75, world.h * 0.8);
       drop({ kind: "space" });
     }
+  }
+});
+document.querySelector("#keyboard-controls").addEventListener("change", (e) => {
+  const input = e.target.closest("input[data-pack-radix]");
+  if (!input || run.stage.area !== "pack" || world.busy) return;
+  const options = [...new Set(run.stage.radices)].sort((a, b) => a - b),
+    previous = run.pack.base,
+    next = options[Number(input.value)];
+  if (next !== undefined && setPackBase(run, next)) {
+    tone("merge");
+    world.radixChanged?.(previous, next);
+    world.sync();
+    keyboardUI();
   }
 });
 document.addEventListener("keydown", (e) => {

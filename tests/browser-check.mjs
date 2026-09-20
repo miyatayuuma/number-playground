@@ -153,496 +153,104 @@ try {
   );
 
   await page.emulateMedia({ reducedMotion: "no-preference" });
-  // PACK Pass 5R: true shared-world-size dots, compact nested planes, and
-  // transient continuous camera gestures that inspect raw identities.
+  // PACK Redesign Task 1: one neutral source, discovered places, automatic carry.
   let packState = await route("pack");
   await mkdir(resolve(root, "artifacts"), { recursive: true });
-  await page.screenshot({ path: resolve(root, "artifacts/pack-initial.png") });
+  await page.screenshot({ path: resolve(root, "artifacts/pack-mass-initial.png") });
   assert.equal(packState.total, 17);
   assert.equal(packState.progress.pack, undefined);
+  assert.equal(packState.status, "play");
   assert.equal(packState.pack.base, 5);
-  assert.equal(packState.pack.phase, "pack");
-  assert.equal(packState.pack.groups, undefined);
-  assert.deepEqual(
-    packState.pack.viewports.map(({ level, ghost }) => [level, ghost]),
-    [
-      [1, true],
-      [0, false],
-    ],
-  );
-  assert.ok(packState.pack.viewports[0].x < packState.pack.viewports[1].x);
-  assert.equal(packState.pack.viewports[0].y, packState.pack.viewports[1].y);
-  assert.ok(
-    Math.abs(
-      packState.pack.viewports[0].frameRadius -
-        packState.pack.viewports[1].frameRadius,
-    ) < 0.01,
-  );
-  assert.equal(
-    packState.pack.places.find((place) => place.level === 0).n,
-    17,
-  );
-  assert.ok(
-    packState.pack.places
-      .filter((place) => place.level > 0)
-      .every((place) => place.n === 0),
-  );
-  const originalPackIds = [...packState.pieces[0].ids],
-    base5Upper = packState.pack.slots.find((slot) => slot.level === 1),
-    packSingle = packState.pack.items.find((item) => item.level === 0);
-  assert.ok(base5Upper && packSingle);
-  assert.equal(packState.pack.renderedDots.length, 17);
-  assert.deepEqual(
-    [...packState.pack.rawIds].sort((a, b) => a - b),
-    [...originalPackIds].sort((a, b) => a - b),
-  );
+  assert.equal(packState.pack.control.current, 5);
+  assert.deepEqual(packState.pack.revealedLevels, [0]);
+  assert.deepEqual(packState.pack.viewports.map((view) => view.level), [0]);
+  assert.deepEqual(packState.pack.places.map(({ level, n }) => [level, n]), [[0, 0]]);
+  assert.deepEqual(packState.pack.digits, [0]);
+  assert.equal(packState.pack.numberMass.quantity, 17);
+  assert.deepEqual(packState.pack.directInputLevels, [0]);
+  assert.deepEqual(packState.pack.originalRawIds, packState.pack.rawIds);
+  assert.equal(packState.pack.rawIds.length, 17);
+  assert.equal(new Set(packState.pack.rawIds).size, 17);
+  const originalPackIds = [...packState.pack.originalRawIds],
+    firstMass = packState.pack.numberMass,
+    firstL0 = packState.pack.slots.find((slot) => slot.level === 0);
+  assert.ok(firstL0);
 
-  // Visible objects keep object-drag ownership and do not change focus.
-  const rawProbe = packState.pack.renderedDots[0],
-    bounds = await page.locator("#world").boundingBox();
-  await page.mouse.move(bounds.x + rawProbe.x, bounds.y + rawProbe.y);
+  // A touch on any part of the source selects the full mass, never a raw dot.
+  const initialBounds = await page.locator("#world").boundingBox();
+  await page.mouse.move(initialBounds.x + firstMass.x, initialBounds.y + firstMass.y);
   await page.mouse.down();
-  assert.deepEqual((await read()).dragIds, [rawProbe.id]);
-  assert.equal((await read()).pack.camera.mode, "overview");
-  await page.mouse.move(bounds.x + rawProbe.x + 18, bounds.y + rawProbe.y);
-  assert.deepEqual((await read()).dragIds, [rawProbe.id]);
-  assert.equal((await read()).pack.camera.mode, "overview");
+  assert.deepEqual((await read()).dragIds.sort((a, b) => a - b), originalPackIds);
   await page.mouse.up();
   await settled();
-
-  // Background owns transient camera inspection from pointerdown; jitter is ignored.
-  const beforeBackground = await read();
-  const backgroundInspect = await inspectScaleMouse(
-    [focusStep(beforeBackground.width)],
-    "right",
-  );
-  assert.equal(backgroundInspect.jitter.pack.camera.mode, "overview");
-  assert.equal(backgroundInspect.states[0].pack.camera.mode, "inspection");
-  assert.equal(backgroundInspect.states[0].pack.camera.focusLevel, 0);
-  assert.deepEqual(backgroundInspect.states[0].pack.digits, beforeBackground.pack.digits);
-  assert.deepEqual(backgroundInspect.states[0].pack.rawIds, beforeBackground.pack.rawIds);
-  assert.equal(backgroundInspect.states[0].pack.base, beforeBackground.pack.base);
-  assert.equal(backgroundInspect.released.pack.camera.mode, "returning");
-  assert.equal(backgroundInspect.home.pack.camera.mode, "overview");
-  assert.equal(backgroundInspect.home.pack.camera.focusLevel, null);
-  const focusedZero = backgroundInspect.states[0].pack.viewports.find((view) => view.level === 0);
-  assert.ok(Math.abs(focusedZero.x - backgroundInspect.states[0].width / 2) < 0.01);
-  assert.ok(Math.abs(focusedZero.y - backgroundInspect.states[0].height / 2) < 0.01);
-  // A no-op gesture during the return spring must not leave a persistent
-  // arbitrary camera midpoint after cancelling the return transition.
-  const returnBounds = await page.locator("#world").boundingBox(),
-    returnX = returnBounds.x + 12,
-    returnY = returnBounds.y + 58;
-  await page.mouse.move(returnX, returnY);
-  await page.mouse.down();
-  await page.mouse.move(returnX + focusStep(beforeBackground.width), returnY, {
-    steps: 8,
-  });
-  await page.mouse.up();
-  await page.mouse.move(returnX, returnY);
-  await page.mouse.down();
-  await page.mouse.move(returnX + 5, returnY);
-  await page.mouse.up();
-  const noopReturnHome = await settled();
-  assert.equal(noopReturnHome.pack.camera.mode, "overview");
-  assert.equal(noopReturnHome.pack.camera.focusLevel, null);
-
-  // Less than one base unit crosses the boundary, reacts, and returns without
-  // becoming an error or changing the mathematical state.
-  await drag(packSingle, base5Upper, 1);
-  packState = await read();
-  assert.equal(packState.pack.phase, "pack");
-  assert.equal(packState.pack.items.length, 17);
-  assert.equal(
-    packState.pack.items.filter((item) => item.macro).length,
-    0,
-  );
-  assert.deepEqual(packState.pack.digits, [0, 17]);
-
-  // Carry preserves all 17 raw identities while 15 settle into three nested
-  // units and two remain at the lower scale.
-  const base5Place = packState.pack.places.find((place) => place.level === 0);
-  assert.equal(base5Place.n, 17);
-  await drag(base5Place, base5Upper, 17, false);
-  const carryMotion = await read();
-  assert.equal(carryMotion.busy, true);
-  assert.equal(carryMotion.pack.transition, null);
-  assert.equal(carryMotion.pack.renderedDots.length, 17);
-  assert.equal(new Set(carryMotion.pack.renderedDots.map((dot) => dot.id)).size, 17);
-  assert.deepEqual(
-    [...carryMotion.pack.rawIds].sort((a, b) => a - b),
-    [...originalPackIds].sort((a, b) => a - b),
-  );
-  await page.screenshot({ path: resolve(root, "artifacts/pack-carry-motion.png") });
-  await settled();
-  packState = await read();
-  assert.equal(packState.pack.phase, "unpack");
-  assert.equal(packState.pack.locks.length, 1);
-  assert.equal(packState.pack.locks[0].notation, "32₅");
-  assert.deepEqual(packState.pack.locks[0].digits, [3, 2]);
-  assert.equal(
-    packState.pack.places.find((place) => place.level === 1).n,
-    3,
-  );
-  assert.equal(
-    packState.pack.places.find((place) => place.level === 0).n,
-    2,
-  );
-  assert.deepEqual(packState.pieces[0].ids, originalPackIds);
-  const base5Macros = packState.pack.items.filter((item) => item.macro);
-  assert.equal(base5Macros.length, 3);
-  assert.ok(
-    base5Macros.every(
-      (item) =>
-        item.children.length === 5 &&
-        item.rawIds.length === 5 &&
-        item.tree.children.length === 5 &&
-        item.tree.children.every((child) => child.rawIds.length === 1),
-    ),
-  );
-  assert.equal(packState.pack.renderedDots.length, 17);
-  assert.equal(new Set(packState.pack.renderedDots.map((dot) => dot.id)).size, 17);
-  assert.deepEqual(
-    packState.pack.items
-      .flatMap((item) => item.rawIds)
-      .sort((a, b) => a - b),
-    [...originalPackIds].sort((a, b) => a - b),
-  );
-  assert.equal(packState.pack.revealCount, 1);
+  await drag(firstMass, firstL0, 17, false);
+  const streamMotion = await read();
+  assert.equal(streamMotion.busy, true);
+  assert.equal(streamMotion.status, "play");
+  assert.equal(streamMotion.pack.attack, null);
+  assert.equal(streamMotion.pack.renderedDots.length, 17);
+  assert.equal(new Set(streamMotion.pack.renderedDots.map((dot) => dot.id)).size, 17);
+  assert.deepEqual([...streamMotion.pack.rawIds].sort((a, b) => a - b), originalPackIds);
+  await page.screenshot({ path: resolve(root, "artifacts/pack-stream-motion.png") });
+  packState = await settled();
+  assert.deepEqual(packState.pack.digits, [3, 2]);
+  assert.equal(packState.pack.numberMass.quantity, 0);
   assert.deepEqual(packState.pack.revealedLevels, [0, 1]);
   assert.deepEqual(
-    packState.pack.viewports.map(({ level, ghost }) => [level, ghost]),
-    [
-      [2, true],
-      [1, false],
-      [0, false],
-    ],
+    packState.pack.places.map(({ level, digit }) => [level, digit]).sort((a, b) => a[0] - b[0]),
+    [[0, 2], [1, 3]],
   );
-  await page.screenshot({ path: resolve(root, "artifacts/pack-base5-carry.png") });
-  const base5Attack = await page.evaluate(async () => {
-    const model = await import("./src/model.mjs"),
-      { PROBLEM_BANK } = await import("./src/stages.mjs"),
-      run = model.createRun({
-        ...structuredClone(PROBLEM_BANK.pack[0]),
-        id: "pack:17:5-attack-browser",
-        radices: [5],
-      });
-    model.normalizePackSelection(
-      run,
-      model.activePackItems(run).map((item) => item.id),
-    );
-    const plan = model.beginPackAttack(run);
-    if (!plan.ok) return { ok: false };
-    for (const payload of plan.payloads)
-      model.resolvePackAttackPayload(run, payload.itemId);
-    const result = {
-      ok: run.status === "break",
-      placeCount: plan.placeCount,
-      levels: plan.payloads.map((payload) => payload.level),
-      weights: plan.payloads.map((payload) => payload.weight),
-      rawIds: run.pack.attack.resolvedRawIds,
-    };
-    result.completed = model.completePackBreak(run);
-    return result;
-  });
-  assert.equal(base5Attack.ok, true);
-  assert.equal(base5Attack.placeCount, 2);
-  assert.deepEqual(base5Attack.levels, [1, 1, 1, 0, 0]);
-  assert.deepEqual(base5Attack.weights, [5, 5, 5, 1, 1]);
-  assert.deepEqual([...base5Attack.rawIds].sort((a, b) => a - b), originalPackIds);
-  assert.equal(new Set(base5Attack.rawIds).size, 17);
-  assert.equal(base5Attack.completed, true);
+  assert.deepEqual(packState.pack.directInputLevels, []);
+  const base5Geometry = packState.pack.radixGeometry;
+  await page.waitForTimeout(450);
+  assert.equal((await read()).status, "play", "canonical completion does not attack or advance");
 
-  // Overview unit frames match the L0 raw-dot reference. Inspection moves
-  // continuously while held and returns home as soon as the gesture ends.
-  const base5Overview = await read(),
-    base5Frame0 = base5Overview.pack.viewports.find((view) => view.level === 0),
-    base5Frame1 = base5Overview.pack.items.find((item) => item.level === 1);
-  assert.ok(base5Frame1);
-  assert.ok(Math.abs(base5Frame0.frameRadius - 7) < 0.15);
-  assert.ok(Math.abs(base5Frame1.frameRadius - base5Frame0.frameRadius) < 0.15);
-  const base5Inspection = await inspectScaleMouse(
-      [
-        -focusStep(base5Overview.width),
-        -focusStep(base5Overview.width) * 1.5,
-        -focusStep(base5Overview.width) * 2,
-      ],
-      "left",
-      "artifacts/pack-base5-focus-l1.png",
-    ),
-    base5L0Focus = base5Inspection.states[0],
-    base5L0Dots = base5L0Focus.pack.renderedDots.filter(
-      (dot) => dot.level === 0 && dot.visible,
-    ),
-    base5FocusRadius = base5L0Dots[0].radius;
-  assert.ok(base5Inspection.states[1].pack.camera.z > base5Inspection.states[0].pack.camera.z);
-  assert.equal(base5L0Focus.pack.camera.focusLevel, 0);
-  assert.ok(Math.abs(base5FocusRadius - 7) < 0.15);
-  const base5L1Focus = base5Inspection.states[2],
-    base5L1Dots = base5L1Focus.pack.renderedDots.filter(
-      (dot) => dot.level === 1 && dot.visible,
-    ),
-    base5L1Radius = base5L1Dots.reduce((sum, dot) => sum + dot.radius, 0) /
-      base5L1Dots.length,
-    base5L1Viewport = base5L1Focus.pack.viewports.find((view) => view.level === 1);
-  assert.equal(base5L1Focus.pack.camera.focusLevel, 1);
-  assert.equal(base5L1Dots.length, 15);
-  assert.ok(Math.abs(base5L1Radius - base5FocusRadius) < 0.15);
-  assert.ok(Math.abs(base5L1Viewport.x - base5L1Focus.width / 2) < 0.01);
-  assert.ok(Math.abs(base5L1Viewport.y - base5L1Focus.height / 2) < 0.01);
-  assert.ok(base5L1Viewport.frameRadius > 0);
-  assert.deepEqual(base5L1Focus.pack.rawIds, originalPackIds);
-  assert.equal(base5Inspection.released.pack.camera.mode, "returning");
-  assert.equal(base5Inspection.home.pack.camera.mode, "overview");
-  assert.equal(base5Inspection.home.pack.camera.focusLevel, null);
-  assert.ok(base5Inspection.home.pack.viewports.find((view) => view.level === 1));
-  await audit();
-
-  while (packState.pack.phase === "unpack") {
-    const firstUnpack = packState.pack.items.find((candidate) => candidate.macro);
-    if (!firstUnpack) throw new Error("PACK macro missing during unpack");
-    const item = packState.pack.items.find((candidate) => candidate.macro),
-      slot = packState.pack.slots.find(
-        (candidate) => candidate.level === item.level - 1,
-      );
-    assert.ok(item && slot);
-    const bounds = await page.locator("#world").boundingBox();
-    await page.mouse.move(bounds.x + item.x, bounds.y + item.y);
-    await page.mouse.down();
-    assert.equal((await read()).dragIds.length, item.rawIds.length);
-    await page.mouse.up();
-    await settled();
-    await drag(item, slot, item.rawIds.length, false);
-    if (item.id === firstUnpack.id) {
-      await page.waitForTimeout(55);
-      const unfolding = await read();
-      assert.equal(unfolding.pack.renderedDots.length, 17);
-      assert.equal(new Set(unfolding.pack.renderedDots.map((dot) => dot.id)).size, 17);
-      assert.deepEqual(
-        [...unfolding.pack.rawIds].sort((a, b) => a - b),
-        [...originalPackIds].sort((a, b) => a - b),
-      );
-      await page.screenshot({ path: resolve(root, "artifacts/pack-unpack-motion.png") });
-    }
-    await settled();
-    packState = await read();
-  }
-  assert.equal(packState.pack.phase, "choose");
-  assert.equal(packState.pack.items.length, 17);
-  assert.ok(packState.pack.items.every((item) => item.rawIds.length === 1));
-  assert.deepEqual(packState.pieces[0].ids, originalPackIds);
-
-  const scaleCameraBeforeRadixChange = {
-    camera: {
-      mode: packState.pack.camera.mode,
-      focusLevel: packState.pack.camera.focusLevel,
-      x: packState.pack.camera.x,
-      y: packState.pack.camera.y,
-      z: packState.pack.camera.z,
-      focalLength: packState.pack.camera.focalLength,
-    },
-    planes: packState.pack.viewports.map(
-      ({ level, worldX, worldY, worldZ, depth, unitWorldRadius, frameWorldRadius }) =>
-        [level, worldX, worldY, worldZ, depth, unitWorldRadius, frameWorldRadius],
-    ),
-  };
-  await packBase();
-  packState = await read();
-  assert.equal(packState.pack.base, 4);
-  assert.equal(packState.pack.radixPoints, 4);
-  assert.equal(packState.pack.phase, "pack");
-  assert.deepEqual(
-    {
-      camera: {
-        mode: packState.pack.camera.mode,
-        focusLevel: packState.pack.camera.focusLevel,
-        x: packState.pack.camera.x,
-        y: packState.pack.camera.y,
-        z: packState.pack.camera.z,
-        focalLength: packState.pack.camera.focalLength,
-      },
-      planes: packState.pack.viewports.map(
-        ({ level, worldX, worldY, worldZ, depth, unitWorldRadius, frameWorldRadius }) =>
-          [level, worldX, worldY, worldZ, depth, unitWorldRadius, frameWorldRadius],
-      ),
-    },
-    scaleCameraBeforeRadixChange,
-  );
-  assert.equal(packState.pack.transition?.type, "radix-change");
-  assert.equal(packState.pack.radixGeometry.length, 4);
-  await page.screenshot({ path: resolve(root, "artifacts/pack-base4-frame.png") });
-
-  const base4Lower = packState.pack.places.find((place) => place.level === 0),
-    base4MiddleSlot = packState.pack.slots.find((slot) => slot.level === 1);
-  assert.equal(base4Lower.n, 17);
-  assert.ok(base4MiddleSlot);
-  await drag(base4Lower, base4MiddleSlot, 17);
-  packState = await read();
-  assert.equal(packState.pack.phase, "pack");
-  assert.equal(
-    packState.pack.places.find((place) => place.level === 0).n,
-    1,
-  );
-  assert.equal(
-    packState.pack.places.find((place) => place.level === 1).n,
-    4,
-  );
-  const base4MiddleUnits = packState.pack.items.filter((item) => item.level === 1);
-  assert.equal(base4MiddleUnits.length, 4);
-  assert.ok(
-    base4MiddleUnits.every(
-      (item) =>
-        item.rawIds.length === 4 &&
-        item.tree.children.length === 4 &&
-        item.tree.children.every((child) => child.level === 0),
-    ),
-  );
-  assert.equal(
-    packState.pack.revealCount,
-    1,
-      "the scale 1 viewport stays known when the radix changes",
-  );
-
-  const base4Overview = await read(),
-    base4L0Focus = base4Overview,
-    base4L0Radius = base4L0Focus.pack.renderedDots.find(
-      (dot) => dot.level === 0 && dot.visible,
-    ).radius;
-  assert.equal(base4L0Focus.pack.camera.mode, "overview");
-  assert.ok(Math.abs(base4L0Radius - 7) < 0.15);
-  const base4Inspection = await inspectScaleMouse(
-      [-focusStep(base4Overview.width), -focusStep(base4Overview.width) * 2],
-      "left",
-      "artifacts/pack-base4-focus-l1.png",
-    ),
-    base4L1Focus = base4Inspection.states[1],
-    base4L1Dots = base4L1Focus.pack.renderedDots.filter(
-      (dot) => dot.level === 1 && dot.visible,
-    );
-  assert.equal(base4L1Focus.pack.camera.focusLevel, 1);
-  assert.equal(base4L1Dots.length, 16);
-  assert.ok(base4L1Dots.every((dot) => Math.abs(dot.radius - base4L0Radius) < 0.15));
-  assert.deepEqual(base4L1Focus.pack.rawIds, originalPackIds);
-  assert.equal(base4Inspection.home.pack.camera.mode, "overview");
-
-  const middle = packState.pack.places.find((place) => place.level === 1),
-    topSlot = packState.pack.slots.find((slot) => slot.level === 2);
-  assert.ok(middle && topSlot);
-  await drag(middle, topSlot, 16, false);
-  const recursiveCarry = await read();
-  assert.equal(recursiveCarry.busy, true);
-  assert.equal(recursiveCarry.status, "settling");
-  assert.equal(recursiveCarry.pack.phase, "attack-ready");
-  assert.equal(recursiveCarry.pack.renderedDots.length, 17);
-  assert.equal(new Set(recursiveCarry.pack.renderedDots.map((dot) => dot.id)).size, 17);
-  await page.screenshot({ path: resolve(root, "artifacts/pack-recursive-carry.png") });
-  const canonicalState = recursiveCarry;
-  assert.equal(canonicalState.pack.locks[1].notation, "101₄");
-  assert.deepEqual(canonicalState.pack.locks[1].digits, [1, 0, 1]);
-  assert.equal(
-    canonicalState.pack.places.find((place) => place.level === 2).n,
-    1,
-  );
-  assert.equal(
-    canonicalState.pack.places.find((place) => place.level === 1).n,
-    0,
-  );
-  assert.equal(
-    canonicalState.pack.places.find((place) => place.level === 0).n,
-    1,
-  );
-  assert.equal(canonicalState.pack.revealCount, 2);
-  assert.deepEqual(canonicalState.pack.revealedLevels, [0, 1, 2]);
-  assert.ok(canonicalState.pack.viewports.every((viewport) => !viewport.ghost));
-  const base4Top = canonicalState.pack.items.find((item) => item.level === 2);
-  assert.equal(base4Top.children.length, 4);
-  assert.equal(base4Top.rawIds.length, 16);
-  assert.equal(base4Top.tree.children.length, 4);
-  assert.ok(
-    base4Top.tree.children.every(
-      (middle) =>
-        middle.level === 1 &&
-        middle.children.length === 4 &&
-        middle.children.every((raw) => raw.level === 0 && raw.rawIds.length === 1),
-    ),
-  );
-  assert.equal(canonicalState.pack.renderedDots.length, 17);
-  assert.equal(new Set(canonicalState.pack.renderedDots.map((dot) => dot.id)).size, 17);
-  assert.ok(canonicalState.pack.renderedDots.every((dot) => dot.worldRadius === 8));
-  assert.deepEqual(
-    canonicalState.pack.items
-      .flatMap((item) => item.rawIds)
-      .sort((a, b) => a - b),
-    [...originalPackIds].sort((a, b) => a - b),
-  );
-  await page.screenshot({ path: resolve(root, "artifacts/pack-base4-final.png") });
-  assert.ok(canonicalState.pack.slots.some((slot) => slot.level === 1));
-  assert.deepEqual(canonicalState.pieces[0].ids, originalPackIds);
-  assert.deepEqual(canonicalState.pack.layers.map((layer) => layer.level), [0, 1, 2]);
-
-  await page.waitForFunction(
-    () => window.__readFlow?.().status === "attack",
-    null,
-    { timeout: 5000 },
-  );
-  const attackState = await read(),
-    attackIds = attackState.pack.attack.payloads.flatMap((payload) => payload.rawIds);
-  assert.equal(attackState.pack.phase, "attack");
-  assert.deepEqual(
-    attackState.pack.attack.payloads.map((payload) => [payload.level, payload.weight]),
-    [[2, 16], [0, 1]],
-  );
-  assert.deepEqual(
-    attackState.pack.layers.map((layer) => layer.level),
-    [0, 1, 2],
-  );
-  assert.deepEqual([...attackIds].sort((a, b) => a - b), originalPackIds);
-  assert.equal(new Set(attackIds).size, 17);
-  assert.equal(attackState.pack.attack.placeCount, 3);
-  assert.deepEqual(
-    [...attackState.pack.rawIds].sort((a, b) => a - b),
-    originalPackIds,
-  );
-  const attackBox = await page.locator("#world").boundingBox(),
-    exposedRaw = attackState.pack.renderedDots.find((dot) => dot.level === 0);
-  await page.mouse.move(attackBox.x + exposedRaw.x, attackBox.y + exposedRaw.y);
-  await page.mouse.down();
-  assert.deepEqual((await read()).dragIds, [], "attack locks dot manipulation");
-  await page.mouse.move(attackBox.x + attackBox.width * 0.8, attackBox.y + 60, { steps: 5 });
-  assert.equal((await read()).pack.camera.inputProgress, 0, "attack locks camera inspection");
-  await page.mouse.up();
-  await page.screenshot({ path: resolve(root, "artifacts/pack-layered-attack.png") });
-  await page.waitForFunction(
-    () => window.__readFlow?.().status === "break",
-    null,
-    { timeout: 5000 },
-  );
-  const broken = await read();
-  assert.equal(broken.pack.phase, "break");
-  assert.equal(broken.pack.attack.resolvedRawIds.length, 17);
-  assert.equal(new Set(broken.pack.attack.resolvedRawIds).size, 17);
-  assert.deepEqual(
-    broken.pack.layers.map((layer) => [layer.level, layer.impacted]),
-    [[0, true], [1, false], [2, true]],
-  );
-  assert.equal(broken.pack.renderedDots.length, 17);
-  assert.equal(new Set(broken.pack.renderedDots.map((dot) => dot.id)).size, 17);
-  await page.screenshot({ path: resolve(root, "artifacts/pack-enemy-break.png") });
-  await page.waitForFunction(
-    (previous) => window.__readFlow?.().runToken > previous,
-    broken.runToken,
-    { timeout: 5000 },
-  );
+  // A new radix dissolves the entire old hierarchy back into the same raw mass.
+  await packBase(4);
   packState = await settled();
-  assert.equal(packState.rule, "pack");
+  assert.equal(packState.pack.base, 4);
+  assert.equal(packState.pack.control.current, 4);
+  assert.notDeepEqual(packState.pack.radixGeometry, base5Geometry);
+  assert.deepEqual(packState.pack.rawIds.sort((a, b) => a - b), originalPackIds);
+  assert.deepEqual(packState.pack.numberMass.ids.sort((a, b) => a - b), originalPackIds);
+  assert.equal(packState.pack.numberMass.quantity, 17);
+  assert.deepEqual(packState.pack.viewports.map((view) => view.level), [0]);
+  assert.deepEqual(packState.pack.revealedLevels, [0]);
+  assert.deepEqual(packState.pack.places.map(({ level, n }) => [level, n]), [[0, 0]]);
+  assert.deepEqual(packState.pack.digits, [0]);
+  assert.deepEqual(packState.pack.directInputLevels, [0]);
+  await page.screenshot({ path: resolve(root, "artifacts/pack-radix-reset.png") });
+
+  const base4Mass = packState.pack.numberMass,
+    base4L0 = packState.pack.slots.find((slot) => slot.level === 0);
+  await drag(base4Mass, base4L0, 17, false);
+  const recursiveMotion = await read();
+  assert.equal(recursiveMotion.busy, true);
+  assert.equal(recursiveMotion.status, "play");
+  assert.deepEqual([...recursiveMotion.pack.rawIds].sort((a, b) => a - b), originalPackIds);
+  await page.screenshot({ path: resolve(root, "artifacts/pack-recursive-carry-motion.png") });
+  packState = await settled();
+  assert.equal(packState.pack.complete, true);
+  assert.equal(packState.pack.canonical, true);
+  assert.deepEqual(packState.pack.digits, [1, 0, 1]);
+  assert.deepEqual(
+    packState.pack.places.map(({ level, digit }) => [level, digit]).sort((a, b) => a[0] - b[0]),
+    [[0, 1], [1, 0], [2, 1]],
+  );
+  assert.deepEqual(packState.pack.revealedLevels, [0, 1, 2]);
+  assert.deepEqual(packState.pack.viewports.map((view) => view.level).sort((a, b) => a - b), [0, 1, 2]);
+  assert.equal(packState.pack.places.some((place) => place.level === 1 && place.digit === 0), true);
+  assert.equal(packState.pack.numberMass.quantity, 0);
+  assert.deepEqual([...packState.pack.rawIds].sort((a, b) => a - b), originalPackIds);
+  assert.equal(packState.pack.renderedDots.length, 17);
+  assert.equal(new Set(packState.pack.renderedDots.map((dot) => dot.id)).size, 17);
   assert.equal(packState.status, "play");
-  assert.equal(packState.pack.phase, "pack");
-  assert.equal(packState.total, 17);
-  assert.equal(packState.runToken, broken.runToken + 1);
-  await page.waitForTimeout(120);
-  assert.equal((await read()).runToken, packState.runToken, "one BREAK advances once");
+  await page.waitForTimeout(450);
+  assert.equal((await read()).runToken, packState.runToken);
+  assert.equal((await read()).status, "play");
+  await page.screenshot({ path: resolve(root, "artifacts/pack-base4-canonical.png") });
   console.log(
-    "PACK layered attack verified 17→32₅, unpack/base change, 17→101₄, L2/L0 impacts across the retained empty L1 layer, enemy BREAK, and next-problem continuation.",
+    "PACK Number Mass streaming, automatic recursive carry, zero digit, no attack, and full radix reset verified.",
   );
   await route("link", (p) => p.ammo[0] === 14 && p.gates[0] === 3);
   let s = await read();
@@ -775,16 +383,17 @@ try {
   assert.equal((await read()).rule, "spark");
   await page.emulateMedia({ reducedMotion: "reduce" });
   await mkdir(resolve(root, "artifacts"), { recursive: true });
-  for (const [w, h] of [
+  const responsiveSizes = [
     [320, 568],
     [390, 844],
     [412, 915],
     [844, 390],
     [768, 1024],
     [1280, 900],
-  ]) {
+  ];
+  for (const [w, h] of responsiveSizes) {
     await page.setViewportSize({ width: w, height: h });
-    for (const rule of ["spark", "link", "gear", "pack"]) {
+    for (const rule of ["spark", "link", "gear"]) {
       s = await route(rule);
       assert.equal(
         await page.evaluate(
@@ -799,94 +408,58 @@ try {
         assert.ok(p.y - p.radius >= 0 && p.y + p.radius <= s.height);
         if (p.handle) assert.ok(p.handle.y + 13 < s.height);
       }
-      if (s.rule === "pack") {
-        for (const slot of s.pack.slots) {
-          assert.ok(slot.x - slot.radius >= 0 && slot.x + slot.radius <= s.width);
-          assert.ok(slot.y - slot.radius * 1.2 >= 0);
-          assert.ok(slot.y + slot.radius * 1.7 <= s.height);
-        }
-        assert.ok(
-          s.pack.viewports.every((view) =>
-            Math.abs(view.y - s.pack.viewports[0].y) < 0.01 &&
-            Math.abs(view.radius - s.pack.viewports[0].radius) < 0.01,
-          ) &&
-            s.pack.viewports.every((view, i, all) =>
-              i === 0 ||
-              (view.x > all[i - 1].x &&
-                view.x - all[i - 1].x >= view.radius + all[i - 1].radius),
-            ),
-        );
-        if (w === 320) {
-          await drag(
-            s.pack.places.find((place) => place.level === 0),
-            s.pack.slots.find((slot) => slot.level === 1),
-            17,
-          );
-          s = await read();
-          const step = focusStep(s.width),
-            inspection = await inspectScaleTouch([-step, -step * 2]),
-            levelOne = inspection.states[1],
-            levelOneDots = levelOne.pack.renderedDots.filter(
-              (dot) => dot.level === 1 && dot.visible,
-            );
-          assert.equal(levelOne.pack.camera.focusLevel, 1);
-          assert.ok(levelOneDots.length > 0);
-          assert.ok(levelOneDots.every((dot) => Math.abs(dot.radius - 7) < 0.2));
-          assert.equal(inspection.home.pack.camera.mode, "overview");
-        }
-      }
       await audit();
     }
   }
-  await page.setViewportSize({ width: 390, height: 844 });
-  s = await route("pack");
-  const reducedCarryFrom = s.pack.places.find((place) => place.level === 0),
-    reducedCarryTo = s.pack.slots.find((slot) => slot.level === 1);
-  await drag(reducedCarryFrom, reducedCarryTo, 17);
-  s = await read();
-  assert.equal(s.pack.revealCount, 1);
-  assert.deepEqual(s.pack.revealedLevels, [0, 1]);
-  assert.ok(s.pack.viewports.find((view) => view.level === 1));
-  assert.equal(s.pack.renderedDots.length, 17);
-  assert.equal(new Set(s.pack.renderedDots.map((dot) => dot.id)).size, 17);
-  assert.ok(s.pack.items.filter((item) => item.macro).every((item) => item.tree.children.length === 5));
-  const reducedL0Radius = s.pack.renderedDots.find(
-    (dot) => dot.level === 0 && dot.visible,
-  ).radius;
-  const reducedStep = focusStep(s.width),
-    reducedInspection = await inspectScaleMouse(
-      [-reducedStep, -reducedStep * 1.5, -reducedStep * 2],
+
+  // PACK stays inside portrait and narrow-landscape canvases; Number Mass and L0
+  // occupy separate hit regions, and the radix slider has its own lower track.
+  for (const [w, h] of [[320, 568], [390, 844], [412, 915], [844, 390]]) {
+    await page.setViewportSize({ width: w, height: h });
+    s = await route("pack");
+    assert.equal(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth > innerWidth ||
+          document.documentElement.scrollHeight > innerHeight,
+      ),
+      false,
     );
-  s = reducedInspection.states[2];
-  const reducedL1Dots = s.pack.renderedDots.filter(
-    (dot) => dot.level === 1 && dot.visible,
-  );
-  assert.equal(s.pack.camera.focusLevel, 1);
-  assert.equal(s.pack.camera.mode, "inspection");
-  assert.ok(reducedL1Dots.length > 0);
-  assert.ok(reducedL1Dots.every((dot) => Math.abs(dot.radius - reducedL0Radius) < 0.15));
-  assert.equal(reducedInspection.released.pack.camera.mode, "returning");
-  s = reducedInspection.home;
-  assert.equal(s.pack.camera.mode, "overview");
-  assert.equal(s.pack.camera.focusLevel, null);
-  assert.equal(s.pack.rawIds.length, 17);
-  await page.screenshot({ path: resolve(root, "artifacts/pack-reduced-motion.png") });
+    const mass = s.pack.numberMass,
+      l0 = s.pack.slots.find((slot) => slot.level === 0),
+      control = s.pack.control;
+    assert.ok(mass.x - mass.radius >= 0 && mass.x + mass.radius <= s.width);
+    assert.ok(mass.y - mass.radius >= 0 && mass.y + mass.radius <= s.height);
+    assert.ok(l0.x - l0.frameRadius >= 0 && l0.x + l0.frameRadius <= s.width);
+    assert.ok(l0.y - l0.frameRadius >= 0 && l0.y + l0.frameRadius + 35 < s.height);
+    assert.ok(Math.hypot(mass.x - l0.x, mass.y - l0.y) > mass.radius + l0.frameRadius + 12);
+    assert.ok(control.x1 >= 0 && control.x2 <= s.width && control.y < s.height);
+    assert.equal(await page.locator('#keyboard-controls input[data-pack-radix]').count(), 1);
+    await audit();
+  }
+
+  // Native touch stream on the smallest portrait layout, then verify all
+  // discovered place readouts still fit after L1 and L2 appear.
+  await page.setViewportSize({ width: 320, height: 568 });
   s = await route("pack");
-  const touchFrom = s.pack.places.find((place) => place.level === 0),
-    touchTo = s.pack.slots.find((slot) => slot.level === 1),
+  await packBase(4);
+  s = await settled();
+  const touchFrom = s.pack.numberMass,
+    touchTo = s.pack.slots.find((slot) => slot.level === 0),
     touchBox = await page.locator("#world").boundingBox(),
     packTouch = await context.newCDPSession(page);
   await packTouch.send("Input.dispatchTouchEvent", {
     type: "touchStart",
     touchPoints: [{ x: touchBox.x + touchFrom.x, y: touchBox.y + touchFrom.y }],
   });
-  for (let i = 1; i <= 10; i++)
+  assert.equal((await read()).dragIds.length, 17, "touch selects the entire Number Mass");
+  for (let i = 1; i <= 12; i++)
     await packTouch.send("Input.dispatchTouchEvent", {
       type: "touchMove",
       touchPoints: [
         {
-          x: touchBox.x + touchFrom.x + ((touchTo.x - touchFrom.x) * i) / 10,
-          y: touchBox.y + touchFrom.y + ((touchTo.y - touchFrom.y) * i) / 10,
+          x: touchBox.x + touchFrom.x + ((touchTo.x - touchFrom.x) * i) / 12,
+          y: touchBox.y + touchFrom.y + ((touchTo.y - touchFrom.y) * i) / 12,
         },
       ],
     });
@@ -895,12 +468,18 @@ try {
     touchPoints: [],
   });
   await packTouch.detach();
-  await settled();
-  s = await read();
-  assert.equal(s.pack.phase, "unpack");
-  assert.equal(s.pack.places.find((place) => place.level === 1).n, 3);
-  assert.equal(s.pack.places.find((place) => place.level === 0).n, 2);
+  s = await settled();
+  assert.deepEqual(s.pack.digits, [1, 0, 1]);
+  assert.deepEqual(s.pack.revealedLevels, [0, 1, 2]);
+  for (const place of s.pack.places) {
+    assert.ok(place.x - place.slot.frameRadius >= 0);
+    assert.ok(place.x + place.slot.frameRadius <= s.width);
+    assert.ok(place.y - place.slot.frameRadius - 15 >= 0);
+    assert.ok(place.y + place.slot.frameRadius + 30 <= s.height);
+  }
+  assert.equal(s.pack.numberMass.quantity, 0);
   await audit();
+  await page.screenshot({ path: resolve(root, "artifacts/pack-touch-320.png") });
   for (const rule of ["link", "gear"]) {
     s = await route(
       rule,

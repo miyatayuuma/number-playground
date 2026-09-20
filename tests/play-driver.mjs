@@ -54,7 +54,9 @@ export function driver(page, base) {
   }
   async function audit() {
     const s = await read(),
-      ids = [...s.pieces.flatMap((p) => p.ids), ...s.spent];
+      ids = s.rule === "pack"
+        ? [...s.pack.rawIds]
+        : [...s.pieces.flatMap((p) => p.ids), ...s.spent];
     assert.equal(ids.length, s.total);
     assert.equal(new Set(ids).size, s.total);
     if (!s.busy)
@@ -116,14 +118,21 @@ export function driver(page, base) {
     }
     throw new Error("width did not change");
   }
-  async function packBase() {
+  async function packBase(base = null) {
     const s = await read(),
       control = s.pack?.control;
     assert.ok(control, "PACK radix control");
+    const options = s.pack.allowedRadices,
+      targetBase = base ?? options.find((candidate) => candidate !== s.pack.base) ?? s.pack.base,
+      index = options.indexOf(targetBase),
+      targetX =
+        control.x1 +
+        ((control.x2 - control.x1) * Math.max(0, index)) /
+          Math.max(1, options.length - 1);
     const b = await page.locator("#world").boundingBox();
-    await page.mouse.move(b.x + control.x1, b.y + control.y);
+    await page.mouse.move(b.x + control.x, b.y + control.y);
     await page.mouse.down();
-    await page.mouse.move(b.x + control.x2, b.y + control.y, { steps: 10 });
+    await page.mouse.move(b.x + targetX, b.y + control.y, { steps: 10 });
     await page.mouse.up();
     await settled();
     return audit();
@@ -164,32 +173,11 @@ export function driver(page, base) {
           s.targets[i],
         );
       } else if (s.rule === "pack") {
-        if (s.pack.phase === "pack") {
-          const place = s.pack.places.find(
-              (candidate) =>
-                candidate.n >= s.pack.base &&
-                s.pack.slots.some(
-                  (slot) => slot.level === candidate.level + 1,
-                ),
-            ),
-            slot = place
-              ? s.pack.slots.find(
-                  (candidate) => candidate.level === place.level + 1,
-                )
-              : null;
-          assert.ok(place && slot, "PACK carryable place");
-          await drag(place, slot, place.rawIds.length);
-        } else if (s.pack.phase === "unpack") {
-          const item = s.pack.items.find((item) => item.macro);
-          assert.ok(item, "PACK macro");
-          const slot = s.pack.slots.find((slot) => slot.level === item.level - 1);
-          assert.ok(slot, "PACK lower slot");
-          await drag(item, slot, item.rawIds.length);
-        } else if (s.pack.phase === "choose") {
-          await packBase();
-        } else if (s.pack.phase === "break") {
-          return s;
-        }
+        if (s.pack.complete) return s;
+        const source = s.pack.numberMass,
+          place = s.pack.slots.find((slot) => slot.level === 0);
+        assert.ok(source.quantity && place, "PACK source and L0");
+        await drag(source, place, source.quantity);
       }
     }
     throw new Error(`No automatic next problem: ${id}`);
