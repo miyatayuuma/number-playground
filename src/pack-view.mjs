@@ -1319,8 +1319,9 @@ export class PackWorld extends FlowWorld {
       await this.tweenPackWorld(
         payload.rawIds,
         dots.map((dot) => ({ x: dot.wx + dx, y: dot.wy + dy, z: dot.wz })),
-        this.motion ? 265 : 68,
+        this.motion ? 265 : 88,
         token,
+        true,
       );
       if (token !== this.token) return false;
       for (const dot of dots) dot.flight = false;
@@ -1341,20 +1342,31 @@ export class PackWorld extends FlowWorld {
     this.deadAt = this.clock;
     this.flash = 0.9;
     this.burst(this.enemyPoint().x, this.enemyPoint().y, "#fff0c2", 0.75);
-    await this.tween([], [], this.motion ? 465 : 190, token);
+    await this.waitPackMotion(this.motion ? 465 : 220, token);
     if (token !== this.token) return false;
     this.busy = false;
     return true;
   }
 
-  async tweenPackWorld(ids, targets, ms, token) {
+  async waitPackMotion(ms, token) {
+    const start = this.clock;
+    await new Promise((resolve) => {
+      const tick = () => {
+        if (token !== this.token || this.clock - start >= ms) resolve();
+        else requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+  }
+
+  async tweenPackWorld(ids, targets, ms, token, preserveReducedDuration = false) {
     const starts = ids.map((id) => {
       const dot = this.units.get(id);
       dot.visible = true;
       dot.manual = true;
       return { x: dot.wx, y: dot.wy, z: dot.wz };
     });
-    if (!this.motion) ms = 1;
+    if (!this.motion) ms = preserveReducedDuration ? ms : 1;
     const start = this.clock;
     await new Promise((resolve) => {
       const tick = () => {
