@@ -258,3 +258,37 @@ export function placeSlotLayout(total, base, width, y) {
     y,
   }));
 }
+
+// PACK's frame describes a scale's radix grammar. Its points are hollow marks,
+// kept separate from the filled dots that represent quantity.
+export function radixFrame(base, radius = 48) {
+  if (!Number.isInteger(base) || base < 2 || base > 10)
+    throw new RangeError("PACK radix frame must have 2–10 points");
+  const points = shape(base, radius).dots
+    .map(({ x, y }) => ({ x, y }))
+    .sort(
+      (a, b) =>
+        Math.atan2(a.y, a.x) - Math.atan2(b.y, b.x),
+    );
+  return { base, radius, points };
+}
+
+// Scale views recede up the same field. A single faint next view can be shown
+// before it is discovered; higher views appear only after a carry reaches them.
+export function packScaleViewports(maxLevel, width, height) {
+  maxLevel = Math.max(0, Math.trunc(maxLevel));
+  const visibleMax = Math.min(maxLevel, 2),
+    showNext = visibleMax < 2,
+    lastLevel = visibleMax + (showNext ? 1 : 0),
+    bottom = Math.min(height * 0.73, height - 150),
+    step = Math.min(142, Math.max(74, height * 0.18)),
+    baseRadius = Math.min(52, width * 0.135, height * 0.105);
+  return Array.from({ length: lastLevel + 1 }, (_, level) => ({
+    level,
+    x: width / 2,
+    y: bottom - step * level,
+    radius: baseRadius * Math.pow(0.72, level),
+    scale: Math.pow(0.72, level),
+    ghost: level > visibleMax,
+  }));
+}

@@ -24,6 +24,8 @@ import {
   arrayShape,
   packCoefficientShape,
   placeSlotLayout,
+  radixFrame,
+  packScaleViewports,
 } from "../src/shapes.mjs";
 import {
   freshProgress,
@@ -200,11 +202,11 @@ test("PACK normalizes arbitrary same-level selections without preselecting a bun
   }
 });
 
-test("PACK applies the same carry rule recursively to make 101₄", () => {
+test("PACK carries recursively through parent children and fully unpacks by identity", () => {
   const stage = {
       ...structuredClone(PROBLEM_BANK.pack[0]),
       id: "pack:17:4",
-      radices: [4],
+      radices: [4, 4],
     },
     run = createRun(stage),
     original = [...run.pieces[0].ids];
@@ -229,11 +231,33 @@ test("PACK applies the same carry rule recursively to make 101₄", () => {
   assert.ok(second.ok);
   assert.equal(second.bundles.length, 1);
   assert.equal(second.remainderItemIds.length, 0);
-  assert.equal(second.complete, true);
+  assert.equal(second.locked, true);
+  assert.equal(second.complete, false);
   assert.deepEqual(second.lock.digits, [1, 0, 1]);
   assert.equal(second.lock.notation, "101₄");
   assert.deepEqual(packDigits(run), [1, 0, 1]);
   assert.equal(activePackItems(run).filter((item) => item.level === 1).length, 0);
+  const top = activePackItems(run).find((item) => item.level === 2);
+  assert.equal(top.children.length, 4);
+  assert.ok(
+    top.children.every(
+      (id) =>
+        run.pack.nodes[id].level === 1 &&
+        run.pack.nodes[id].children.length === 4,
+    ),
+  );
+  assert.ok(
+    top.children
+      .flatMap((id) => run.pack.nodes[id].children)
+      .every((id) => run.pack.nodes[id].level === 0),
+  );
+  unpackAll(run);
+  assert.deepEqual(
+    activePackItems(run)
+      .flatMap((item) => item.ids)
+      .sort((a, b) => a - b),
+    [...original].sort((a, b) => a - b),
+  );
   assert.deepEqual(run.pieces[0].ids, original);
   assert.equal(new Set(run.pieces[0].ids).size, 17);
   audit(run);
@@ -289,6 +313,60 @@ test("PACK keeps the empty middle place explicit after recursive carry", () => {
   );
   assert.deepEqual(packDigits(run), [1, 0, 1]);
   assert.equal(activePackItems(run).filter((item) => item.level === 1).length, 0);
+});
+
+test("PACK radix frames are distinct from quantity dots and scale views recede", () => {
+  const five = radixFrame(5, 40),
+    four = radixFrame(4, 40),
+    initial = packScaleViewports(0, 390, 844),
+    recursive = packScaleViewports(2, 390, 844);
+  assert.equal(five.points.length, 5);
+  assert.equal(four.points.length, 4);
+  assert.notDeepEqual(five.points, four.points);
+  assert.deepEqual(
+    initial.map(({ level, ghost }) => [level, ghost]),
+    [
+      [0, false],
+      [1, true],
+    ],
+  );
+  assert.deepEqual(
+    recursive.map(({ level, ghost }) => [level, ghost]),
+    [
+      [0, false],
+      [1, false],
+      [2, false],
+    ],
+  );
+  assert.ok(recursive[0].y > recursive[1].y);
+  assert.ok(recursive[1].y > recursive[2].y);
+  assert.ok(recursive[0].radius > recursive[1].radius);
+  assert.ok(recursive[1].radius > recursive[2].radius);
+});
+
+test("PACK radix reset removes old grouping while preserving all raw identities", () => {
+  const run = createRun(structuredClone(PROBLEM_BANK.pack[0])),
+    rawIds = [...run.pieces[0].ids];
+  normalizePackSelection(
+    run,
+    activePackItems(run).map((item) => item.id),
+  );
+  while (run.pack.phase === "unpack") {
+    const nextMacro = activePackItems(run).find((item) => item.macro);
+    assert.ok(nextMacro);
+    assert.ok(unpackPackItem(run, nextMacro.id).ok);
+  }
+  assert.equal(run.pack.phase, "choose");
+  assert.ok(activePackItems(run).every((item) => item.level === 0 && !item.macro));
+  assert.deepEqual(
+    activePackItems(run).flatMap((item) => item.ids).sort((a, b) => a - b),
+    [...rawIds].sort((a, b) => a - b),
+  );
+  assert.ok(setPackBase(run, 4));
+  assert.equal(run.pack.base, 4);
+  assert.ok(activePackItems(run).every((item) => item.level === 0 && !item.macro));
+  assert.deepEqual(run.pieces[0].ids, rawIds);
+  audit(run);
 });
 
 test("PACK full vertical slice keeps all 17 raw identities through radix change", () => {
