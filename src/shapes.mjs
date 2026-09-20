@@ -273,63 +273,117 @@ export function radixFrame(base, radius = 48) {
   return { base, radius, points };
 }
 
-// The outer viewports stay equal and aligned for quantity comparison. Rotation
-// changes their shallow depth projection and the scale of the nested math only.
-export function packScaleViewports(maxLevel, width, height, rotation = 0) {
+export const PACK_RAW_DOT_WORLD_RADIUS = 8;
+export const PACK_FOCUS_DOT_SCREEN_RADIUS = 7;
+
+function packPattern(base) {
+  const points = shape(base, 54).dots,
+    outerRadius = Math.max(...points.map((point) => Math.hypot(point.x, point.y)));
+  let nearest = Infinity;
+  for (let i = 0; i < points.length; i++)
+    for (let j = i + 1; j < points.length; j++)
+      nearest = Math.min(
+        nearest,
+        Math.hypot(points[i].x - points[j].x, points[i].y - points[j].y),
+      );
+  return {
+    points: points.map((point) => ({
+      x: point.x / outerRadius,
+      y: point.y / outerRadius,
+    })),
+    nearestSeparation: nearest / outerRadius,
+  };
+}
+
+// One physical dot radius and one repeated world-space growth rule define all
+// nested levels. Radices 2–5 share the same growth, so changing 5 to 4 changes
+// only the child arrangement, not the camera's level depths.
+export function packScaleGrowth(base) {
+  if (!Number.isInteger(base) || base < 2 || base > 10)
+    throw new RangeError("PACK scale radix must be 2–10");
+  const pattern = packPattern(base);
+  return Math.max(4.5, 1 + 2.25 / pattern.nearestSeparation);
+}
+
+// World-space macro geometry is recursively built from fixed-radius raw dots.
+// Child marks follow the same factorization shape as the radix frame. Camera
+// projection, never a level-specific dot multiplier, determines screen size.
+export function packNestedUnitShape(
+  base,
+  levels = 1,
+  rawRadius = PACK_RAW_DOT_WORLD_RADIUS,
+) {
+  if (!Number.isInteger(levels) || levels < 0)
+    throw new RangeError("PACK nested depth must be non-negative");
+  if (!(rawRadius > 0)) throw new RangeError("PACK raw dot radius must be positive");
+  if (levels === 0)
+    return {
+      base,
+      levels: 0,
+      radius: rawRadius,
+      rawRadius,
+      children: [],
+    };
+
+  const growth = packScaleGrowth(base),
+    pattern = packPattern(base),
+    inner = packNestedUnitShape(base, levels - 1, rawRadius),
+    childCenterRadius = (growth - 1) * inner.radius;
+  return {
+    base,
+    levels,
+    radius: growth * inner.radius,
+    rawRadius,
+    growth,
+    children: pattern.points.map((point, index) => ({
+      index,
+      x: point.x * childCenterRadius,
+      y: point.y * childCenterRadius,
+      radius: inner.radius,
+      inner,
+    })),
+  };
+}
+
+// Scale planes live in one perspective world. Their center offsets are chosen
+// so the overview projects them into a stable higher-to-lower horizontal row.
+export function packScaleViewports(maxLevel, width, height, base = 4) {
   maxLevel = Math.max(0, Math.trunc(maxLevel));
-  const visibleMax = Math.min(maxLevel, 2),
+  const visibleMax = maxLevel,
     showNext = visibleMax < 2,
     lastLevel = visibleMax + (showNext ? 1 : 0),
-    levels = Array.from({ length: lastLevel + 1 }, (_, i) => lastLevel - i),
-    count = levels.length,
-    radius = Math.min(54, (width - 20) / (count * 2 + 0.35), height * 0.13),
-    gap = count === 1 ? 0 : Math.min(radius * 2 + 18, (width - radius * 2 - 20) / (count - 1)),
-    phaseStep = count > 1 ? 1.36 / (count - 1) : 0,
-    maxPhase = phaseStep * ((count - 1) / 2),
-    orbitRadius = maxPhase ? (gap * (count - 1)) / (2 * Math.sin(maxPhase)) : 0,
-    y = Math.min(height * 0.61, height - 164);
-  return levels.map((level, index) => {
-    const phase = (index - (count - 1) / 2) * phaseStep,
-      turned = phase + rotation,
-      depth = Math.cos(turned) - Math.cos(phase),
-      x = width / 2 + orbitRadius * Math.sin(phase) + orbitRadius * 0.28 * (Math.sin(turned) - Math.sin(phase));
+    levels = Array.from({ length: lastLevel + 1 }, (_, index) => lastLevel - index),
+    layoutMax = Math.max(2, visibleMax),
+    count = layoutMax + 1,
+    growth = packScaleGrowth(base),
+    focalLength = Math.max(1, Math.min(width, height) * 1.15),
+    baseDistance =
+      (focalLength * PACK_RAW_DOT_WORLD_RADIUS) /
+      PACK_FOCUS_DOT_SCREEN_RADIUS,
+    overviewFrameRadius = growth * PACK_FOCUS_DOT_SCREEN_RADIUS,
+    pitch = Math.min(
+      overviewFrameRadius * 2 + 18,
+      (width - overviewFrameRadius * 2 - 24) / Math.max(1, count - 1),
+    );
+  return levels.map((level) => {
+    const unitWorldRadius =
+        PACK_RAW_DOT_WORLD_RADIUS * growth ** level,
+      frameWorldRadius = unitWorldRadius * growth,
+      depth = baseDistance * growth ** level,
+      overviewOffsetX = (layoutMax / 2 - level) * pitch;
     return {
       level,
-      x,
-      y: y + depth * 54,
-      radius,
-      frameRadius: radius,
-      scale: 1,
+      x: (overviewOffsetX * depth) / focalLength,
+      y: 0,
+      z: depth,
       depth,
-      innerScale: Math.max(0.72, Math.min(1.55, 1 + depth * 2.45)),
+      focalLength,
+      baseDistance,
+      overviewOffsetX,
+      unitWorldRadius,
+      frameWorldRadius,
+      overviewFrameRadius,
       ghost: level > visibleMax,
     };
   });
-}
-
-// Shared radix geometry for a macro's children. The item order is kept intact;
-// radixFrame() uses these same points, only sorting a copy for its contour.
-export function packNestedUnitShape(base, radius, levels = 1, innerScale = 1) {
-  if (!Number.isInteger(levels) || levels < 1)
-    throw new RangeError("PACK nested depth must be positive");
-  const points = shape(base, radius * 0.54 * innerScale).dots;
-  return {
-    base,
-    radius,
-    levels,
-    innerScale,
-    children: points.map((point, index) => {
-      const childRadius = radius * (levels > 1 ? 0.35 : 0.17) * innerScale;
-      return {
-        index,
-        x: point.x,
-        y: point.y,
-        radius: childRadius,
-        inner:
-          levels > 1
-            ? packNestedUnitShape(base, childRadius, levels - 1, innerScale)
-            : null,
-      };
-    }),
-  };
 }

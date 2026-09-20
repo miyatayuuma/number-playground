@@ -27,7 +27,14 @@ import {
   radixFrame,
   packScaleViewports,
   packNestedUnitShape,
+  packScaleGrowth,
+  PACK_RAW_DOT_WORLD_RADIUS,
+  PACK_FOCUS_DOT_SCREEN_RADIUS,
 } from "../src/shapes.mjs";
+import {
+  packCameraForFocus,
+  projectPackPoint,
+} from "../src/pack-view.mjs";
 import {
   freshProgress,
   restoreProgress,
@@ -316,16 +323,29 @@ test("PACK keeps the empty middle place explicit after recursive carry", () => {
   assert.equal(activePackItems(run).filter((item) => item.level === 1).length, 0);
 });
 
-test("PACK radix frames and nested unit layouts share one factorization geometry", () => {
+test("PACK raw dots share world size and camera projection defines every level", () => {
   const five = radixFrame(5, 40),
     four = radixFrame(4, 40),
-    initial = packScaleViewports(0, 390, 844),
-    recursive = packScaleViewports(2, 390, 844),
-    inspected = packScaleViewports(2, 390, 844, 0.55),
-    nested = packNestedUnitShape(4, 12, 2);
+    initial = packScaleViewports(0, 390, 844, 5),
+    recursive4 = packScaleViewports(2, 390, 844, 4),
+    recursive5 = packScaleViewports(2, 390, 844, 5),
+    nested = packNestedUnitShape(4, 2),
+    collectRawRadii = (unit) =>
+      unit.levels === 0
+        ? [unit.radius]
+        : unit.children.flatMap((child) => collectRawRadii(child.inner));
   assert.equal(five.points.length, 5);
   assert.equal(four.points.length, 4);
   assert.notDeepEqual(five.points, four.points);
+  assert.equal(packScaleGrowth(4), packScaleGrowth(5));
+  assert.deepEqual(
+    recursive4.map(({ level, ghost }) => [level, ghost]),
+    [
+      [2, false],
+      [1, false],
+      [0, false],
+    ],
+  );
   assert.deepEqual(
     initial.map(({ level, ghost }) => [level, ghost]),
     [
@@ -333,44 +353,98 @@ test("PACK radix frames and nested unit layouts share one factorization geometry
       [0, false],
     ],
   );
+  assert.ok(initial[0].overviewOffsetX < initial[1].overviewOffsetX);
+  assert.equal(
+    initial.find((slot) => slot.level === 1).x,
+    recursive4.find((slot) => slot.level === 1).x,
+    "canonical L1 center stays stable as higher levels become known",
+  );
   assert.deepEqual(
-    recursive.map(({ level, ghost }) => [level, ghost]),
-    [
-      [2, false],
-      [1, false],
-      [0, false],
-    ],
+    recursive4.map(({ level, depth, x }) => [level, depth, x]),
+    recursive5.map(({ level, depth, x }) => [level, depth, x]),
+    "base 5 to base 4 does not alter scale depth or canonical centers",
   );
-  assert.ok(initial[0].x < initial[1].x);
-  assert.equal(initial[0].y, initial[1].y);
-  assert.equal(new Set(recursive.map((slot) => slot.radius)).size, 1);
-  assert.equal(new Set(recursive.map((slot) => slot.y)).size, 1);
-  assert.ok(recursive[0].x < recursive[1].x);
-  assert.ok(recursive[1].x < recursive[2].x);
+
+  const overview = packCameraForFocus(initial, null),
+    overviewProjection = initial.map((slot) =>
+      projectPackPoint({ x: slot.x, y: slot.y, z: slot.z }, overview, 390, 844),
+    );
+  assert.ok(overviewProjection[0].x < overviewProjection[1].x);
   assert.ok(
-    recursive.every(
-      (slot, index, all) =>
-        index === 0 || slot.x - all[index - 1].x >= slot.radius + all[index - 1].radius,
+    initial.every(
+      (slot) =>
+        Math.abs(
+          slot.frameWorldRadius *
+            overview.focalLength /
+            slot.depth -
+            slot.overviewFrameRadius,
+        ) < 1e-8,
     ),
+    "overview perspective projects every scale frame to the same radius",
   );
-  for (const width of [320, 390, 844]) {
-    const mobile = packScaleViewports(2, width, width === 844 ? 390 : 844);
+
+  for (const level of [0, 1, 2]) {
+    const plane = recursive4.find((slot) => slot.level === level),
+      camera = packCameraForFocus(recursive4, level),
+      center = projectPackPoint(
+        { x: plane.x, y: plane.y, z: plane.z },
+        camera,
+        390,
+        844,
+      );
+    assert.equal(center.x, 195);
+    assert.equal(center.y, 422);
     assert.ok(
-      mobile.every(
-        (slot, index, all) =>
-          index === 0 || slot.x - all[index - 1].x >= slot.radius + all[index - 1].radius,
-      ),
+      Math.abs(
+        PACK_RAW_DOT_WORLD_RADIUS * center.scale -
+          PACK_FOCUS_DOT_SCREEN_RADIUS,
+      ) < 1e-8,
+      `raw@L${level} projects to the common focus diameter`,
     );
   }
-  assert.equal(new Set(inspected.map((slot) => slot.radius)).size, 1);
-  assert.ok(inspected.some((slot) => slot.y !== recursive.find((baseSlot) => baseSlot.level === slot.level).y));
-  assert.ok(inspected.some((slot) => slot.innerScale > 1));
-  assert.equal(nested.children.length, 4);
+
+  const baseCamera = packCameraForFocus(recursive4, 0),
+    levelOneCamera = packCameraForFocus(recursive4, 1),
+    raw0 = projectPackPoint(
+      { x: recursive4[2].x, y: 0, z: recursive4[2].z },
+      baseCamera,
+      390,
+      844,
+    ),
+    raw1 = projectPackPoint(
+      { x: recursive4[1].x, y: 0, z: recursive4[1].z },
+      baseCamera,
+      390,
+      844,
+    ),
+    cluster1 = packNestedUnitShape(4, 1).radius * raw1.scale;
+  assert.ok(Math.abs(PACK_RAW_DOT_WORLD_RADIUS * raw0.scale - cluster1) < 1e-8);
+
+  const levelTwo = recursive4.find((slot) => slot.level === 2),
+    topCamera = packCameraForFocus(recursive4, 2),
+    topCenter = projectPackPoint(
+      { x: levelTwo.x, y: 0, z: levelTwo.z },
+      topCamera,
+      390,
+      844,
+    ),
+    croppedFrameRadius = levelTwo.frameWorldRadius * topCenter.scale;
+  assert.ok(croppedFrameRadius > 390 / 2);
   assert.ok(nested.children.every((child) => child.inner.children.length === 4));
-  const geometryPoints = shape(4, nested.radius * 0.54).dots;
-  assert.deepEqual(
-    nested.children.map(({ x, y }) => ({ x, y })),
-    geometryPoints.map(({ x, y }) => ({ x, y })),
+  assert.equal(collectRawRadii(nested).length, 16);
+  assert.ok(collectRawRadii(nested).every((radius) => radius === PACK_RAW_DOT_WORLD_RADIUS));
+
+  assert.ok(
+    [320, 390, 844].every((width) => {
+      const layout = packScaleViewports(2, width, width === 844 ? 390 : 844, 4),
+        camera = packCameraForFocus(layout, null),
+        projected = layout.map((slot) =>
+          projectPackPoint({ x: slot.x, y: slot.y, z: slot.z }, camera, width, width === 844 ? 390 : 844),
+        );
+      return projected.every((point) => point.visible) &&
+        projected[0].x < projected[1].x && projected[1].x < projected[2].x;
+    }),
+    "overview keeps higher-to-lower order at mobile and landscape widths",
   );
 });
 
