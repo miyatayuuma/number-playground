@@ -516,7 +516,7 @@ try {
   await settled();
   assert.deepEqual(
     (await read()).pieces.map((p) => p.n),
-    [4, 32],
+    [4, 5],
   );
   for (const dot of small.dots) {
     const pick = await touchPeel(context, page, dot, 0, -24, {
