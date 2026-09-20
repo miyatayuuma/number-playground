@@ -130,7 +130,7 @@ function keyboardUI() {
             )
             .map(
               (place) =>
-                `<button data-pack-place="${place.level}">この位を左へ送る</button>`,
+                `<button data-pack-place="${place.level}">一段奥の視点へ移す</button>`,
             )
             .join("")
         : state.phase === "unpack"
@@ -138,7 +138,7 @@ function keyboardUI() {
               .filter((item) => item.macro)
               .map(
                 (item) =>
-                  `<button data-pack-item="${item.id}">右の位へほどく</button>`,
+                  `<button data-pack-item="${item.id}">一段手前へ広げる</button>`,
               )
               .join("")
           : state.phase === "choose" && state.control
@@ -546,8 +546,10 @@ canvas.addEventListener("pointerup", (e) => {
     pointer = null;
     if (canvas.hasPointerCapture(e.pointerId))
       canvas.releasePointerCapture(e.pointerId);
+    const previousBase = run.pack.base;
     if (nextBase && setPackBase(run, nextBase)) {
       tone("merge");
+      world.radixChanged?.(previousBase, nextBase);
       world.sync();
       keyboardUI();
       announce("");
@@ -693,8 +695,11 @@ document.querySelector("#keyboard-controls").addEventListener("click", (e) => {
       return;
     }
     if (b.dataset.packBase !== undefined) {
-      if (setPackBase(run, Number(b.dataset.packBase))) {
+      const previousBase = run.pack.base,
+        nextBase = Number(b.dataset.packBase);
+      if (setPackBase(run, nextBase)) {
         tone("merge");
+        world.radixChanged?.(previousBase, nextBase);
         world.sync();
         keyboardUI();
       }

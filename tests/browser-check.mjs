@@ -89,15 +89,25 @@ try {
     "Real drags solved merge, remainder, chained division, common widths; automatic continuation verified.",
   );
 
-  // PACK Pass 2: start from one factorization-shaped 17, let an
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  // PACK Pass 3: start from one factorization-shaped 17, let an
   // insufficient transfer rebound, carry all 17 in one gesture, unpack, then
   // apply the same boundary rule recursively to produce the empty middle place.
   let packState = await route("pack");
+  await mkdir(resolve(root, "artifacts"), { recursive: true });
+  await page.screenshot({ path: resolve(root, "artifacts/pack-initial.png") });
   assert.equal(packState.total, 17);
   assert.equal(packState.progress.pack, undefined);
   assert.equal(packState.pack.base, 5);
   assert.equal(packState.pack.phase, "pack");
   assert.equal(packState.pack.groups, undefined);
+  assert.deepEqual(
+    packState.pack.viewports.map(({ level, ghost }) => [level, ghost]),
+    [
+      [0, false],
+      [1, true],
+    ],
+  );
   assert.equal(
     packState.pack.places.find((place) => place.level === 0).n,
     17,
@@ -128,7 +138,13 @@ try {
   // the two remainders return to the lower place.
   const base5Place = packState.pack.places.find((place) => place.level === 0);
   assert.equal(base5Place.n, 17);
-  await drag(base5Place, base5Upper, 17);
+  await drag(base5Place, base5Upper, 17, false);
+  const firstReveal = await read();
+  assert.equal(firstReveal.busy, true);
+  assert.deepEqual(firstReveal.pack.transition?.type, "scale-reveal");
+  assert.equal(firstReveal.pack.transition?.level, 1);
+  await page.screenshot({ path: resolve(root, "artifacts/pack-scale-reveal.png") });
+  await settled();
   packState = await read();
   assert.equal(packState.pack.phase, "unpack");
   assert.equal(packState.pack.locks.length, 1);
@@ -143,6 +159,26 @@ try {
     2,
   );
   assert.deepEqual(packState.pieces[0].ids, originalPackIds);
+  const base5Macros = packState.pack.items.filter((item) => item.macro);
+  assert.equal(base5Macros.length, 3);
+  assert.ok(base5Macros.every((item) => item.children.length === 5));
+  assert.deepEqual(
+    packState.pack.items
+      .flatMap((item) => item.rawIds)
+      .sort((a, b) => a - b),
+    [...originalPackIds].sort((a, b) => a - b),
+  );
+  assert.equal(packState.pack.revealCount, 1);
+  assert.deepEqual(packState.pack.revealedLevels, [0, 1]);
+  assert.deepEqual(
+    packState.pack.viewports.map(({ level, ghost }) => [level, ghost]),
+    [
+      [0, false],
+      [1, false],
+      [2, true],
+    ],
+  );
+  await page.screenshot({ path: resolve(root, "artifacts/pack-base5-carry.png") });
   await audit();
 
   while (packState.pack.phase === "unpack") {
@@ -151,7 +187,11 @@ try {
         (candidate) => candidate.level === item.level - 1,
       );
     assert.ok(item && slot);
-    await drag(item, slot, 1);
+    await drag(item, slot, 1, false);
+    if (packState.pack.phase === "unpack") {
+      await page.screenshot({ path: resolve(root, "artifacts/pack-unpack-motion.png") });
+      await settled();
+    }
     packState = await read();
   }
   assert.equal(packState.pack.phase, "choose");
@@ -159,10 +199,20 @@ try {
   assert.ok(packState.pack.items.every((item) => item.rawIds.length === 1));
   assert.deepEqual(packState.pieces[0].ids, originalPackIds);
 
+  const scaleCameraBeforeRadixChange = packState.pack.viewports.map(
+    ({ level, x, y, radius }) => [level, x, y, radius],
+  );
   await packBase();
   packState = await read();
   assert.equal(packState.pack.base, 4);
+  assert.equal(packState.pack.radixPoints, 4);
   assert.equal(packState.pack.phase, "pack");
+  assert.deepEqual(
+    packState.pack.viewports.map(({ level, x, y, radius }) => [level, x, y, radius]),
+    scaleCameraBeforeRadixChange,
+  );
+  assert.equal(packState.pack.transition?.type, "radix-change");
+  await page.screenshot({ path: resolve(root, "artifacts/pack-base4-frame.png") });
 
   const base4Lower = packState.pack.places.find((place) => place.level === 0),
     base4MiddleSlot = packState.pack.slots.find((slot) => slot.level === 1);
@@ -179,11 +229,21 @@ try {
     packState.pack.places.find((place) => place.level === 1).n,
     4,
   );
+  assert.equal(
+    packState.pack.revealCount,
+    1,
+    "the scale 1 viewport stays known when the radix changes",
+  );
 
   const middle = packState.pack.places.find((place) => place.level === 1),
     topSlot = packState.pack.slots.find((slot) => slot.level === 2);
   assert.ok(middle && topSlot);
-  await drag(middle, topSlot, 4);
+  await drag(middle, topSlot, 4, false);
+  const secondReveal = await read();
+  assert.equal(secondReveal.pack.transition?.type, "scale-reveal");
+  assert.equal(secondReveal.pack.transition?.level, 2);
+  await page.screenshot({ path: resolve(root, "artifacts/pack-recursive-reveal.png") });
+  await settled();
   packState = await read();
   assert.equal(packState.status, "won");
   assert.equal(packState.pack.phase, "break");
@@ -201,6 +261,18 @@ try {
     packState.pack.places.find((place) => place.level === 0).n,
     1,
   );
+  assert.equal(packState.pack.revealCount, 2);
+  assert.deepEqual(packState.pack.revealedLevels, [0, 1, 2]);
+  assert.ok(packState.pack.viewports.every((viewport) => !viewport.ghost));
+  const base4Top = packState.pack.items.find((item) => item.level === 2);
+  assert.equal(base4Top.children.length, 4);
+  assert.deepEqual(
+    packState.pack.items
+      .flatMap((item) => item.rawIds)
+      .sort((a, b) => a - b),
+    [...originalPackIds].sort((a, b) => a - b),
+  );
+  await page.screenshot({ path: resolve(root, "artifacts/pack-base4-final.png") });
   assert.ok(packState.pack.slots.some((slot) => slot.level === 1));
   assert.deepEqual(packState.pieces[0].ids, originalPackIds);
   await audit();
@@ -212,7 +284,7 @@ try {
   assert.equal(packState.rule, "pack");
   assert.equal(packState.status, "won");
   console.log(
-    "PACK Pass 2 real drags verified rebound, 17→32₅ in one carry, unpack, and recursive 17→101₄ with an empty middle place.",
+    "PACK Pass 3 real drags verified 17→32₅, stable scale views across radix change, 17→101₄ recursion, and an empty middle viewport.",
   );
   await route("link", (p) => p.ammo[0] === 14 && p.gates[0] === 3);
   let s = await read();
@@ -368,16 +440,62 @@ try {
         assert.ok(p.y - p.radius >= 0 && p.y + p.radius <= s.height);
         if (p.handle) assert.ok(p.handle.y + 13 < s.height);
       }
-      if (s.rule === "pack")
+      if (s.rule === "pack") {
         for (const slot of s.pack.slots) {
           assert.ok(slot.x - slot.radius >= 0 && slot.x + slot.radius <= s.width);
           assert.ok(slot.y - slot.radius * 1.2 >= 0);
           assert.ok(slot.y + slot.radius * 1.7 <= s.height);
         }
+        assert.ok(
+          s.pack.viewports.every((view, i, all) =>
+            i === 0 ||
+            (view.y < all[i - 1].y && view.radius < all[i - 1].radius),
+          ),
+        );
+      }
       await audit();
     }
   }
   await page.setViewportSize({ width: 390, height: 844 });
+  s = await route("pack");
+  const reducedCarryFrom = s.pack.places.find((place) => place.level === 0),
+    reducedCarryTo = s.pack.slots.find((slot) => slot.level === 1);
+  await drag(reducedCarryFrom, reducedCarryTo, 17);
+  s = await read();
+  assert.equal(s.pack.revealCount, 1);
+  assert.deepEqual(s.pack.revealedLevels, [0, 1]);
+  assert.ok(s.pack.viewports.find((view) => view.level === 1));
+  await page.screenshot({ path: resolve(root, "artifacts/pack-reduced-motion.png") });
+  s = await route("pack");
+  const touchFrom = s.pack.places.find((place) => place.level === 0),
+    touchTo = s.pack.slots.find((slot) => slot.level === 1),
+    touchBox = await page.locator("#world").boundingBox(),
+    packTouch = await context.newCDPSession(page);
+  await packTouch.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [{ x: touchBox.x + touchFrom.x, y: touchBox.y + touchFrom.y }],
+  });
+  for (let i = 1; i <= 10; i++)
+    await packTouch.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [
+        {
+          x: touchBox.x + touchFrom.x + ((touchTo.x - touchFrom.x) * i) / 10,
+          y: touchBox.y + touchFrom.y + ((touchTo.y - touchFrom.y) * i) / 10,
+        },
+      ],
+    });
+  await packTouch.send("Input.dispatchTouchEvent", {
+    type: "touchEnd",
+    touchPoints: [],
+  });
+  await packTouch.detach();
+  await settled();
+  s = await read();
+  assert.equal(s.pack.phase, "unpack");
+  assert.equal(s.pack.places.find((place) => place.level === 1).n, 3);
+  assert.equal(s.pack.places.find((place) => place.level === 0).n, 2);
+  await audit();
   for (const rule of ["link", "gear"]) {
     s = await route(
       rule,

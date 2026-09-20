@@ -736,7 +736,7 @@ export class World {
       const d = this.units.get(id);
       d.visible = true;
       d.manual = true;
-      return { x: d.x, y: d.y };
+      return { x: d.x, y: d.y, r: d.r };
     });
     if (!this.motion) ms = 1;
     const start = this.clock,
@@ -763,6 +763,8 @@ export class World {
           );
           d.x = starts[i].x + (p.x - starts[i].x) * e;
           d.y = starts[i].y + (p.y - starts[i].y) * e;
+          if (Number.isFinite(p.r))
+            d.r = starts[i].r + (p.r - starts[i].r) * e;
         });
         if (progress < 1) requestAnimationFrame(tick);
         else resolve();
