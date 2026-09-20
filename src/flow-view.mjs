@@ -105,12 +105,23 @@ export class FlowWorld extends World {
   read() {
     const r = super.read(),
       active = activeTargets(this.run),
-      transition =
+      pendingTarget =
         this.run.stage.area === "spark" &&
         this.busy &&
         Number.isInteger(this.sparkTransitionTargetIndex)
-          ? [this.sparkTransitionTargetIndex]
-          : null;
+          ? this.sparkTransitionTargetIndex
+          : null,
+      pendingPhase =
+        pendingTarget === null ? null : this.run.targets[pendingTarget]?.phase,
+      pendingSharesPhase =
+        pendingTarget !== null &&
+        active.some((i) => this.run.targets[i].phase === pendingPhase),
+      visibleTargets =
+        pendingTarget === null
+          ? active
+          : pendingSharesPhase
+            ? [...new Set([...active, pendingTarget])]
+            : [pendingTarget];
     r.pieces.forEach((p) => {
       const source = this.run.pieces.find((q) => q.id === p.id);
       p.width = source.width;
@@ -122,9 +133,7 @@ export class FlowWorld extends World {
       t.width = source.width;
       t.input = source.input;
       t.visible =
-        this.run.stage.area === "spark"
-          ? (transition || active).includes(i)
-          : true;
+        this.run.stage.area === "spark" ? visibleTargets.includes(i) : true;
       const s = this.targetShape(source, t.radius * 0.78);
       t.dots = s.dots.map((d) => ({ x: t.x + d.x, y: t.y + d.y }));
       t.pitch = s.pitch;
@@ -179,13 +188,23 @@ export class FlowWorld extends World {
   drawTargets() {
     const c = this.ctx,
       active = activeTargets(this.run),
-      transition =
+      pendingTarget =
         this.run.stage.area === "spark" &&
         this.busy &&
         Number.isInteger(this.sparkTransitionTargetIndex)
-          ? [this.sparkTransitionTargetIndex]
+          ? this.sparkTransitionTargetIndex
           : null,
-      visible = transition || active;
+      pendingPhase =
+        pendingTarget === null ? null : this.run.targets[pendingTarget]?.phase,
+      pendingSharesPhase =
+        pendingTarget !== null &&
+        active.some((i) => this.run.targets[i].phase === pendingPhase),
+      visible =
+        pendingTarget === null
+          ? active
+          : pendingSharesPhase
+            ? [...new Set([...active, pendingTarget])]
+            : [pendingTarget];
     this.run.targets.forEach((t, i) => {
       const p = this.targetPoint(i),
         s = this.targetShape(t, p.radius * 0.78),
@@ -373,16 +392,12 @@ export class FlowWorld extends World {
       enemy = this.enemyPoint(),
       target = result.targetPoint || this.targetPoint(result.targetIndex || 0),
       targetPhase = this.run.targets[result.targetIndex]?.phase,
-      sparkPhaseTransition =
+      sparkPendingImpact =
         this.run.stage.area === "spark" &&
         result.ok &&
         result.type === "hit" &&
-        !result.complete &&
-        Number.isInteger(targetPhase) &&
-        !activeTargets(this.run).some(
-          (i) => this.run.targets[i].phase === targetPhase,
-        );
-    this.sparkTransitionTargetIndex = sparkPhaseTransition
+        Number.isInteger(targetPhase);
+    this.sparkTransitionTargetIndex = sparkPendingImpact
       ? result.targetIndex
       : null;
     if (!result.ok) {
@@ -453,7 +468,7 @@ export class FlowWorld extends World {
       );
       if (token !== this.token) return;
       impact(target, 1.2);
-      if (sparkPhaseTransition) this.sparkTransitionTargetIndex = null;
+      if (sparkPendingImpact) this.sparkTransitionTargetIndex = null;
     }
     if (token !== this.token) return;
     for (const d of this.units.values()) {
