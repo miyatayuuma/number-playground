@@ -17,15 +17,69 @@ function createPackState(stage, ids) {
     ]),
   );
   return {
-    base: stage.radices[0],
+    base: stage.startRadix ?? stage.radices[0],
     phase: "pack",
+    settled: true,
     numberMassRawIds: [...ids],
     discoveredLevels: [0],
     active: [],
     nodes,
     nextMacroId: 0,
     nextOrder: ids.length,
+    defenseLocks: createPackDefenseLocks(stage),
   };
+}
+
+function canonicalDigitsForQuantity(quantity, radix) {
+  if (
+    !Number.isInteger(quantity) ||
+    quantity < 0 ||
+    !Number.isInteger(radix) ||
+    radix < 2
+  )
+    throw new RangeError(
+      "PACK canonical digits require a non-negative quantity and valid radix",
+    );
+  if (quantity === 0) return [0];
+  const lowToHigh = [];
+  while (quantity > 0) {
+    lowToHigh.push(quantity % radix);
+    quantity = Math.floor(quantity / radix);
+  }
+  return lowToHigh.reverse();
+}
+
+export function packCanonicalDigits(quantity, radix) {
+  return canonicalDigitsForQuantity(quantity, radix);
+}
+
+function createPackDefenseLocks(stage) {
+  const quantity = stage.quantity || stage.ammo.reduce((sum, n) => sum + n, 0),
+    targetRadices = stage.targetRadices || [];
+  if (
+    !Array.isArray(targetRadices) ||
+    !targetRadices.length ||
+    targetRadices.length > 3
+  )
+    throw new RangeError("PACK requires at least one defense lock");
+  const radices = new Set(),
+    structures = new Set();
+  return targetRadices.map((radix, index) => {
+    if (!stage.radices.includes(radix) || radices.has(radix))
+      throw new RangeError("PACK target radices must be valid and unique");
+    const digits = canonicalDigitsForQuantity(quantity, radix),
+      signature = digits.join(",");
+    if (structures.has(signature))
+      throw new RangeError("PACK target structures must be unique");
+    radices.add(radix);
+    structures.add(signature);
+    return {
+      id: `lock-${index}`,
+      radix,
+      digits,
+      activated: false,
+    };
+  });
 }
 
 function requirePack(run) {
@@ -98,6 +152,7 @@ function packStateSnapshot(pack) {
     active,
     numberMassRawIds: [...pack.numberMassRawIds],
     discoveredLevels,
+    settled: pack.settled,
     lowToHighDigits: Array.from({ length: max + 1 }, (_, level) =>
       counts.get(level) || 0,
     ),
@@ -155,6 +210,133 @@ export function packDigits(run) {
   return Array.from({ length: max + 1 }, (_, level) =>
     counts.get(level) || 0,
   ).reverse();
+}
+
+export function matchPackDefense(run) {
+  if (
+    run?.stage?.area !== "pack" ||
+    run.status !== "play" ||
+    run.pack.phase !== "pack" ||
+    run.pack.numberMassRawIds.length !== 0 ||
+    run.pack.settled !== true ||
+    !isCanonicalPack(run)
+  )
+    return { ok: false, reason: "not-settled" };
+
+  const digits = packDigits(run),
+    target = run.pack.defenseLocks.find(
+      (lock) => !lock.activated && sameDigits(lock.digits, digits),
+    );
+  if (!target) return { ok: false, reason: "no-match" };
+  target.activated = true;
+  return {
+    ok: true,
+    lockId: target.id,
+    activatedCount: run.pack.defenseLocks.filter((lock) => lock.activated).length,
+    lockCount: run.pack.defenseLocks.length,
+    allActivated: run.pack.defenseLocks.every((lock) => lock.activated),
+  };
+}
+
+function sameDigits(a, b) {
+  return a.length === b.length && a.every((digit, index) => digit === b[index]);
+}
+
+export function settlePackTransition(run) {
+  if (run?.stage?.area !== "pack" || !run.pack || !isCanonicalPack(run))
+    return false;
+  run.pack.settled = true;
+  return true;
+}
+
+export function beginPackTransition(run) {
+  if (run?.stage?.area !== "pack" || !run.pack || !isCanonicalPack(run))
+    return false;
+  run.pack.settled = false;
+  return true;
+}
+
+export function packDefenseCleared(run) {
+  return (
+    run?.stage?.area === "pack" &&
+    run.pack.defenseLocks.length > 0 &&
+    run.pack.defenseLocks.every((lock) => lock.activated)
+  );
+}
+
+export function buildPackAttackPlan(run) {
+  if (
+    run?.status !== "play" ||
+    run.pack?.phase !== "pack" ||
+    run.pack.numberMassRawIds.length !== 0 ||
+    run.pack.settled !== true ||
+    !packDefenseCleared(run) ||
+    !isCanonicalPack(run)
+  )
+    return { ok: false, reason: "defense-not-cleared-or-unsettled" };
+  const payloads = activePackItems(run)
+      .sort((a, b) => b.level - a.level || a.order - b.order)
+      .map((item) => ({
+        itemId: item.id,
+        level: item.level,
+        targetLayer: item.level,
+        rawIds: [...item.ids],
+        weight: item.ids.length,
+      })),
+    rawIds = payloads.flatMap((payload) => payload.rawIds);
+  if (rawIds.length !== run.dots.length || new Set(rawIds).size !== rawIds.length)
+    return { ok: false, reason: "identity-accounting-failed" };
+  return { ok: true, placeCount: packDigits(run).length, rawIds, payloads };
+}
+
+export function beginPackAttack(run) {
+  const plan = buildPackAttackPlan(run);
+  if (!plan.ok) return plan;
+  run.pack.phase = "attack";
+  run.pack.attack = {
+    placeCount: plan.placeCount,
+    payloads: plan.payloads.map((payload) => ({ ...payload, rawIds: [...payload.rawIds] })),
+    impactedItemIds: [],
+    resolvedRawIds: [],
+  };
+  run.status = "attack";
+  return plan;
+}
+
+export function resolvePackAttackPayload(run, itemId) {
+  const pack = run?.pack,
+    attack = pack?.attack,
+    payload = attack?.payloads.find((candidate) => candidate.itemId === itemId);
+  if (
+    run?.status !== "attack" || pack.phase !== "attack" || !payload ||
+    attack.impactedItemIds.includes(itemId) ||
+    payload.rawIds.some((id) => attack.resolvedRawIds.includes(id))
+  ) return { ok: false };
+  attack.impactedItemIds.push(itemId);
+  attack.resolvedRawIds.push(...payload.rawIds);
+  const complete =
+    attack.resolvedRawIds.length === run.dots.length &&
+    new Set(attack.resolvedRawIds).size === run.dots.length &&
+    run.dots.every((dot) => attack.resolvedRawIds.includes(dot.id));
+  if (complete) {
+    pack.phase = "break";
+    run.status = "break";
+  }
+  return { ok: true, complete, resolvedCount: attack.resolvedRawIds.length };
+}
+
+export function completePackBreak(run) {
+  const attack = run?.pack?.attack;
+  if (
+    run?.stage?.area !== "pack" || run.status !== "break" ||
+    run.pack.phase !== "break" || !attack ||
+    attack.resolvedRawIds.length !== run.dots.length ||
+    new Set(attack.resolvedRawIds).size !== run.dots.length ||
+    !run.dots.every((dot) => attack.resolvedRawIds.includes(dot.id))
+  ) return false;
+  run.pack.phase = "next";
+  run.status = "won";
+  return true;
 }
 
 export function pourPackMass(run, targetLevel = 0, maxRawCount = Infinity) {
@@ -297,6 +479,7 @@ export function setPackBase(run, base) {
   pack.active = [];
   pack.discoveredLevels = [0];
   pack.phase = "pack";
+  pack.settled = true;
   return true;
 }
 

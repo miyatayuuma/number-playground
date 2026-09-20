@@ -153,15 +153,20 @@ try {
   );
 
   await page.emulateMedia({ reducedMotion: "no-preference" });
-  // PACK Redesign Task 1: one neutral source, discovered places, automatic carry.
-  let packState = await route("pack");
+  // One ghost shows only a defense silhouette; the player experiments with
+  // radices until the same Number Mass forms that structure.
+  let packState = await route("pack", () => true, 1);
   await mkdir(resolve(root, "artifacts"), { recursive: true });
   await page.screenshot({ path: resolve(root, "artifacts/pack-mass-initial.png") });
   assert.equal(packState.total, 17);
-  assert.equal(packState.progress.pack, undefined);
+  assert.equal(packState.progress.pack.difficulty, 1);
   assert.equal(packState.status, "play");
-  assert.equal(packState.pack.base, 5);
-  assert.equal(packState.pack.control.current, 5);
+  assert.equal(packState.pack.base, 3);
+  assert.equal(packState.pack.control.current, 3);
+  assert.equal(packState.pack.ghosts.length, 1);
+  assert.equal(packState.pack.ghosts[0].active, false);
+  const visibleText = await page.locator("body").innerText();
+  assert.doesNotMatch(visibleText, /base\s*[345]|[345]進|[0-9]+₍?[345]/i);
   assert.deepEqual(packState.pack.revealedLevels, [0]);
   assert.deepEqual(packState.pack.viewports.map((view) => view.level), [0]);
   assert.deepEqual(packState.pack.places.map(({ level, n }) => [level, n]), [[0, 0]]);
@@ -193,24 +198,24 @@ try {
   assert.deepEqual([...streamMotion.pack.rawIds].sort((a, b) => a - b), originalPackIds);
   await page.screenshot({ path: resolve(root, "artifacts/pack-stream-motion.png") });
   packState = await settled();
-  assert.deepEqual(packState.pack.digits, [3, 2]);
+  assert.deepEqual(packState.pack.digits, [1, 2, 2]);
   assert.equal(packState.pack.numberMass.quantity, 0);
-  assert.deepEqual(packState.pack.revealedLevels, [0, 1]);
+  assert.deepEqual(packState.pack.revealedLevels, [0, 1, 2]);
   assert.deepEqual(
     packState.pack.places.map(({ level, digit }) => [level, digit]).sort((a, b) => a[0] - b[0]),
-    [[0, 2], [1, 3]],
+    [[0, 2], [1, 2], [2, 1]],
   );
+  assert.equal(packState.pack.ghosts.every((ghost) => !ghost.active), true);
   assert.deepEqual(packState.pack.directInputLevels, []);
-  const base5Geometry = packState.pack.radixGeometry;
   await page.waitForTimeout(450);
-  assert.equal((await read()).status, "play", "canonical completion does not attack or advance");
+  assert.equal((await read()).status, "play", "a mismatching structure has no penalty or attack");
 
-  // A new radix dissolves the entire old hierarchy back into the same raw mass.
+  // A radix reset restores the same raw identities, then base 4 displays its
+  // real intermediate zero without activating the base 5 defense ghost.
   await packBase(4);
   packState = await settled();
   assert.equal(packState.pack.base, 4);
   assert.equal(packState.pack.control.current, 4);
-  assert.notDeepEqual(packState.pack.radixGeometry, base5Geometry);
   assert.deepEqual(packState.pack.rawIds.sort((a, b) => a - b), originalPackIds);
   assert.deepEqual(packState.pack.numberMass.ids.sort((a, b) => a - b), originalPackIds);
   assert.equal(packState.pack.numberMass.quantity, 17);
@@ -245,13 +250,82 @@ try {
   assert.equal(packState.pack.renderedDots.length, 17);
   assert.equal(new Set(packState.pack.renderedDots.map((dot) => dot.id)).size, 17);
   assert.equal(packState.status, "play");
-  await page.waitForTimeout(450);
-  assert.equal((await read()).runToken, packState.runToken);
-  assert.equal((await read()).status, "play");
   await page.screenshot({ path: resolve(root, "artifacts/pack-base4-canonical.png") });
-  console.log(
-    "PACK Number Mass streaming, automatic recursive carry, zero digit, no attack, and full radix reset verified.",
+  assert.equal(packState.pack.ghosts.every((ghost) => !ghost.active), true);
+
+  // Correct structure activates the lock, removes the defense, sends the same
+  // raw IDs through the old layered attack, breaks the enemy, and advances.
+  await packBase(5);
+  packState = await settled();
+  assert.equal(packState.pack.numberMass.quantity, 17);
+  assert.deepEqual([...packState.pack.rawIds].sort((a, b) => a - b), originalPackIds);
+  const finalMass = packState.pack.numberMass,
+    finalL0 = packState.pack.slots.find((slot) => slot.level === 0),
+    beforeFinalRun = packState.runToken;
+  await drag(finalMass, finalL0, 17, false);
+  await page.evaluate(async () => {
+    window.__readFlow = (await import("./src/game.mjs")).inspect;
+  });
+  await page.waitForFunction(
+    (token) => window.__readFlow().status === "attack" || window.__readFlow().status === "break" || window.__readFlow().runToken !== token,
+    beforeFinalRun,
   );
+  let finalPhase = await read();
+  assert.equal(finalPhase.pack.defenseCleared, true);
+  assert.equal(await page.locator('#keyboard-controls input[data-pack-radix]').count(), 0);
+  assert.equal(finalPhase.pack.control, null);
+  const attackBase = finalPhase.pack.base,
+    attackBounds = await page.locator("#world").boundingBox();
+  await page.mouse.click(
+    attackBounds.x + finalPhase.width * 0.5,
+    attackBounds.y + finalPhase.height * 0.9,
+  );
+  finalPhase = await read();
+  assert.equal(finalPhase.pack.base, attackBase, "the radix control is locked during attack");
+  assert.equal(finalPhase.dragIds.length, 0, "Number Mass input is locked during attack");
+  await page.screenshot({ path: resolve(root, "artifacts/pack-attack.png") });
+  await page.waitForFunction((token) => window.__readFlow().status === "break" || window.__readFlow().runToken !== token, beforeFinalRun);
+  await page.screenshot({ path: resolve(root, "artifacts/pack-break.png") });
+  const afterBreak = await settled();
+  assert.ok(afterBreak.runToken > beforeFinalRun, "BREAK advances to the next problem");
+  assert.equal(afterBreak.progress.pack.wins, 1);
+  console.log("PACK single ghost, wrong-radix exploration, radix reset, defense release, attack, BREAK, and adaptive progression verified.");
+
+  // The base 4 target retains an empty middle place. Both lock orders complete.
+  async function packWholeMass() {
+    const s = await settled(),
+      mass = s.pack.numberMass,
+      l0 = s.pack.slots.find((slot) => slot.level === 0);
+    await drag(mass, l0, 17, false);
+    return settled();
+  }
+  packState = await route("pack", () => true, 3);
+  assert.equal(packState.pack.ghosts.length, 2);
+  assert.deepEqual(
+    packState.pack.ghosts[1].places.map((place) => place.unitCount),
+    [1, 0, 1],
+  );
+  await packBase(4);
+  packState = await packWholeMass();
+  assert.equal(packState.pack.locks.filter((lock) => lock.activated).length, 1);
+  assert.equal(packState.pack.defenseCleared, false);
+  assert.equal(packState.pack.ghosts[0].active, false);
+  assert.equal(packState.pack.ghosts[1].active, true);
+  await packBase(5);
+  await packWholeMass();
+  assert.ok((await settled()).runToken > packState.runToken);
+
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  packState = await route("pack", () => true, 3);
+  await packBase(5);
+  packState = await packWholeMass();
+  assert.equal(packState.pack.locks.filter((lock) => lock.activated).length, 1);
+  assert.equal(packState.pack.defenseCleared, false);
+  await packBase(4);
+  const orderRun = packState.runToken;
+  await packWholeMass();
+  assert.ok((await settled()).runToken > orderRun);
+  console.log("PACK two defense locks activate in either order; the base 4 ghost preserves its empty middle place.");
   await route("link", (p) => p.ammo[0] === 14 && p.gates[0] === 3);
   let s = await read();
   const id = s.stage;
@@ -416,7 +490,8 @@ try {
   // occupy separate hit regions, and the radix slider has its own lower track.
   for (const [w, h] of [[320, 568], [390, 844], [412, 915], [844, 390]]) {
     await page.setViewportSize({ width: w, height: h });
-    s = await route("pack");
+    s = await route("pack", () => true, 5);
+    assert.equal(s.pack.ghosts.length, 3);
     assert.equal(
       await page.evaluate(
         () =>
@@ -434,6 +509,13 @@ try {
     assert.ok(l0.y - l0.frameRadius >= 0 && l0.y + l0.frameRadius + 35 < s.height);
     assert.ok(Math.hypot(mass.x - l0.x, mass.y - l0.y) > mass.radius + l0.frameRadius + 12);
     assert.ok(control.x1 >= 0 && control.x2 <= s.width && control.y < s.height);
+    for (const ghost of s.pack.ghosts) {
+      assert.ok(ghost.places.length >= 2 && ghost.places.length <= 3);
+      for (const place of ghost.places) {
+        assert.ok(place.x - place.frameRadius >= 0 && place.x + place.frameRadius <= s.width);
+        assert.ok(place.y - place.frameRadius >= 0 && place.y + place.frameRadius <= s.height);
+      }
+    }
     assert.equal(await page.locator('#keyboard-controls input[data-pack-radix]').count(), 1);
     await audit();
   }

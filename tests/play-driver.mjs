@@ -38,9 +38,12 @@ export function driver(page, base) {
     return read();
   }
   async function route(rule, predicate = () => true, difficulty) {
-    const example = PROBLEM_BANK[rule].find(
-      (p) => predicate(p) && (!difficulty || p.difficulty === difficulty),
-    );
+    const example =
+      rule === "pack"
+        ? generateProblem("pack", difficulty || 1, "fixture-pack")
+        : PROBLEM_BANK[rule].find(
+            (p) => predicate(p) && (!difficulty || p.difficulty === difficulty),
+          );
     assert.ok(example, `fixture ${rule}`);
     const d = difficulty || example.difficulty;
     let seed = 0;

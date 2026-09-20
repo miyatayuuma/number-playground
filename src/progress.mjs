@@ -2,7 +2,7 @@ import { AREAS } from "./stages.mjs";
 export const SAVE_KEY = "core-break-flow-v3";
 export function freshProgress() {
   return Object.fromEntries(
-    AREAS.filter((a) => a.id !== "pack").map((a) => [
+    AREAS.map((a) => [
       a.id,
       { difficulty: 1, wins: 0, retries: 0, recent: [] },
     ]),
