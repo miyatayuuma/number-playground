@@ -661,7 +661,8 @@ export class World {
     if (this.drag) {
       const d = this.drag;
       this.circle(d.x, d.y, 18, this.color + "22");
-      this.label(d.ids.length, d.x, d.y - 28, this.color, 16);
+      if (this.showDragCount !== false)
+        this.label(d.ids.length, d.x, d.y - 28, this.color, 16);
     }
   }
   drawEffects() {
