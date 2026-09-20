@@ -1,4 +1,5 @@
 import { gcd } from "./math.mjs";
+import { factors } from "./shapes.mjs";
 
 export const AREAS = [
   { id: "spark", name: "スパーク", color: "#ffc977", glyph: "✦" },
@@ -22,23 +23,186 @@ function add(rule, spec, complexity = 0) {
   const id = `${rule}:${JSON.stringify(spec)}`;
   bank[rule].push({ ...spec, id, area: rule, difficulty });
 }
-for (let n = 3; n <= 36; n++) {
-  for (let a = 1; a < n; a++) {
-    add("spark", { ammo: [a, n - a], targets: [target(n)], family: "join" });
-    if (a < n - a)
-      add(
-        "spark",
-        { ammo: [n], targets: [target(a), target(n - a)], family: "split" },
-        1,
+const sparkIds = new Set();
+function addSpark(spec, difficulty) {
+  const total = spec.ammo.reduce((sum, n) => sum + n, 0),
+    required = spec.targets.reduce((sum, t) => sum + t.n, 0);
+  if (
+    total !== required ||
+    spec.ammo.some((n) => !Number.isInteger(n) || n <= 0) ||
+    spec.targets.some((t) => !Number.isInteger(t.n) || t.n <= 0)
+  )
+    throw new RangeError("SPARK problem must conserve a positive raw quantity");
+  const id = `spark:${difficulty}:${JSON.stringify(spec)}`;
+  if (sparkIds.has(id)) return;
+  sparkIds.add(id);
+  bank.spark.push({ ...spec, id, area: "spark", difficulty });
+}
+function sparkDirectPart(n) {
+  if (n === 4) return 2;
+  const fs = factors(n);
+  return fs.length > 1 ? n / fs[0] : 1;
+}
+function sparkFinePart(n) {
+  const fs = factors(n);
+  if (fs.at(-1) === 4) return 2;
+  return fs.length > 1 ? fs.at(-1) : 1;
+}
+const balancedAmmo = (n) => [Math.floor(n / 2), Math.ceil(n / 2)];
+const sequentialTargets = (n, reverse = false) => {
+  const part = sparkDirectPart(n),
+    pair = reverse ? [n - part, part] : [part, n - part];
+  return pair.map((value, phase) => target(value, { phase }));
+};
+const joinDecompositionTargets = (n) => {
+  const part = sparkFinePart(n);
+  return [target(n - part), target(part, { phase: 1 })];
+};
+const parallelTargets = (n) => {
+  const part = sparkDirectPart(n);
+  return [target(part), target(n - part)];
+};
+
+// D1 deliberately permits "join everything, then fire everything".
+for (let n = 3; n <= 6; n++)
+  for (let a = 1; a < n; a++)
+    addSpark({ ammo: [a, n - a], targets: [target(n)], family: "join" }, 1);
+
+// D2 keeps addition dominant while introducing sequential decomposition.
+for (let n = 5; n <= 9; n++) {
+  addSpark({ ammo: [1, n - 1], targets: [target(n)], family: "join" }, 2);
+  addSpark({ ammo: [2, n - 2], targets: [target(n)], family: "join" }, 2);
+  addSpark(
+    { ammo: [n], targets: sequentialTargets(n), family: "sequential-split" },
+    2,
+  );
+}
+addSpark({ ammo: [3, 5], targets: [target(8)], family: "join" }, 2);
+addSpark({ ammo: [3, 6], targets: [target(9)], family: "join" }, 2);
+for (const n of [7, 8])
+  addSpark(
+    {
+      ammo: balancedAmmo(n),
+      targets: joinDecompositionTargets(n),
+      family: "join-decomposition",
+    },
+    2,
+  );
+
+// D3 makes decomposition the normal case while keeping a minority of joins.
+for (let n = 7; n <= 12; n++) {
+  addSpark({ ammo: [1, n - 1], targets: [target(n)], family: "join" }, 3);
+  addSpark(
+    { ammo: [n], targets: sequentialTargets(n), family: "sequential-split" },
+    3,
+  );
+  addSpark(
+    {
+      ammo: [n],
+      targets: sequentialTargets(n, true),
+      family: "sequential-split",
+    },
+    3,
+  );
+  addSpark(
+    {
+      ammo: balancedAmmo(n),
+      targets: joinDecompositionTargets(n),
+      family: "join-decomposition",
+    },
+    3,
+  );
+}
+addSpark({ ammo: [2, 7], targets: [target(9)], family: "join" }, 3);
+addSpark(
+  { ammo: [12], targets: parallelTargets(12), family: "parallel-split" },
+  3,
+);
+
+// D4 removes normal one-shot addition. Parallel split remains a minority width exercise.
+for (let n = 10; n <= 18; n++) {
+  addSpark(
+    { ammo: [n], targets: sequentialTargets(n), family: "sequential-split" },
+    4,
+  );
+  addSpark(
+    {
+      ammo: [n],
+      targets: sequentialTargets(n, true),
+      family: "sequential-split",
+    },
+    4,
+  );
+  addSpark(
+    {
+      ammo: balancedAmmo(n),
+      targets: joinDecompositionTargets(n),
+      family: "join-decomposition",
+    },
+    4,
+  );
+}
+for (const n of [10, 12, 15, 18])
+  addSpark(
+    { ammo: [n], targets: parallelTargets(n), family: "parallel-split" },
+    4,
+  );
+
+// D5 raises quantity and allows modest depth without growing target-tree width.
+for (let n = 14; n <= 24; n++) {
+  addSpark(
+    { ammo: [n], targets: sequentialTargets(n), family: "sequential-split" },
+    5,
+  );
+  addSpark(
+    {
+      ammo: [n],
+      targets: sequentialTargets(n, true),
+      family: "sequential-split",
+    },
+    5,
+  );
+  const first = sparkDirectPart(n),
+    remaining = n - first,
+    second = sparkDirectPart(remaining),
+    third = remaining - second;
+  addSpark(
+    {
+      ammo: [n],
+      targets: [
+        target(first),
+        target(second, { phase: 1 }),
+        target(third, { phase: 2 }),
+      ],
+      family: "sequential-split",
+    },
+    5,
+  );
+
+  const tail = sparkDirectPart(n);
+  if (tail >= 2) {
+    const tailFirst = sparkDirectPart(tail),
+      tailSecond = tail - tailFirst;
+    if (tailSecond > 0)
+      addSpark(
+        {
+          ammo: balancedAmmo(n),
+          targets: [
+            target(n - tail),
+            target(tailFirst, { phase: 1 }),
+            target(tailSecond, { phase: 2 }),
+          ],
+          family: "join-decomposition",
+        },
+        5,
       );
   }
-  if (n >= 6)
-    add(
-      "spark",
-      { ammo: [1, 2, n - 3], targets: [target(n)], family: "join" },
-      1,
-    );
 }
+for (const n of [14, 18, 22, 24])
+  addSpark(
+    { ammo: [n], targets: parallelTargets(n), family: "parallel-split" },
+    5,
+  );
 for (let f = 2; f <= 6; f++)
   for (let q = 2; q <= 12; q++)
     for (let r = 0; r < f; r++) {
