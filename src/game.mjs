@@ -29,6 +29,7 @@ let progress = freshProgress(),
   ruleId = null,
   widthPointer = null,
   packPointer = false,
+  packRotationPointer = false,
   peel = null,
   serial = 0,
   sound = true,
@@ -199,6 +200,7 @@ function openPanel(html, kind) {
   peel = null;
   widthPointer = null;
   packPointer = false;
+  packRotationPointer = false;
   world.cancelPackControl?.();
   selected = null;
   if (!world.busy) world.cancel();
@@ -314,6 +316,7 @@ function start(id, changeHash = true) {
   peel = null;
   widthPointer = null;
   packPointer = false;
+  packRotationPointer = false;
   selected = null;
   ruleId = id;
   document.body.classList.remove("entrance");
@@ -450,7 +453,13 @@ function point(e) {
   return { x: e.clientX - r.left, y: e.clientY - r.top };
 }
 canvas.addEventListener("pointerdown", (e) => {
-  if (pointer !== null || world.busy || world.paused || run.status !== "play")
+  const terminalPack = run.stage.area === "pack" && run.status === "won";
+  if (
+    pointer !== null ||
+    world.busy ||
+    world.paused ||
+    (run.status !== "play" && !terminalPack)
+  )
     return;
   const p = point(e);
   if (run.stage.area === "pack" && world.packControlHit?.(p.x, p.y)) {
@@ -472,7 +481,15 @@ canvas.addEventListener("pointerdown", (e) => {
     return;
   }
   const hit = world.hit(p.x, p.y);
-  if (!hit) return;
+  if (!hit) {
+    if (run.stage.area !== "pack") return;
+    e.preventDefault();
+    pointer = e.pointerId;
+    packRotationPointer = true;
+    canvas.setPointerCapture(pointer);
+    world.beginScaleRotation(p.x);
+    return;
+  }
   e.preventDefault();
   pointer = e.pointerId;
   canvas.setPointerCapture(pointer);
@@ -515,6 +532,10 @@ canvas.addEventListener("pointermove", (e) => {
     world.movePackControl(p.x);
     return;
   }
+  if (packRotationPointer) {
+    world.moveScaleRotation(p.x);
+    return;
+  }
   if (widthPointer) {
     const width = Math.max(
       0,
@@ -538,6 +559,14 @@ canvas.addEventListener("pointermove", (e) => {
 canvas.addEventListener("pointerup", (e) => {
   if (e.pointerId !== pointer) return;
   const p = point(e);
+  if (packRotationPointer) {
+    packRotationPointer = false;
+    pointer = null;
+    world.endScaleRotation();
+    if (canvas.hasPointerCapture(e.pointerId))
+      canvas.releasePointerCapture(e.pointerId);
+    return;
+  }
   updatePeel(p, e.timeStamp);
   peel = null;
   if (packPointer) {
@@ -586,6 +615,10 @@ function cancelPointer() {
     if (packPointer) {
       packPointer = false;
       world.cancelPackControl?.();
+    }
+    if (packRotationPointer) {
+      packRotationPointer = false;
+      world.cancelScaleRotation?.();
     }
     if (widthPointer) {
       setWidth(run, widthPointer.pieceId, widthPointer.value);

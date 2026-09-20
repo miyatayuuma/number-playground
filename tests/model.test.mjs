@@ -26,6 +26,7 @@ import {
   placeSlotLayout,
   radixFrame,
   packScaleViewports,
+  packNestedUnitShape,
 } from "../src/shapes.mjs";
 import {
   freshProgress,
@@ -315,33 +316,62 @@ test("PACK keeps the empty middle place explicit after recursive carry", () => {
   assert.equal(activePackItems(run).filter((item) => item.level === 1).length, 0);
 });
 
-test("PACK radix frames are distinct from quantity dots and scale views recede", () => {
+test("PACK radix frames and nested unit layouts share one factorization geometry", () => {
   const five = radixFrame(5, 40),
     four = radixFrame(4, 40),
     initial = packScaleViewports(0, 390, 844),
-    recursive = packScaleViewports(2, 390, 844);
+    recursive = packScaleViewports(2, 390, 844),
+    inspected = packScaleViewports(2, 390, 844, 0.55),
+    nested = packNestedUnitShape(4, 12, 2);
   assert.equal(five.points.length, 5);
   assert.equal(four.points.length, 4);
   assert.notDeepEqual(five.points, four.points);
   assert.deepEqual(
     initial.map(({ level, ghost }) => [level, ghost]),
     [
-      [0, false],
       [1, true],
+      [0, false],
     ],
   );
   assert.deepEqual(
     recursive.map(({ level, ghost }) => [level, ghost]),
     [
-      [0, false],
-      [1, false],
       [2, false],
+      [1, false],
+      [0, false],
     ],
   );
-  assert.ok(recursive[0].y > recursive[1].y);
-  assert.ok(recursive[1].y > recursive[2].y);
-  assert.ok(recursive[0].radius > recursive[1].radius);
-  assert.ok(recursive[1].radius > recursive[2].radius);
+  assert.ok(initial[0].x < initial[1].x);
+  assert.equal(initial[0].y, initial[1].y);
+  assert.equal(new Set(recursive.map((slot) => slot.radius)).size, 1);
+  assert.equal(new Set(recursive.map((slot) => slot.y)).size, 1);
+  assert.ok(recursive[0].x < recursive[1].x);
+  assert.ok(recursive[1].x < recursive[2].x);
+  assert.ok(
+    recursive.every(
+      (slot, index, all) =>
+        index === 0 || slot.x - all[index - 1].x >= slot.radius + all[index - 1].radius,
+    ),
+  );
+  for (const width of [320, 390, 844]) {
+    const mobile = packScaleViewports(2, width, width === 844 ? 390 : 844);
+    assert.ok(
+      mobile.every(
+        (slot, index, all) =>
+          index === 0 || slot.x - all[index - 1].x >= slot.radius + all[index - 1].radius,
+      ),
+    );
+  }
+  assert.equal(new Set(inspected.map((slot) => slot.radius)).size, 1);
+  assert.ok(inspected.some((slot) => slot.y !== recursive.find((baseSlot) => baseSlot.level === slot.level).y));
+  assert.ok(inspected.some((slot) => slot.innerScale > 1));
+  assert.equal(nested.children.length, 4);
+  assert.ok(nested.children.every((child) => child.inner.children.length === 4));
+  const geometryPoints = shape(4, nested.radius * 0.54).dots;
+  assert.deepEqual(
+    nested.children.map(({ x, y }) => ({ x, y })),
+    geometryPoints.map(({ x, y }) => ({ x, y })),
+  );
 });
 
 test("PACK radix reset removes old grouping while preserving all raw identities", () => {

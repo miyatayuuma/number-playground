@@ -61,8 +61,13 @@ export function driver(page, base) {
       assert.equal(
         new Set(s.visibleIds).size,
         s.rule === "pack"
-          ? s.pack.items.length
+          ? s.total
           : s.pieces.flatMap((p) => p.ids).length,
+      );
+    if (s.rule === "pack" && !s.busy)
+      assert.deepEqual(
+        [...s.visibleIds].sort((a, b) => a - b),
+        [...s.pack.rawIds].sort((a, b) => a - b),
       );
     return s;
   }
@@ -173,13 +178,13 @@ export function driver(page, base) {
                 )
               : null;
           assert.ok(place && slot, "PACK carryable place");
-          await drag(place, slot, place.n);
+          await drag(place, slot, place.rawIds.length);
         } else if (s.pack.phase === "unpack") {
           const item = s.pack.items.find((item) => item.macro);
           assert.ok(item, "PACK macro");
           const slot = s.pack.slots.find((slot) => slot.level === item.level - 1);
           assert.ok(slot, "PACK lower slot");
-          await drag(item, slot, 1);
+          await drag(item, slot, item.rawIds.length);
         } else if (s.pack.phase === "choose") {
           await packBase();
         } else if (s.pack.phase === "break") {

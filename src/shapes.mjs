@@ -273,22 +273,63 @@ export function radixFrame(base, radius = 48) {
   return { base, radius, points };
 }
 
-// Scale views recede up the same field. A single faint next view can be shown
-// before it is discovered; higher views appear only after a carry reaches them.
-export function packScaleViewports(maxLevel, width, height) {
+// The outer viewports stay equal and aligned for quantity comparison. Rotation
+// changes their shallow depth projection and the scale of the nested math only.
+export function packScaleViewports(maxLevel, width, height, rotation = 0) {
   maxLevel = Math.max(0, Math.trunc(maxLevel));
   const visibleMax = Math.min(maxLevel, 2),
     showNext = visibleMax < 2,
     lastLevel = visibleMax + (showNext ? 1 : 0),
-    bottom = Math.min(height * 0.73, height - 150),
-    step = Math.min(142, Math.max(74, height * 0.18)),
-    baseRadius = Math.min(52, width * 0.135, height * 0.105);
-  return Array.from({ length: lastLevel + 1 }, (_, level) => ({
-    level,
-    x: width / 2,
-    y: bottom - step * level,
-    radius: baseRadius * Math.pow(0.72, level),
-    scale: Math.pow(0.72, level),
-    ghost: level > visibleMax,
-  }));
+    levels = Array.from({ length: lastLevel + 1 }, (_, i) => lastLevel - i),
+    count = levels.length,
+    radius = Math.min(54, (width - 20) / (count * 2 + 0.35), height * 0.13),
+    gap = count === 1 ? 0 : Math.min(radius * 2 + 18, (width - radius * 2 - 20) / (count - 1)),
+    phaseStep = count > 1 ? 1.36 / (count - 1) : 0,
+    maxPhase = phaseStep * ((count - 1) / 2),
+    orbitRadius = maxPhase ? (gap * (count - 1)) / (2 * Math.sin(maxPhase)) : 0,
+    y = Math.min(height * 0.61, height - 164);
+  return levels.map((level, index) => {
+    const phase = (index - (count - 1) / 2) * phaseStep,
+      turned = phase + rotation,
+      depth = Math.cos(turned) - Math.cos(phase),
+      x = width / 2 + orbitRadius * Math.sin(phase) + orbitRadius * 0.28 * (Math.sin(turned) - Math.sin(phase));
+    return {
+      level,
+      x,
+      y: y + depth * 54,
+      radius,
+      frameRadius: radius,
+      scale: 1,
+      depth,
+      innerScale: Math.max(0.72, Math.min(1.55, 1 + depth * 2.45)),
+      ghost: level > visibleMax,
+    };
+  });
+}
+
+// Shared radix geometry for a macro's children. The item order is kept intact;
+// radixFrame() uses these same points, only sorting a copy for its contour.
+export function packNestedUnitShape(base, radius, levels = 1, innerScale = 1) {
+  if (!Number.isInteger(levels) || levels < 1)
+    throw new RangeError("PACK nested depth must be positive");
+  const points = shape(base, radius * 0.54 * innerScale).dots;
+  return {
+    base,
+    radius,
+    levels,
+    innerScale,
+    children: points.map((point, index) => {
+      const childRadius = radius * (levels > 1 ? 0.35 : 0.17) * innerScale;
+      return {
+        index,
+        x: point.x,
+        y: point.y,
+        radius: childRadius,
+        inner:
+          levels > 1
+            ? packNestedUnitShape(base, childRadius, levels - 1, innerScale)
+            : null,
+      };
+    }),
+  };
 }
