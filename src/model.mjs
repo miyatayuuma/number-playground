@@ -40,6 +40,156 @@ export function activePackItems(run) {
     .sort((a, b) => a.level - b.level || a.order - b.order);
 }
 
+function packNodeRawIds(pack, itemId, visiting = new Set()) {
+  if (visiting.has(itemId)) return null;
+  const item = pack.nodes[itemId];
+  if (!item) return null;
+  visiting.add(itemId);
+  if (!item.macro) {
+    visiting.delete(itemId);
+    return item.level === 0 && item.ids.length === 1 ? [...item.ids] : null;
+  }
+  const children = [];
+  for (const childId of item.children) {
+    const child = pack.nodes[childId],
+      ids = packNodeRawIds(pack, childId, visiting);
+    if (
+      !ids ||
+      child.level !== item.level - 1 ||
+      (child.macro && child.base !== item.base)
+    ) {
+      visiting.delete(itemId);
+      return null;
+    }
+    children.push(...ids);
+  }
+  visiting.delete(itemId);
+  if (
+    item.children.length !== item.base ||
+    children.length !== item.ids.length ||
+    children.some((id, index) => id !== item.ids[index])
+  )
+    return null;
+  return children;
+}
+
+export function isCanonicalPack(run) {
+  if (run?.stage?.area !== "pack" || !run.pack) return false;
+  const pack = run.pack;
+  if (!Array.isArray(pack.active) || pack.active.some((id) => !pack.nodes[id]))
+    return false;
+  const active = pack.active
+      .map((id) => pack.nodes[id])
+      .sort((a, b) => a.level - b.level || a.order - b.order),
+    byLevel = new Map();
+  for (const item of active) {
+    if (!item || pack.nodes[item.id] !== item) return false;
+    byLevel.set(item.level, (byLevel.get(item.level) || 0) + 1);
+    if (!packNodeRawIds(pack, item.id)) return false;
+  }
+  if ([...byLevel.values()].some((count) => count >= pack.base)) return false;
+  const ids = active.flatMap((item) => item.ids),
+    expected = run.dots.map((dot) => dot.id);
+  return (
+    ids.length === expected.length &&
+    new Set(ids).size === ids.length &&
+    ids.every((id) => expected.includes(id))
+  );
+}
+
+export function isPackAttackReady(run) {
+  return (
+    run?.status === "settling" &&
+    run.pack?.phase === "attack-ready" &&
+    isCanonicalPack(run)
+  );
+}
+
+export function buildPackAttackPlan(run) {
+  if (!isPackAttackReady(run))
+    return { ok: false, reason: "not-canonical-or-unsettled" };
+  const pack = run.pack,
+    digits = packDigits(run),
+    payloads = activePackItems(run)
+      .sort((a, b) => b.level - a.level || a.order - b.order)
+      .map((item) => ({
+        itemId: item.id,
+        level: item.level,
+        targetLayer: item.level,
+        rawIds: [...item.ids],
+        weight: item.ids.length,
+      })),
+    rawIds = payloads.flatMap((payload) => payload.rawIds);
+  if (rawIds.length !== run.dots.length || new Set(rawIds).size !== rawIds.length)
+    return { ok: false, reason: "identity-accounting-failed" };
+  return {
+    ok: true,
+    base: pack.base,
+    placeCount: digits.length,
+    rawIds,
+    payloads,
+  };
+}
+
+export function beginPackAttack(run) {
+  const plan = buildPackAttackPlan(run);
+  if (!plan.ok) return plan;
+  run.pack.phase = "attack";
+  run.pack.attack = {
+    placeCount: plan.placeCount,
+    payloads: plan.payloads.map((payload) => ({
+      ...payload,
+      rawIds: [...payload.rawIds],
+    })),
+    impactedItemIds: [],
+    resolvedRawIds: [],
+  };
+  run.status = "attack";
+  return plan;
+}
+
+export function resolvePackAttackPayload(run, itemId) {
+  const pack = run?.pack,
+    attack = pack?.attack,
+    payload = attack?.payloads.find((candidate) => candidate.itemId === itemId);
+  if (
+    run?.status !== "attack" ||
+    pack.phase !== "attack" ||
+    !payload ||
+    attack.impactedItemIds.includes(itemId) ||
+    payload.rawIds.some((id) => attack.resolvedRawIds.includes(id))
+  )
+    return { ok: false };
+  attack.impactedItemIds.push(itemId);
+  attack.resolvedRawIds.push(...payload.rawIds);
+  const complete =
+    attack.resolvedRawIds.length === run.dots.length &&
+    new Set(attack.resolvedRawIds).size === run.dots.length &&
+    run.dots.every((dot) => attack.resolvedRawIds.includes(dot.id));
+  if (complete) {
+    pack.phase = "break";
+    run.status = "break";
+  }
+  return { ok: true, complete, resolvedCount: attack.resolvedRawIds.length };
+}
+
+export function completePackBreak(run) {
+  const attack = run?.pack?.attack;
+  if (
+    run?.stage?.area !== "pack" ||
+    run.status !== "break" ||
+    run.pack.phase !== "break" ||
+    !attack ||
+    attack.resolvedRawIds.length !== run.dots.length ||
+    new Set(attack.resolvedRawIds).size !== run.dots.length ||
+    !run.dots.every((dot) => attack.resolvedRawIds.includes(dot.id))
+  )
+    return false;
+  run.pack.phase = "next";
+  run.status = "won";
+  return true;
+}
+
 // Deterministic complete bundles are useful for model inspection and keyboard
 // access, but the pointer interaction never exposes these as preselected groups.
 export function packableGroups(run) {
@@ -98,9 +248,9 @@ function settlePack(run, result) {
   result.lock = structuredClone(lock);
   result.locked = true;
   if (pack.step === run.stage.radices.length - 1) {
-    pack.phase = "break";
-    run.status = "won";
-    result.complete = true;
+    pack.phase = "attack-ready";
+    run.status = "settling";
+    result.attackReady = true;
   } else {
     pack.phase = "unpack";
   }

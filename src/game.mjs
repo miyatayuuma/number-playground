@@ -11,6 +11,10 @@ import {
   normalizePackSelection,
   unpackPackItem,
   setPackBase,
+  isPackAttackReady,
+  beginPackAttack,
+  resolvePackAttackPayload,
+  completePackBreak,
 } from "./model.mjs";
 import { shape, arrayShape } from "./shapes.mjs";
 import { PeelGesture, finerSelection } from "./gestures.mjs";
@@ -38,6 +42,7 @@ let progress = freshProgress(),
   pointer = null,
   selected = null,
   epoch = 0,
+  packAttackTimer = null,
   menu = null;
 try {
   const data = JSON.parse(localStorage.getItem(KEY) || "{}");
@@ -310,6 +315,8 @@ function pauseMenu() {
   );
 }
 function start(id, changeHash = true) {
+  clearTimeout(packAttackTimer);
+  packAttackTimer = null;
   epoch++;
   world.token = epoch;
   pointer = null;
@@ -346,6 +353,40 @@ function start(id, changeHash = true) {
 }
 function nextProblem() {
   if (run.status === "won" && !world.busy && !menu) start(ruleId);
+}
+function schedulePackAttack(token) {
+  if (packAttackTimer !== null || !isPackAttackReady(run)) return;
+  packAttackTimer = setTimeout(async () => {
+    packAttackTimer = null;
+    if (token !== epoch || !isPackAttackReady(run)) return;
+    if (menu || world.paused) {
+      schedulePackAttack(token);
+      return;
+    }
+    try {
+      await world.settlePackOverview();
+      if (token !== epoch) return;
+      const plan = beginPackAttack(run);
+      if (!plan.ok) return;
+      keyboardUI();
+      const resolved = await world.animatePackAttack(plan, (itemId) =>
+        resolvePackAttackPayload(run, itemId),
+      );
+      if (token !== epoch) return;
+      if (!resolved) throw new Error("PACK attack animation did not finish");
+      if (run.status !== "break" || run.pack.phase !== "break")
+        throw new Error("PACK attack ended before every raw identity impacted");
+      const collapsed = await world.animatePackBreak();
+      if (token !== epoch) return;
+      if (!collapsed || !completePackBreak(run))
+        throw new Error("PACK BREAK could not resolve its full payload");
+      keyboardUI();
+      announce("BREAK");
+      nextProblem();
+    } catch (error) {
+      failSafe(error);
+    }
+  }, 380);
 }
 async function drop(destination) {
   const drag = world.drag;
@@ -385,6 +426,7 @@ async function drop(destination) {
     selected = null;
     keyboardUI();
     announce(result.lock?.notation || (result.complete ? "BREAK" : ""));
+    if (isPackAttackReady(run)) schedulePackAttack(token);
     if (run.status === "won" && run.stage.area !== "pack") nextProblem();
     return;
   }
@@ -640,6 +682,11 @@ canvas.addEventListener("lostpointercapture", cancelPointer);
 world.onResize = () => {
   cancelPointer();
   if (world.busy) {
+    if (
+      run.stage.area === "pack" &&
+      (run.status === "attack" || run.status === "break")
+    )
+      return;
     world.token = ++epoch;
     world.busy = false;
     for (const d of world.units.values()) {
@@ -651,11 +698,20 @@ world.onResize = () => {
     }
     world.sync();
     keyboardUI();
+    if (run.stage.area === "pack" && isPackAttackReady(run))
+      schedulePackAttack(epoch);
     if (run.status === "won") nextProblem();
   }
 };
 function failSafe(error) {
   console.error(error);
+  if (
+    run?.stage.area === "pack" &&
+    (run.status === "settling" || run.status === "attack" || run.status === "break")
+  ) {
+    start(ruleId);
+    return;
+  }
   world.token = ++epoch;
   world.busy = false;
   world.cancel();
@@ -825,6 +881,7 @@ route();
 // Read-only observability for real pointer tests and quantity audits.
 export function inspect() {
   return {
+    runToken: epoch,
     stage: run.stage.id,
     status: run.status,
     misses: run.misses,

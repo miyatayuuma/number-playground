@@ -111,6 +111,8 @@ export class PackWorld extends FlowWorld {
     this.focusGesture = null;
     this.boundaryVisuals = new Map();
     this.boundaryClock = 0;
+    this.packImpacts = [];
+    this.activePackProjectileId = null;
   }
 
   setRun(run) {
@@ -122,7 +124,101 @@ export class PackWorld extends FlowWorld {
     this.focusGesture = null;
     this.boundaryVisuals.clear();
     this.boundaryClock = this.clock;
+    this.packImpacts = [];
+    this.activePackProjectileId = null;
     super.setRun(run);
+  }
+
+  async settlePackOverview() {
+    if (this.focusGesture) this.endScaleFocus();
+    if (!this.run || this.run.stage.area !== "pack") return;
+    const layout = this.packLayout(),
+      target = packCameraForFocus(layout.planes, null),
+      from = { ...this.camera },
+      distance = Math.hypot(
+        from.x - target.x,
+        from.y - target.y,
+        from.z - target.z,
+        from.focalLength - target.focalLength,
+      );
+    if (distance < 0.5) {
+      this.camera = target;
+      this.cameraTransition = null;
+      return;
+    }
+    this.cameraTransition = {
+      kind: "return",
+      from,
+      to: target,
+      focusLevel: from.focusLevel,
+      started: this.clock,
+      duration: this.motion ? 145 : 45,
+    };
+    await new Promise((resolve) => {
+      const token = this.token;
+      const tick = () => {
+        if (token !== this.token || !this.cameraTransition) resolve();
+        else requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+  }
+
+  packLayerGeometry(placeCount = packDigits(this.run).length) {
+    const enemy = this.enemyPoint();
+    return Array.from({ length: placeCount }, (_, level) => {
+      const radius = enemy.radius + (placeCount - level) * 8;
+      return {
+        level,
+        x: enemy.x,
+        y: enemy.y,
+        radius,
+        target: { x: enemy.x, y: enemy.y + radius },
+      };
+    });
+  }
+
+  drawTargets() {
+    if (this.run?.stage.area !== "pack") return super.drawTargets();
+    const c = this.ctx,
+      pack = this.run.pack,
+      active = pack.phase === "attack-ready" || pack.phase === "attack",
+      layers = this.packLayerGeometry(packDigits(this.run).length);
+    for (const layer of layers) {
+      const impact = this.packImpacts.findLast(
+          (candidate) => candidate.level === layer.level,
+        ),
+        age = impact ? Math.max(0, this.clock - impact.born) : Infinity,
+        pulse = active && this.motion ? 0.5 + Math.sin(this.clock * 0.012) * 0.12 : 0,
+        opacity = impact
+          ? 0.78 * clamp(1 - age / 700, 0.24, 1)
+          : active
+            ? 0.53 + pulse
+            : 0.2;
+      c.save();
+      c.globalAlpha = opacity;
+      c.strokeStyle = impact ? "#ffd5d7" : this.color;
+      c.lineWidth = impact ? 2.5 : active ? 1.8 : 1.2;
+      c.setLineDash(impact ? [] : [5, 5]);
+      c.beginPath();
+      c.arc(
+        layer.x,
+        layer.y,
+        layer.radius,
+        -Math.PI * 0.82,
+        Math.PI * 0.82,
+      );
+      c.stroke();
+      c.setLineDash([]);
+      if (impact) {
+        c.beginPath();
+        c.moveTo(layer.x - 5, layer.y + layer.radius * 0.58);
+        c.lineTo(layer.x + 2, layer.y + layer.radius * 0.73);
+        c.lineTo(layer.x - 3, layer.y + layer.radius * 0.87);
+        c.stroke();
+      }
+      c.restore();
+    }
   }
 
   resize() {
@@ -642,6 +738,7 @@ export class PackWorld extends FlowWorld {
         };
       }),
       control = this.packControl();
+    const layers = this.packLayerGeometry(packDigits(this.run).length);
     return {
       width: this.w,
       height: this.h,
@@ -664,6 +761,21 @@ export class PackWorld extends FlowWorld {
         base: pack.base,
         step: pack.step,
         phase: pack.phase,
+        attack: pack.attack
+          ? {
+              placeCount: pack.attack.placeCount,
+              payloads: structuredClone(pack.attack.payloads),
+              impactedItemIds: [...pack.attack.impactedItemIds],
+              resolvedRawIds: [...pack.attack.resolvedRawIds],
+              activeItemId: this.activePackProjectileId,
+            }
+          : null,
+        layers: layers.map((layer) => ({
+          ...layer,
+          impacted: this.packImpacts.some(
+            (impact) => impact.level === layer.level,
+          ),
+        })),
         digits: packDigits(this.run),
         notation: pack.locks.at(-1)?.notation || null,
         locks: structuredClone(pack.locks),
@@ -1178,14 +1290,83 @@ export class PackWorld extends FlowWorld {
     super.drawUnits(dt);
   }
 
-  async tweenPackWorld(ids, targets, ms, token) {
+  async animatePackAttack(plan, onImpact) {
+    this.busy = true;
+    this.hover = null;
+    this.drag = null;
+    const token = this.token,
+      layers = this.packLayerGeometry(plan.placeCount);
+    for (const payload of plan.payloads) {
+      if (token !== this.token) return false;
+      const attack = this.run.pack.attack,
+        layer = layers.find((candidate) => candidate.level === payload.targetLayer),
+        dots = payload.rawIds.map((id) => this.units.get(id));
+      if (!layer || dots.some((dot) => !dot)) return false;
+      this.activePackProjectileId = payload.itemId;
+      for (const dot of dots) {
+        dot.visible = true;
+        dot.manual = true;
+        dot.flight = true;
+      }
+      const center = {
+          x: dots.reduce((sum, dot) => sum + dot.wx, 0) / dots.length,
+          y: dots.reduce((sum, dot) => sum + dot.wy, 0) / dots.length,
+          z: dots[0].wz,
+        },
+        target = this.unprojectPackPoint(layer.target.x, layer.target.y, center.z),
+        dx = target.x - center.x,
+        dy = target.y - center.y;
+      await this.tweenPackWorld(
+        payload.rawIds,
+        dots.map((dot) => ({ x: dot.wx + dx, y: dot.wy + dy, z: dot.wz })),
+        this.motion ? 265 : 88,
+        token,
+        true,
+      );
+      if (token !== this.token) return false;
+      for (const dot of dots) dot.flight = false;
+      this.activePackProjectileId = null;
+      this.packImpacts.push({ level: payload.targetLayer, born: this.clock });
+      this.burst(layer.target.x, layer.target.y, "#ffd5d7", 0.48);
+      const impact = onImpact(payload.itemId);
+      if (!impact.ok) throw new Error(`PACK attack payload failed: ${payload.itemId}`);
+      this.onCue?.("hit");
+      if (plan.payloads.length > 1)
+        await this.tween([], [], this.motion ? 58 : 12, token);
+    }
+    return token === this.token;
+  }
+
+  async animatePackBreak() {
+    const token = this.token;
+    this.deadAt = this.clock;
+    this.flash = 0.9;
+    this.burst(this.enemyPoint().x, this.enemyPoint().y, "#fff0c2", 0.75);
+    await this.waitPackMotion(this.motion ? 465 : 220, token);
+    if (token !== this.token) return false;
+    this.busy = false;
+    return true;
+  }
+
+  async waitPackMotion(ms, token) {
+    const start = this.clock;
+    await new Promise((resolve) => {
+      const tick = () => {
+        if (token !== this.token || this.clock - start >= ms) resolve();
+        else requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+  }
+
+  async tweenPackWorld(ids, targets, ms, token, preserveReducedDuration = false) {
     const starts = ids.map((id) => {
       const dot = this.units.get(id);
       dot.visible = true;
       dot.manual = true;
       return { x: dot.wx, y: dot.wy, z: dot.wz };
     });
-    if (!this.motion) ms = 1;
+    if (!this.motion) ms = preserveReducedDuration ? ms : 1;
     const start = this.clock;
     await new Promise((resolve) => {
       const tick = () => {

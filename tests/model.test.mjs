@@ -15,6 +15,12 @@ import {
   normalizePackSelection,
   unpackPackItem,
   setPackBase,
+  isCanonicalPack,
+  isPackAttackReady,
+  buildPackAttackPlan,
+  beginPackAttack,
+  resolvePackAttackPayload,
+  completePackBreak,
 } from "../src/model.mjs";
 import { PROBLEM_BANK, generateProblem, divisors } from "../src/stages.mjs";
 import { gcd } from "../src/math.mjs";
@@ -131,6 +137,12 @@ export function solve(problem) {
     assert.ok(setPackBase(run, 4));
     const second = packAll(run);
     assert.equal(second.lock.notation, "101₄");
+    const plan = beginPackAttack(run);
+    assert.ok(plan.ok);
+    for (const payload of plan.payloads)
+      assert.ok(resolvePackAttackPayload(run, payload.itemId).ok);
+    assert.equal(run.status, "break");
+    assert.ok(completePackBreak(run));
   }
   assert.equal(run.status, "won");
   if (problem.area === "pack") assert.equal(run.spent.length, 0);
@@ -553,11 +565,119 @@ test("PACK full vertical slice keeps all 17 raw identities through radix change"
   assert.ok(setPackBase(run, 4));
 
   const second = packAll(run);
-  assert.equal(second.complete, true);
+  assert.equal(second.complete, false);
+  assert.equal(second.attackReady, true);
   assert.deepEqual(second.lock.digits, [1, 0, 1]);
+  assert.equal(run.pack.phase, "attack-ready");
+  assert.equal(run.status, "settling");
+  assert.equal(isPackAttackReady(run), true);
+  const plan = beginPackAttack(run);
+  assert.ok(plan.ok);
+  for (const payload of plan.payloads)
+    assert.ok(resolvePackAttackPayload(run, payload.itemId).ok);
+  assert.equal(run.status, "break");
+  assert.ok(completePackBreak(run));
   assert.equal(run.status, "won");
   assert.deepEqual(run.pieces[0].ids, original);
   assert.equal(new Set(run.pieces[0].ids).size, 17);
+  audit(run);
+});
+
+test("PACK attack plan sends base-5 units with all 17 original raw identities", () => {
+  const stage = {
+      ...structuredClone(PROBLEM_BANK.pack[0]),
+      id: "pack:17:5-only",
+      radices: [5],
+    },
+    run = createRun(stage),
+    original = [...run.pieces[0].ids];
+  assert.equal(isCanonicalPack(run), false);
+  assert.equal(isPackAttackReady(run), false);
+  assert.equal(buildPackAttackPlan(run).ok, false);
+
+  const locked = packAll(run);
+  assert.deepEqual(locked.lock.digits, [3, 2]);
+  assert.equal(run.pack.phase, "attack-ready");
+  assert.ok(isCanonicalPack(run));
+  const plan = buildPackAttackPlan(run);
+  assert.ok(plan.ok);
+  assert.equal(plan.placeCount, 2);
+  assert.deepEqual(
+    plan.payloads.reduce((counts, payload) => {
+      counts[payload.level] = (counts[payload.level] || 0) + 1;
+      return counts;
+    }, {}),
+    { 0: 2, 1: 3 },
+  );
+  assert.ok(plan.payloads.filter((payload) => payload.level === 1).every((payload) => payload.weight === 5));
+  assert.deepEqual([...plan.rawIds].sort((a, b) => a - b), original);
+  assert.equal(new Set(plan.rawIds).size, 17);
+
+  const started = beginPackAttack(run);
+  assert.ok(started.ok);
+  assert.equal(beginPackAttack(run).ok, false, "attack has a single entry");
+  assert.equal(resolvePackAttackPayload(run, started.payloads[0].itemId).ok, true);
+  assert.equal(resolvePackAttackPayload(run, started.payloads[0].itemId).ok, false);
+  assert.equal(run.status, "attack");
+  for (const payload of started.payloads.slice(1))
+    assert.equal(resolvePackAttackPayload(run, payload.itemId).ok, true);
+  assert.equal(run.status, "break");
+  assert.equal(run.pack.phase, "break");
+  assert.equal(run.pack.attack.resolvedRawIds.length, 17);
+  assert.equal(new Set(run.pack.attack.resolvedRawIds).size, 17);
+  assert.deepEqual(
+    [...run.pack.attack.resolvedRawIds].sort((a, b) => a - b),
+    original,
+  );
+  assert.ok(completePackBreak(run));
+  assert.equal(run.pack.phase, "next");
+  assert.equal(run.status, "won");
+});
+
+test("PACK recursive base-4 attack preserves its empty middle layer and nested weight", () => {
+  const stage = {
+      ...structuredClone(PROBLEM_BANK.pack[0]),
+      id: "pack:17:4-attack",
+      radices: [4],
+    },
+    run = createRun(stage),
+    original = [...run.pieces[0].ids];
+  assert.equal(buildPackAttackPlan(run).ok, false);
+  packAll(run);
+  assert.equal(run.pack.phase, "attack-ready");
+  assert.deepEqual(packDigits(run), [1, 0, 1]);
+  assert.equal(isCanonicalPack(run), true);
+  const plan = buildPackAttackPlan(run);
+  assert.ok(plan.ok);
+  assert.equal(plan.placeCount, 3);
+  assert.deepEqual(
+    plan.payloads.map(({ level, weight }) => ({ level, weight })),
+    [{ level: 2, weight: 16 }, { level: 0, weight: 1 }],
+  );
+  const top = run.pack.nodes[plan.payloads[0].itemId];
+  assert.equal(top.children.length, 4);
+  assert.ok(
+    top.children.every((id) => {
+      const child = run.pack.nodes[id];
+      return child.level === 1 && child.children.length === 4 && child.ids.length === 4;
+    }),
+  );
+  assert.deepEqual([...plan.rawIds].sort((a, b) => a - b), original);
+  assert.equal(new Set(plan.rawIds).size, 17);
+  const corrupted = structuredClone(run),
+    corruptedTop = corrupted.pack.nodes[top.id];
+  corruptedTop.children[0] = corruptedTop.children[1];
+  assert.equal(isCanonicalPack(corrupted), false);
+  assert.equal(buildPackAttackPlan(corrupted).ok, false);
+  const started = beginPackAttack(run);
+  assert.ok(started.ok);
+  for (const payload of started.payloads)
+    assert.ok(resolvePackAttackPayload(run, payload.itemId).ok);
+  assert.equal(run.status, "break");
+  assert.equal(run.pack.attack.placeCount, 3);
+  assert.equal(run.pack.attack.payloads.some((payload) => payload.level === 1), false);
+  assert.equal(run.pack.attack.resolvedRawIds.length, 17);
+  assert.ok(completePackBreak(run));
   audit(run);
 });
 
