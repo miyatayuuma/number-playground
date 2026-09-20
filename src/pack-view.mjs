@@ -10,6 +10,9 @@ import { activePackItems, packDigits } from "./model.mjs";
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const ease = (value) => 1 - Math.pow(1 - value, 3);
 const PACK_NEAR_FRACTION = 0.34;
+const PACK_FOCUS_STEP_FRACTION = 0.145;
+const PACK_FOCUS_STEP_MIN = 40;
+const PACK_FOCUS_STEP_MAX = 56;
 
 export function projectPackPoint(point, camera, width, height) {
   const depth = point.z - camera.z;
@@ -31,7 +34,7 @@ export function packCameraForFocus(viewports, focusLevel = null) {
   if (focusLevel === null)
     return {
       mode: "overview",
-      focusLevel: 0,
+      focusLevel: null,
       x: 0,
       y: 0,
       z: 0,
@@ -51,10 +54,50 @@ export function packCameraForFocus(viewports, focusLevel = null) {
   };
 }
 
-const projectRadius = (radius, point, camera, width, height) => {
-  const projection = projectPackPoint(point, camera, width, height);
-  return projection.visible ? radius * projection.scale : 0;
-};
+export function packFocusProgress(progress, maxLevel) {
+  const maxAnchor = Math.max(1, Math.trunc(maxLevel) + 1),
+    source = clamp(progress, 0, maxAnchor),
+    sigma = 0.3,
+    strength = 0.42;
+  if (Math.abs(source - Math.round(source)) < 1e-12) return source;
+  let attracted = source;
+  for (let anchor = 0; anchor <= maxAnchor; anchor++) {
+    const offset = source - anchor,
+      pull = strength * Math.exp(-0.5 * (offset / sigma) ** 2);
+    attracted -= offset * pull;
+  }
+  return clamp(attracted, 0, maxAnchor);
+}
+
+export function packCameraForInspection(viewports, progress, maxLevel) {
+  const maxKnown = Math.max(0, Math.trunc(maxLevel)),
+    rawProgress = clamp(progress, 0, maxKnown + 1),
+    position = packFocusProgress(rawProgress, maxKnown),
+    anchors = [
+      packCameraForFocus(viewports, null),
+      ...Array.from({ length: maxKnown + 1 }, (_, level) =>
+        packCameraForFocus(viewports, level),
+      ),
+    ],
+    segment = Math.min(Math.floor(position), anchors.length - 2),
+    amount = position >= anchors.length - 1 ? 1 : position - segment,
+    from = anchors[segment],
+    to = anchors[segment + 1],
+    focusAnchor = Math.round(position);
+  return {
+    mode: "inspection",
+    focusLevel: focusAnchor === 0 ? null : focusAnchor - 1,
+    focusAnchor,
+    inspectionProgress: position,
+    inputProgress: rawProgress,
+    x: from.x + (to.x - from.x) * amount,
+    y: from.y + (to.y - from.y) * amount,
+    z: from.z + (to.z - from.z) * amount,
+    focalLength:
+      from.focalLength + (to.focalLength - from.focalLength) * amount,
+    near: from.near,
+  };
+}
 
 export class PackWorld extends FlowWorld {
   constructor(canvas) {
@@ -63,8 +106,6 @@ export class PackWorld extends FlowWorld {
     this.revealedLevels = new Set([0]);
     this.scaleRevealCount = 0;
     this.radixTransition = null;
-    this.focusLevel = 0;
-    this.focusMode = "overview";
     this.camera = null;
     this.cameraTransition = null;
     this.focusGesture = null;
@@ -76,8 +117,6 @@ export class PackWorld extends FlowWorld {
     this.revealedLevels = new Set([0]);
     this.scaleRevealCount = 0;
     this.radixTransition = null;
-    this.focusLevel = 0;
-    this.focusMode = "overview";
     this.camera = null;
     this.cameraTransition = null;
     this.focusGesture = null;
@@ -90,11 +129,9 @@ export class PackWorld extends FlowWorld {
     super.resize();
     if (this.run?.stage.area !== "pack") return;
     const layout = this.packLayout();
-    this.camera = packCameraForFocus(
-      layout.planes,
-      this.focusMode === "focus" ? this.focusLevel : null,
-    );
+    this.camera = packCameraForFocus(layout.planes, null);
     this.cameraTransition = null;
+    this.focusGesture = null;
     this.sync();
   }
 
@@ -128,10 +165,12 @@ export class PackWorld extends FlowWorld {
     const dt = Math.min(32, Math.max(0, t - this.last));
     if (!this.paused && this.cameraTransition && this.run?.stage.area === "pack") {
       const transition = this.cameraTransition,
-        progress = this.motion
-          ? clamp((this.clock + dt - transition.started) / transition.duration, 0, 1)
-          : 1,
-        amount = ease(progress);
+        progress = clamp(
+          (this.clock + dt - transition.started) / transition.duration,
+          0,
+          1,
+        ),
+        amount = this.motion ? ease(progress) : progress;
       this.camera = Object.fromEntries(
         ["x", "y", "z", "focalLength"].map((key) => [
           key,
@@ -139,8 +178,9 @@ export class PackWorld extends FlowWorld {
         ]),
       );
       Object.assign(this.camera, {
-        mode: transition.to.mode,
-        focusLevel: transition.to.focusLevel,
+        mode: transition.kind === "return" ? "returning" : transition.to.mode,
+        focusLevel:
+          transition.kind === "return" ? transition.focusLevel : null,
         near: transition.to.near,
       });
       if (progress >= 1) {
@@ -153,7 +193,17 @@ export class PackWorld extends FlowWorld {
   }
 
   beginScaleFocus(x, y) {
-    this.focusGesture = { startX: x, startY: y, x, y, moved: false };
+    const maxLevel = Math.max(0, ...this.revealedLevels);
+    this.focusGesture = {
+      startX: x,
+      startY: y,
+      x,
+      y,
+      moved: false,
+      maxLevel,
+      inputProgress: 0,
+      progress: 0,
+    };
   }
 
   moveScaleFocus(x, y) {
@@ -161,9 +211,34 @@ export class PackWorld extends FlowWorld {
     const gesture = this.focusGesture;
     gesture.x = x;
     gesture.y = y;
-    if (!gesture.moved && Math.hypot(x - gesture.startX, y - gesture.startY) < 14)
+    const dx = x - gesture.startX,
+      dy = y - gesture.startY;
+    if (
+      !gesture.moved &&
+      (Math.abs(dx) < 12 || Math.abs(dx) < Math.abs(dy) * 1.2)
+    )
       return false;
     gesture.moved = true;
+    this.cameraTransition = null;
+    const step = clamp(
+        this.w * PACK_FOCUS_STEP_FRACTION,
+        PACK_FOCUS_STEP_MIN,
+        PACK_FOCUS_STEP_MAX,
+      ),
+      maxProgress = gesture.maxLevel + 1,
+      inputProgress =
+        dx >= 0
+          ? clamp(dx / step, 0, 1)
+          : clamp(-dx / step, 0, maxProgress),
+      layout = this.packLayout();
+    gesture.inputProgress = inputProgress;
+    gesture.progress = packFocusProgress(inputProgress, gesture.maxLevel);
+    this.camera = packCameraForInspection(
+      layout.planes,
+      inputProgress,
+      gesture.maxLevel,
+    );
+    this.sync();
     return true;
   }
 
@@ -172,42 +247,29 @@ export class PackWorld extends FlowWorld {
     const gesture = this.focusGesture;
     this.focusGesture = null;
     if (!gesture.moved) return;
-    const dx = gesture.x - gesture.startX,
-      maxLevel = Math.max(0, ...this.revealedLevels),
-      layout = this.packLayout();
-    let nextMode = this.focusMode,
-      nextLevel = this.focusLevel;
-    if (dx <= -14) {
-      if (this.focusMode === "overview") {
-        if (maxLevel > 0) {
-          nextMode = "focus";
-          nextLevel = 1;
-        }
-      } else if (this.focusLevel < maxLevel) nextLevel++;
-    } else if (dx >= 14) {
-      if (this.focusMode === "overview") {
-        nextMode = "focus";
-        nextLevel = 0;
-      } else if (this.focusLevel > 0) nextLevel--;
-      else nextMode = "overview";
+    const from = { ...this.camera },
+      to = packCameraForFocus(this.packLayout().planes, null),
+      distance = Math.hypot(from.x - to.x, from.y - to.y, from.z - to.z);
+    if (distance < 0.5) {
+      this.camera = to;
+      this.cameraTransition = null;
+      this.sync();
+      return;
     }
-    if (nextMode === this.focusMode && nextLevel === this.focusLevel) return;
-    const from = this.camera || packCameraForFocus(layout.planes, null),
-      to = packCameraForFocus(
-        layout.planes,
-        nextMode === "overview" ? null : nextLevel,
-      );
-    this.focusMode = nextMode;
-    this.focusLevel = nextLevel;
-    this.cameraTransition = this.motion
-      ? { from: { ...from }, to, started: this.clock, duration: 205 }
-      : null;
-    this.camera = this.motion ? { ...from } : { ...to };
+    this.cameraTransition = {
+      kind: "return",
+      from,
+      to,
+      focusLevel: from.focusLevel,
+      started: this.clock,
+      duration: this.motion ? 190 : 88,
+    };
+    this.camera = { ...from, mode: "returning", focusLevel: null };
     this.sync();
   }
 
   cancelScaleFocus() {
-    this.focusGesture = null;
+    this.endScaleFocus();
   }
 
   handle(p) {
@@ -221,7 +283,7 @@ export class PackWorld extends FlowWorld {
       activeItems = activePackItems(this.run),
       activeMax = Math.max(0, ...activeItems.map((item) => item.level)),
       discoveredMax = Math.max(0, ...this.revealedLevels, activeMax),
-      planes = packScaleViewports(discoveredMax, this.w, this.h, base);
+      planes = packScaleViewports(discoveredMax, this.w, this.h, base, total);
     if (!this.camera) this.camera = packCameraForFocus(planes, null);
     const slots = planes.map((plane) => {
         const projected = projectPackPoint(
@@ -325,7 +387,8 @@ export class PackWorld extends FlowWorld {
               worldX: x,
               worldY: y,
               worldZ: z,
-              worldRadius: geometry.radius,
+              worldRadius: geometry.frameRadius,
+              contentWorldRadius: geometry.radius,
               rootItemId: item.id,
               level: slot.level,
               outer: node.id === item.id,
@@ -523,6 +586,7 @@ export class PackWorld extends FlowWorld {
     const layout = this.packLayout(),
       pack = this.run.pack,
       moving =
+        !!this.focusGesture?.moved ||
         !!this.cameraTransition ||
         [...this.units.values()].some(
           (d) =>
@@ -550,6 +614,14 @@ export class PackWorld extends FlowWorld {
           x,
           y,
           radius: visual.r,
+          frameRadius:
+            packNestedUnitShape(pack.base, visual.level).frameRadius *
+            projectPackPoint(
+              { x: visual.worldX, y: visual.worldY, z: visual.worldZ },
+              this.camera,
+              this.w,
+              this.h,
+            ).scale,
           worldRadius: visual.worldRadius,
           visible: visual.visible,
           children: [...visual.item.children],
@@ -601,8 +673,11 @@ export class PackWorld extends FlowWorld {
           ({ x, y }) => ({ x, y }),
         ),
         camera: {
-          mode: this.focusMode,
-          focusLevel: this.focusLevel,
+          mode: this.camera?.mode ?? "overview",
+          focusLevel: this.camera?.focusLevel ?? null,
+          focusAnchor: this.camera?.focusAnchor ?? null,
+          inspectionProgress: this.camera?.inspectionProgress ?? 0,
+          inputProgress: this.camera?.inputProgress ?? 0,
           x: this.camera?.x ?? 0,
           y: this.camera?.y ?? 0,
           z: this.camera?.z ?? 0,
@@ -800,7 +875,10 @@ export class PackWorld extends FlowWorld {
       if (!slot.visible || slot.frameRadius <= 0) continue;
       if (Math.abs(Math.hypot(x - slot.x, y - slot.y) - slot.frameRadius) < 9)
         return true;
-      const geometry = packNestedUnitShape(layout.base, slot.level + 1);
+      const geometry = packNestedUnitShape(
+        layout.base,
+        Math.max(1, slot.level),
+      );
       for (const cell of geometry.children) {
         const point = projectPackPoint(
           {
@@ -967,14 +1045,17 @@ export class PackWorld extends FlowWorld {
           : 0,
         projection = projectPackPoint({ x, y, z }, this.camera, this.w, this.h),
         selected = this.drag?.itemIds?.includes(id),
-        alpha = (selected ? 0.72 : state.outer ? 0.34 : 0.19) * state.alpha;
+        alpha = (selected ? 0.82 : state.outer ? 0.56 : 0.34) * state.alpha;
       if (!projection.visible) continue;
       this.circle(
         projection.x,
         projection.y,
         state.worldRadius * projection.scale * (selected ? 1.06 : 0.98),
         this.color + Math.round(alpha * 255).toString(16).padStart(2, "0"),
-        PACK_RAW_DOT_WORLD_RADIUS * projection.scale * (selected ? 0.14 : 0.075),
+        Math.max(
+          0.9,
+          PACK_RAW_DOT_WORLD_RADIUS * projection.scale * (selected ? 0.2 : 0.16),
+        ),
       );
     }
   }
@@ -982,7 +1063,7 @@ export class PackWorld extends FlowWorld {
   drawRadixFrame(slot, base, alpha) {
     if (!slot.visible) return;
     const c = this.ctx,
-      frame = packNestedUnitShape(base, slot.level + 1),
+      frame = packNestedUnitShape(base, Math.max(1, slot.level)),
       center = { x: slot.worldX, y: slot.worldY, z: slot.worldZ },
       centerProjection = projectPackPoint(center, this.camera, this.w, this.h);
     if (!centerProjection.visible) return;
@@ -990,14 +1071,14 @@ export class PackWorld extends FlowWorld {
     c.globalAlpha *= alpha;
     c.strokeStyle = this.color;
     c.lineWidth = Math.max(
-      Number.EPSILON,
-      PACK_RAW_DOT_WORLD_RADIUS * centerProjection.scale * 0.075,
+      0.9,
+      PACK_RAW_DOT_WORLD_RADIUS * centerProjection.scale * 0.16,
     );
     c.beginPath();
     c.arc(
       centerProjection.x,
       centerProjection.y,
-      frame.radius * centerProjection.scale,
+      slot.frameWorldRadius * centerProjection.scale,
       0,
       Math.PI * 2,
     );
@@ -1010,7 +1091,7 @@ export class PackWorld extends FlowWorld {
         this.h,
       );
       if (!point.visible) continue;
-      const radius = cell.radius * point.scale * 0.58;
+      const radius = cell.radius * point.scale * 0.52;
       c.beginPath();
       c.arc(point.x, point.y, radius, 0, Math.PI * 2);
       c.stroke();
@@ -1021,6 +1102,7 @@ export class PackWorld extends FlowWorld {
   drawPackViewports(layout) {
     const c = this.ctx,
       transition = this.radixTransition,
+      focusLevel = this.camera?.focusLevel,
       progress = transition
         ? clamp((this.clock - transition.started) / transition.duration, 0, 1)
         : 1;
@@ -1033,12 +1115,14 @@ export class PackWorld extends FlowWorld {
           (this.hover?.kind === "unpack" &&
             this.hover.targetLevel === slot.level),
         alpha = hot
-          ? 0.38
-          : slot.ghost
-            ? 0.12
-            : levelLayout.items.length
-            ? 0.22
-              : 0.13;
+          ? 0.64
+          : focusLevel === slot.level
+            ? 0.76
+            : slot.ghost
+              ? 0.28
+              : levelLayout.items.length
+                ? 0.46
+                : 0.38;
       c.save();
       if (transition) {
         this.drawRadixFrame(slot, transition.from, alpha * (1 - progress));

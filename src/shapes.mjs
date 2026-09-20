@@ -275,9 +275,18 @@ export function radixFrame(base, radius = 48) {
 
 export const PACK_RAW_DOT_WORLD_RADIUS = 8;
 export const PACK_FOCUS_DOT_SCREEN_RADIUS = 7;
+export const PACK_SCALE_DEPTH_RATIO = 1.5;
+export const PACK_CHILD_GAP_RATIO = 0.16;
 
 function packPattern(base) {
-  const points = shape(base, 54).dots,
+  const points = (base === 4
+      ? [
+          { x: -1, y: -1 },
+          { x: 1, y: -1 },
+          { x: 1, y: 1 },
+          { x: -1, y: 1 },
+        ]
+      : shape(base, 54).dots),
     outerRadius = Math.max(...points.map((point) => Math.hypot(point.x, point.y)));
   let nearest = Infinity;
   for (let i = 0; i < points.length; i++)
@@ -295,19 +304,9 @@ function packPattern(base) {
   };
 }
 
-// One physical dot radius and one repeated world-space growth rule define all
-// nested levels. Radices 2–5 share the same growth, so changing 5 to 4 changes
-// only the child arrangement, not the camera's level depths.
-export function packScaleGrowth(base) {
-  if (!Number.isInteger(base) || base < 2 || base > 10)
-    throw new RangeError("PACK scale radix must be 2–10");
-  const pattern = packPattern(base);
-  return Math.max(4.5, 1 + 2.25 / pattern.nearestSeparation);
-}
-
-// World-space macro geometry is recursively built from fixed-radius raw dots.
-// Child marks follow the same factorization shape as the radix frame. Camera
-// projection, never a level-specific dot multiplier, determines screen size.
+// The same factorization pattern is recursively packed as tightly as its child
+// footprints allow. Unit frames have their own scale reference radius and may
+// sit inside the full child footprint; they are grouping contours, not walls.
 export function packNestedUnitShape(
   base,
   levels = 1,
@@ -321,20 +320,23 @@ export function packNestedUnitShape(
       base,
       levels: 0,
       radius: rawRadius,
+      frameRadius: rawRadius,
       rawRadius,
       children: [],
     };
 
-  const growth = packScaleGrowth(base),
-    pattern = packPattern(base),
+  const pattern = packPattern(base),
     inner = packNestedUnitShape(base, levels - 1, rawRadius),
-    childCenterRadius = (growth - 1) * inner.radius;
+    childCenterRadius =
+      (inner.radius * (2 + PACK_CHILD_GAP_RATIO)) /
+      pattern.nearestSeparation;
   return {
     base,
     levels,
-    radius: growth * inner.radius,
+    radius: childCenterRadius + inner.radius,
+    frameRadius: rawRadius * PACK_SCALE_DEPTH_RATIO ** levels,
     rawRadius,
-    growth,
+    childGapRatio: PACK_CHILD_GAP_RATIO,
     children: pattern.points.map((point, index) => ({
       index,
       x: point.x * childCenterRadius,
@@ -345,31 +347,59 @@ export function packNestedUnitShape(
   };
 }
 
-// Scale planes live in one perspective world. Their center offsets are chosen
-// so the overview projects them into a stable higher-to-lower horizontal row.
-export function packScaleViewports(maxLevel, width, height, base = 4) {
+// Scale planes share a short, uniform depth ratio. The active radix does not
+// affect their canonical positions; the overview lane reserves the larger
+// envelope from the supported base-4/base-5 grammars. Comparison frames
+// project to the reference raw-dot radius, while contents may protrude.
+export function packScaleViewports(maxLevel, width, height, base = 4, total = 17) {
   maxLevel = Math.max(0, Math.trunc(maxLevel));
+  total = Math.max(1, Math.trunc(total));
   const visibleMax = maxLevel,
     showNext = visibleMax < 2,
     lastLevel = visibleMax + (showNext ? 1 : 0),
     levels = Array.from({ length: lastLevel + 1 }, (_, index) => lastLevel - index),
     layoutMax = Math.max(2, visibleMax),
     count = layoutMax + 1,
-    growth = packScaleGrowth(base),
     focalLength = Math.max(1, Math.min(width, height) * 1.15),
     baseDistance =
       (focalLength * PACK_RAW_DOT_WORLD_RADIUS) /
       PACK_FOCUS_DOT_SCREEN_RADIUS,
-    overviewFrameRadius = growth * PACK_FOCUS_DOT_SCREEN_RADIUS,
+    overviewFrameRadius = PACK_FOCUS_DOT_SCREEN_RADIUS,
+    maxContentRadius = Math.max(
+      ...[4, 5].flatMap((layoutBase) =>
+        Array.from({ length: layoutMax + 1 }, (_, level) => {
+          const maxItems = Math.min(
+              layoutBase - 1,
+              Math.floor(total / layoutBase ** level),
+            ),
+            geometry = packNestedUnitShape(layoutBase, level);
+          return Array.from({ length: Math.max(1, maxItems) }, (_, i) => {
+            const count = i + 1,
+              arrangement = shape(count, 54),
+              centerRadius = Math.max(
+                0,
+                ...arrangement.dots.map((dot) => Math.hypot(dot.x, dot.y)),
+              ),
+              extent =
+                centerRadius * geometry.radius / arrangement.dotRadius +
+                geometry.radius;
+            return (
+              (extent * PACK_FOCUS_DOT_SCREEN_RADIUS) /
+              (PACK_RAW_DOT_WORLD_RADIUS * PACK_SCALE_DEPTH_RATIO ** level)
+            );
+          });
+        }).flat(),
+      ),
+    ),
     pitch = Math.min(
-      overviewFrameRadius * 2 + 18,
-      (width - overviewFrameRadius * 2 - 24) / Math.max(1, count - 1),
+      Math.max(overviewFrameRadius * 2 + 18, maxContentRadius * 2 + 10),
+      (width - maxContentRadius * 2 - 24) / Math.max(1, count - 1),
     );
   return levels.map((level) => {
     const unitWorldRadius =
-        PACK_RAW_DOT_WORLD_RADIUS * growth ** level,
-      frameWorldRadius = unitWorldRadius * growth,
-      depth = baseDistance * growth ** level,
+        PACK_RAW_DOT_WORLD_RADIUS * PACK_SCALE_DEPTH_RATIO ** level,
+      frameWorldRadius = unitWorldRadius,
+      depth = baseDistance * PACK_SCALE_DEPTH_RATIO ** level,
       overviewOffsetX = (layoutMax / 2 - level) * pitch;
     return {
       level,
