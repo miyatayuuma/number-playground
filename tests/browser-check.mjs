@@ -485,13 +485,13 @@ try {
     [4, 4],
   );
   // Keep the fun coarse selection, but distinguish deliberate fast peels.
-  await route("spark", (p) => p.ammo[0] === 4 && p.ammo[1] === 32);
+  await route("spark", (p) => p.ammo[0] === 4 && p.ammo[1] === 5);
   let small = (await read()).pieces.find((p) => p.n === 4);
   const slow = await touchPeel(context, page, small, 32, 0, { fast: false });
   assert.equal(slow.initial.length, 4);
   assert.equal(slow.picked.length, 4);
   await settled();
-  await route("spark", (p) => p.ammo[0] === 4 && p.ammo[1] === 32);
+  await route("spark", (p) => p.ammo[0] === 4 && p.ammo[1] === 5);
   small = (await read()).pieces.find((p) => p.n === 4);
   const fast = await touchPeel(context, page, small, 32, 0);
   assert.equal(fast.initial.length, 4);
@@ -507,7 +507,7 @@ try {
   assert.equal(single.picked.length, 1);
   await settled();
   await audit();
-  await route("spark", (p) => p.ammo[0] === 4 && p.ammo[1] === 32);
+  await route("spark", (p) => p.ammo[0] === 4 && p.ammo[1] === 5);
   small = (await read()).pieces.find((p) => p.n === 4);
   const grip = await touchPeel(context, page, small.grip, 32, 0, {
     cancel: true,
