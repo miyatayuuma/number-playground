@@ -319,6 +319,39 @@ try {
     ],
   );
   await page.screenshot({ path: resolve(root, "artifacts/pack-base5-carry.png") });
+  const base5Attack = await page.evaluate(async () => {
+    const model = await import("./src/model.mjs"),
+      { PROBLEM_BANK } = await import("./src/stages.mjs"),
+      run = model.createRun({
+        ...structuredClone(PROBLEM_BANK.pack[0]),
+        id: "pack:17:5-attack-browser",
+        radices: [5],
+      });
+    model.normalizePackSelection(
+      run,
+      model.activePackItems(run).map((item) => item.id),
+    );
+    const plan = model.beginPackAttack(run);
+    if (!plan.ok) return { ok: false };
+    for (const payload of plan.payloads)
+      model.resolvePackAttackPayload(run, payload.itemId);
+    const result = {
+      ok: run.status === "break",
+      placeCount: plan.placeCount,
+      levels: plan.payloads.map((payload) => payload.level),
+      weights: plan.payloads.map((payload) => payload.weight),
+      rawIds: run.pack.attack.resolvedRawIds,
+    };
+    result.completed = model.completePackBreak(run);
+    return result;
+  });
+  assert.equal(base5Attack.ok, true);
+  assert.equal(base5Attack.placeCount, 2);
+  assert.deepEqual(base5Attack.levels, [1, 1, 1, 0, 0]);
+  assert.deepEqual(base5Attack.weights, [5, 5, 5, 1, 1]);
+  assert.deepEqual([...base5Attack.rawIds].sort((a, b) => a - b), originalPackIds);
+  assert.equal(new Set(base5Attack.rawIds).size, 17);
+  assert.equal(base5Attack.completed, true);
 
   // Overview unit frames match the L0 raw-dot reference. Inspection moves
   // continuously while held and returns home as soon as the gesture ends.
@@ -498,31 +531,30 @@ try {
   await drag(middle, topSlot, 16, false);
   const recursiveCarry = await read();
   assert.equal(recursiveCarry.busy, true);
+  assert.equal(recursiveCarry.status, "settling");
+  assert.equal(recursiveCarry.pack.phase, "attack-ready");
   assert.equal(recursiveCarry.pack.renderedDots.length, 17);
   assert.equal(new Set(recursiveCarry.pack.renderedDots.map((dot) => dot.id)).size, 17);
   await page.screenshot({ path: resolve(root, "artifacts/pack-recursive-carry.png") });
-  await settled();
-  packState = await read();
-  assert.equal(packState.status, "won");
-  assert.equal(packState.pack.phase, "break");
-  assert.equal(packState.pack.locks[1].notation, "101₄");
-  assert.deepEqual(packState.pack.locks[1].digits, [1, 0, 1]);
+  const canonicalState = recursiveCarry;
+  assert.equal(canonicalState.pack.locks[1].notation, "101₄");
+  assert.deepEqual(canonicalState.pack.locks[1].digits, [1, 0, 1]);
   assert.equal(
-    packState.pack.places.find((place) => place.level === 2).n,
+    canonicalState.pack.places.find((place) => place.level === 2).n,
     1,
   );
   assert.equal(
-    packState.pack.places.find((place) => place.level === 1).n,
+    canonicalState.pack.places.find((place) => place.level === 1).n,
     0,
   );
   assert.equal(
-    packState.pack.places.find((place) => place.level === 0).n,
+    canonicalState.pack.places.find((place) => place.level === 0).n,
     1,
   );
-  assert.equal(packState.pack.revealCount, 2);
-  assert.deepEqual(packState.pack.revealedLevels, [0, 1, 2]);
-  assert.ok(packState.pack.viewports.every((viewport) => !viewport.ghost));
-  const base4Top = packState.pack.items.find((item) => item.level === 2);
+  assert.equal(canonicalState.pack.revealCount, 2);
+  assert.deepEqual(canonicalState.pack.revealedLevels, [0, 1, 2]);
+  assert.ok(canonicalState.pack.viewports.every((viewport) => !viewport.ghost));
+  const base4Top = canonicalState.pack.items.find((item) => item.level === 2);
   assert.equal(base4Top.children.length, 4);
   assert.equal(base4Top.rawIds.length, 16);
   assert.equal(base4Top.tree.children.length, 4);
@@ -534,65 +566,83 @@ try {
         middle.children.every((raw) => raw.level === 0 && raw.rawIds.length === 1),
     ),
   );
-  assert.equal(packState.pack.renderedDots.length, 17);
-  assert.equal(new Set(packState.pack.renderedDots.map((dot) => dot.id)).size, 17);
-  assert.ok(packState.pack.renderedDots.every((dot) => dot.worldRadius === 8));
+  assert.equal(canonicalState.pack.renderedDots.length, 17);
+  assert.equal(new Set(canonicalState.pack.renderedDots.map((dot) => dot.id)).size, 17);
+  assert.ok(canonicalState.pack.renderedDots.every((dot) => dot.worldRadius === 8));
   assert.deepEqual(
-    packState.pack.items
+    canonicalState.pack.items
       .flatMap((item) => item.rawIds)
       .sort((a, b) => a - b),
     [...originalPackIds].sort((a, b) => a - b),
   );
   await page.screenshot({ path: resolve(root, "artifacts/pack-base4-final.png") });
-  assert.ok(packState.pack.slots.some((slot) => slot.level === 1));
-  assert.deepEqual(packState.pieces[0].ids, originalPackIds);
-  await audit();
+  assert.ok(canonicalState.pack.slots.some((slot) => slot.level === 1));
+  assert.deepEqual(canonicalState.pieces[0].ids, originalPackIds);
+  assert.deepEqual(canonicalState.pack.layers.map((layer) => layer.level), [0, 1, 2]);
 
-  // Prototype completion stays on the representation; no enemy attack or
-  // automatic next problem is introduced by this pass.
-  await settled();
-  packState = await read();
+  await page.waitForFunction(
+    () => window.__readFlow?.().status === "attack",
+    null,
+    { timeout: 5000 },
+  );
+  const attackState = await read(),
+    attackIds = attackState.pack.attack.payloads.flatMap((payload) => payload.rawIds);
+  assert.equal(attackState.pack.phase, "attack");
+  assert.deepEqual(
+    attackState.pack.attack.payloads.map((payload) => [payload.level, payload.weight]),
+    [[2, 16], [0, 1]],
+  );
+  assert.deepEqual(
+    attackState.pack.layers.map((layer) => layer.level),
+    [0, 1, 2],
+  );
+  assert.deepEqual([...attackIds].sort((a, b) => a - b), originalPackIds);
+  assert.equal(new Set(attackIds).size, 17);
+  assert.equal(attackState.pack.attack.placeCount, 3);
+  assert.deepEqual(
+    [...attackState.pack.rawIds].sort((a, b) => a - b),
+    originalPackIds,
+  );
+  const attackBox = await page.locator("#world").boundingBox(),
+    exposedRaw = attackState.pack.renderedDots.find((dot) => dot.level === 0);
+  await page.mouse.move(attackBox.x + exposedRaw.x, attackBox.y + exposedRaw.y);
+  await page.mouse.down();
+  assert.deepEqual((await read()).dragIds, [], "attack locks dot manipulation");
+  await page.mouse.move(attackBox.x + attackBox.width * 0.8, attackBox.y + 60, { steps: 5 });
+  assert.equal((await read()).pack.camera.inputProgress, 0, "attack locks camera inspection");
+  await page.mouse.up();
+  await page.screenshot({ path: resolve(root, "artifacts/pack-layered-attack.png") });
+  await page.waitForFunction(
+    () => window.__readFlow?.().status === "break",
+    null,
+    { timeout: 5000 },
+  );
+  const broken = await read();
+  assert.equal(broken.pack.phase, "break");
+  assert.equal(broken.pack.attack.resolvedRawIds.length, 17);
+  assert.equal(new Set(broken.pack.attack.resolvedRawIds).size, 17);
+  assert.deepEqual(
+    broken.pack.layers.map((layer) => [layer.level, layer.impacted]),
+    [[0, true], [1, false], [2, true]],
+  );
+  assert.equal(broken.pack.renderedDots.length, 17);
+  assert.equal(new Set(broken.pack.renderedDots.map((dot) => dot.id)).size, 17);
+  await page.screenshot({ path: resolve(root, "artifacts/pack-enemy-break.png") });
+  await page.waitForFunction(
+    (previous) => window.__readFlow?.().runToken > previous,
+    broken.runToken,
+    { timeout: 5000 },
+  );
+  packState = await settled();
   assert.equal(packState.rule, "pack");
-  assert.equal(packState.status, "won");
-  const finalRawIds = [...packState.pack.rawIds].sort((a, b) => a - b),
-    base4FocusRadius = base4L0Radius,
-    touchStep = focusStep(packState.width),
-    nestedInspection = await inspectScaleTouch(
-      [-touchStep, -touchStep * 2, -touchStep * 2.5, -touchStep * 3],
-      "left",
-      "artifacts/pack-scale-focused-l2.png",
-    ),
-    touchL1 = nestedInspection.states[1],
-    touchL1Viewport = touchL1.pack.viewports.find((view) => view.level === 1);
-  assert.equal(touchL1.pack.camera.focusLevel, 1);
-  assert.equal(touchL1.pack.places.find((place) => place.level === 1).n, 0);
-  assert.ok(touchL1Viewport && !touchL1Viewport.ghost);
-  assert.ok(Math.abs(touchL1Viewport.x - touchL1.width / 2) < 0.01);
-  assert.ok(nestedInspection.states[2].pack.camera.z > nestedInspection.states[1].pack.camera.z);
-  const touchL2 = nestedInspection.states[3],
-    touchL2Dots = touchL2.pack.renderedDots.filter(
-      (dot) => dot.level === 2 && dot.visible,
-    ),
-    touchL2Viewport = touchL2.pack.viewports.find((view) => view.level === 2),
-    emptyL1Viewport = touchL2.pack.viewports.find((view) => view.level === 1);
-  assert.equal(touchL2.pack.camera.focusLevel, 2);
-  assert.equal(touchL2Dots.length, 16);
-  assert.ok(touchL2Dots.every((dot) => Math.abs(dot.radius - base4FocusRadius) < 0.15));
-  assert.ok(Math.abs(touchL2Viewport.x - touchL2.width / 2) < 0.01);
-  assert.ok(Math.abs(touchL2Viewport.y - touchL2.height / 2) < 0.01);
-  assert.ok(touchL2Viewport.frameRadius > base4Overview.pack.viewports.find((view) => view.level === 2).frameRadius);
-  assert.ok(emptyL1Viewport && !emptyL1Viewport.ghost);
-  assert.deepEqual([...touchL2.pack.rawIds].sort((a, b) => a - b), finalRawIds);
-  assert.deepEqual(touchL2.pack.items.find((item) => item.level === 2).tree, base4Top.tree);
-  assert.ok(touchL2.pack.viewports.every((view, i, all) =>
-    i === 0 || all[i - 1].level > view.level,
-  ));
-  assert.equal(nestedInspection.released.pack.camera.mode, "returning");
-  assert.equal(nestedInspection.home.pack.camera.mode, "overview");
-  assert.equal(nestedInspection.home.pack.camera.focusLevel, null);
-  assert.ok(nestedInspection.home.pack.viewports.find((view) => view.level === 1));
+  assert.equal(packState.status, "play");
+  assert.equal(packState.pack.phase, "pack");
+  assert.equal(packState.total, 17);
+  assert.equal(packState.runToken, broken.runToken + 1);
+  await page.waitForTimeout(120);
+  assert.equal((await read()).runToken, packState.runToken, "one BREAK advances once");
   console.log(
-    "PACK Pass 5R verified compact nested 17→32₅→101₄, shared raw-dot world size, transient continuous L0/L1/L2 inspection, overview unit frames, and the retained zero viewport.",
+    "PACK layered attack verified 17→32₅, unpack/base change, 17→101₄, L2/L0 impacts across the retained empty L1 layer, enemy BREAK, and next-problem continuation.",
   );
   await route("link", (p) => p.ammo[0] === 14 && p.gates[0] === 3);
   let s = await read();
