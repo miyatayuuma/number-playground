@@ -28,7 +28,12 @@ export function driver(page, base) {
     });
     await page.waitForFunction(() => {
       const s = window.__readFlow();
-      return !s.busy && !s.moving && s.width > 0 && s.status === "play";
+      return (
+        !s.busy &&
+        !s.moving &&
+        s.width > 0 &&
+        (s.status === "play" || (s.rule === "pack" && s.status === "won"))
+      );
     });
     return read();
   }
@@ -123,7 +128,7 @@ export function driver(page, base) {
     const id = s.stage;
     for (let step = 0; step < 30; step++) {
       s = await settled();
-      if (s.stage !== id) return s;
+      if (s.stage !== id || s.status === "won") return s;
       if (s.rule === "spark") {
         if (s.pieces.length > 1) {
           await drag(s.pieces[1], s.pieces[0]);
@@ -155,13 +160,20 @@ export function driver(page, base) {
         );
       } else if (s.rule === "pack") {
         if (s.pack.phase === "pack") {
-          const group = s.pack.groups[0];
-          assert.ok(group, "PACK group");
-          const slot = s.pack.slots.find((slot) => slot.level === group.level + 1);
-          assert.ok(slot, "PACK upper slot");
-          const finalCarry = s.pack.step === 1 && group.level === 1;
-          await drag(group, slot, group.n);
-          if (finalCarry) return read();
+          const place = s.pack.places.find(
+              (candidate) =>
+                candidate.n >= s.pack.base &&
+                s.pack.slots.some(
+                  (slot) => slot.level === candidate.level + 1,
+                ),
+            ),
+            slot = place
+              ? s.pack.slots.find(
+                  (candidate) => candidate.level === place.level + 1,
+                )
+              : null;
+          assert.ok(place && slot, "PACK carryable place");
+          await drag(place, slot, place.n);
         } else if (s.pack.phase === "unpack") {
           const item = s.pack.items.find((item) => item.macro);
           assert.ok(item, "PACK macro");
@@ -170,6 +182,8 @@ export function driver(page, base) {
           await drag(item, slot, 1);
         } else if (s.pack.phase === "choose") {
           await packBase();
+        } else if (s.pack.phase === "break") {
+          return s;
         }
       }
     }
