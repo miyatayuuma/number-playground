@@ -632,7 +632,10 @@ export class World {
         origin = this.run.dots[d.id].origin;
       if (d.flight && d.lastX !== undefined) {
         c.strokeStyle = this.color + "75";
-        c.lineWidth = Math.max(1, d.r * 0.6);
+        c.lineWidth =
+          this.run.stage.area === "pack"
+            ? d.r * 0.6
+            : Math.max(1, d.r * 0.6);
         c.beginPath();
         c.moveTo(d.lastX, d.lastY);
         c.lineTo(d.x, d.y);
@@ -642,9 +645,17 @@ export class World {
       d.lastY = d.y;
       c.fillStyle = d.keep ? this.color : origin % 2 ? this.color : "#edf6ff";
       c.shadowColor = this.color;
-      c.shadowBlur = picked || d.keep ? 14 : 6;
+      const glow = Number.isFinite(d.glowRadius) ? d.glowRadius : 6;
+      c.shadowBlur = picked || d.keep ? glow * 2.3 : glow;
       c.beginPath();
-      c.arc(d.x, d.y, Math.max(1, d.r) * (picked ? 1.09 : 1), 0, TAU);
+      c.arc(
+        d.x,
+        d.y,
+        Math.max(this.run.stage.area === "pack" ? 0.1 : 1, d.r) *
+          (picked ? 1.09 : 1),
+        0,
+        TAU,
+      );
       c.fill();
       c.shadowBlur = 0;
       c.fillStyle = "#ffffff6a";
@@ -652,7 +663,7 @@ export class World {
       c.arc(
         d.x - d.r * 0.22,
         d.y - d.r * 0.25,
-        Math.max(0.65, d.r * 0.2),
+        Math.max(this.run.stage.area === "pack" ? 0.05 : 0.65, d.r * 0.2),
         0,
         TAU,
       );
