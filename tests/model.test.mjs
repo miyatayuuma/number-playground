@@ -145,6 +145,140 @@ test("seeded generation spans all production difficulties without repeating the 
     }
   assert.throws(() => generateProblem("missing"));
 });
+test("SPARK difficulty grows quantity and shifts from joins to sequential decomposition", () => {
+  const ranges = {
+      1: [3, 6],
+      2: [5, 9],
+      3: [7, 12],
+      4: [10, 18],
+      5: [14, 24],
+    },
+    samples = new Map();
+  for (let difficulty = 1; difficulty <= 5; difficulty++) {
+    const generated = Array.from({ length: 600 }, (_, seed) =>
+      generateProblem("spark", difficulty, `progression-${seed}`, []),
+    );
+    samples.set(difficulty, generated);
+    for (const problem of generated) {
+      const total = problem.ammo.reduce((sum, n) => sum + n, 0),
+        required = problem.targets.reduce((sum, target) => sum + target.n, 0);
+      assert.ok(total >= ranges[difficulty][0] && total <= ranges[difficulty][1]);
+      assert.equal(required, total);
+      assert.ok(problem.targets.every((target) => target.n > 0));
+    }
+  }
+
+  const averageQuantity = (difficulty) => {
+      const problems = samples.get(difficulty);
+      return (
+        problems.reduce(
+          (sum, problem) =>
+            sum + problem.ammo.reduce((total, n) => total + n, 0),
+          0,
+        ) / problems.length
+      );
+    },
+    multiStageRatio = (difficulty) => {
+      const problems = samples.get(difficulty);
+      return (
+        problems.filter((problem) =>
+          problem.targets.some((target) => target.phase > 0),
+        ).length / problems.length
+      );
+    },
+    joinRatio = (difficulty) => {
+      const problems = samples.get(difficulty);
+      return (
+        problems.filter((problem) => problem.family === "join").length /
+        problems.length
+      );
+    };
+
+  for (let difficulty = 1; difficulty < 5; difficulty++)
+    assert.ok(
+      averageQuantity(difficulty + 1) > averageQuantity(difficulty),
+      `quantity should grow from D${difficulty} to D${difficulty + 1}`,
+    );
+
+  assert.equal(joinRatio(1), 1);
+  assert.equal(multiStageRatio(1), 0);
+  assert.ok(joinRatio(2) >= 0.6 && joinRatio(2) <= 0.7);
+  assert.ok(multiStageRatio(2) >= 0.3 && multiStageRatio(2) <= 0.4);
+  assert.ok(joinRatio(3) >= 0.25 && joinRatio(3) <= 0.35);
+  assert.ok(multiStageRatio(3) >= 0.65 && multiStageRatio(3) <= 0.75);
+  assert.equal(joinRatio(4), 0);
+  assert.equal(joinRatio(5), 0);
+  assert.ok(multiStageRatio(4) > multiStageRatio(3));
+  assert.ok(multiStageRatio(4) >= 0.8);
+  assert.ok(multiStageRatio(5) >= 0.8);
+
+  const d2Families = new Set(samples.get(2).map((problem) => problem.family)),
+    d3Families = new Set(samples.get(3).map((problem) => problem.family));
+  assert.ok(d2Families.has("sequential-split"));
+  assert.ok(d2Families.has("join-decomposition"));
+  assert.ok(d3Families.has("parallel-split"));
+});
+
+test("SPARK join-decomposition cannot shortcut its first active target with an initial piece", () => {
+  for (const problem of PROBLEM_BANK.spark.filter(
+    (problem) => problem.family === "join-decomposition",
+  )) {
+    const first = problem.targets.find((target) => target.phase === 0);
+    assert.ok(first);
+    assert.ok(
+      problem.ammo.every((quantity) => quantity !== first.n),
+      JSON.stringify(problem),
+    );
+    assert.ok(
+      first.n > Math.max(...problem.ammo),
+      "the first layer requires combining initial pieces before decomposition",
+    );
+  }
+});
+
+test("SPARK 7 -> 3 -> 4 spends each original raw identity exactly once", () => {
+  const run = createRun({
+      id: "spark:test:7-to-3-to-4",
+      area: "spark",
+      difficulty: 3,
+      ammo: [7],
+      family: "sequential-split",
+      targets: [
+        { n: 3, phase: 0, origin: null },
+        { n: 4, phase: 1, origin: null },
+      ],
+    }),
+    original = run.dots.map((dot) => dot.id),
+    firstIds = run.pieces[0].ids.slice(0, 3);
+
+  assert.deepEqual(run.spent, []);
+  assert.deepEqual(activeTargets(run), [0]);
+  const first = fire(run, run.pieces[0].id, firstIds, 0);
+  assert.equal(first.ok, true);
+  assert.equal(run.spent.length, 3);
+  assert.equal(run.pieces.length, 1);
+  assert.equal(run.pieces[0].ids.length, 4);
+  assert.deepEqual(activeTargets(run), [1]);
+  assert.equal(run.status, "play");
+  assert.deepEqual(
+    [...new Set([...run.pieces[0].ids, ...run.spent])].sort((a, b) => a - b),
+    original,
+  );
+  assert.equal(
+    new Set([...run.pieces[0].ids, ...run.spent]).size,
+    original.length,
+  );
+
+  const remaining = run.pieces[0];
+  const second = fire(run, remaining.id, [...remaining.ids], 1);
+  assert.equal(second.ok, true);
+  assert.equal(run.spent.length, 7);
+  assert.equal(run.pieces.length, 0);
+  assert.equal(run.status, "won");
+  assert.deepEqual([...run.spent].sort((a, b) => a - b), original);
+  assert.equal(new Set(run.spent).size, original.length);
+});
+
 test("PACK starts with one Number Mass and only an empty L0", () => {
   const run = createRun(structuredClone(PROBLEM_BANK.pack[0])),
     original = run.dots.map((dot) => dot.id);
