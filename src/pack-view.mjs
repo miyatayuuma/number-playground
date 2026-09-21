@@ -1,427 +1,155 @@
 import { FlowWorld } from "./flow-view.mjs";
 import {
   shape,
-  packScaleViewports,
-  packNestedUnitShape,
+  compactPackNestedUnitShape,
   PACK_RAW_DOT_WORLD_RADIUS,
 } from "./shapes.mjs";
 import { isCanonicalPack, packDigits } from "./model.mjs";
-import {
-  drawNumberReadout,
-  drawSelectorDots,
-} from "./number-selector.mjs";
+import { drawNumberReadout, drawSelectorDots } from "./number-selector.mjs";
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const ease = (value) => 1 - Math.pow(1 - value, 3);
-const PACK_NEAR_FRACTION = 0.34;
-const PACK_FOCUS_STEP_FRACTION = 0.145;
-const PACK_FOCUS_STEP_MIN = 40;
-const PACK_FOCUS_STEP_MAX = 56;
-
-export function projectPackPoint(point, camera, width, height) {
-  const depth = point.z - camera.z;
-  if (!(depth >= camera.near))
-    return { x: null, y: null, scale: 0, depth, visible: false };
-  const scale = camera.focalLength / depth;
-  return {
-    x: width / 2 + (point.x - camera.x) * scale,
-    y: height / 2 + (point.y - camera.y) * scale,
-    scale,
-    depth,
-    visible: true,
-  };
-}
-
-export function packCameraForFocus(viewports, focusLevel = null) {
-  const origin = viewports.find((viewport) => viewport.level === 0) || viewports.at(-1),
-    near = origin.baseDistance * PACK_NEAR_FRACTION;
-  if (focusLevel === null)
-    return {
-      mode: "overview",
-      focusLevel: null,
-      x: 0,
-      y: 0,
-      z: 0,
-      focalLength: origin.focalLength,
-      near,
-    };
-  const target = viewports.find((viewport) => viewport.level === focusLevel);
-  if (!target) throw new RangeError(`Unknown PACK focus level ${focusLevel}`);
-  return {
-    mode: "focus",
-    focusLevel,
-    x: target.x,
-    y: target.y,
-    z: target.z - target.baseDistance,
-    focalLength: target.focalLength,
-    near,
-  };
-}
-
-export function packFocusProgress(progress, maxLevel) {
-  const maxAnchor = Math.max(1, Math.trunc(maxLevel) + 1),
-    source = clamp(progress, 0, maxAnchor),
-    sigma = 0.3,
-    strength = 0.42;
-  if (Math.abs(source - Math.round(source)) < 1e-12) return source;
-  let attracted = source;
-  for (let anchor = 0; anchor <= maxAnchor; anchor++) {
-    const offset = source - anchor,
-      pull = strength * Math.exp(-0.5 * (offset / sigma) ** 2);
-    attracted -= offset * pull;
-  }
-  return clamp(attracted, 0, maxAnchor);
-}
-
-export function packCameraForInspection(viewports, progress, maxLevel) {
-  const maxKnown = Math.max(0, Math.trunc(maxLevel)),
-    rawProgress = clamp(progress, 0, maxKnown + 1),
-    position = packFocusProgress(rawProgress, maxKnown),
-    anchors = [
-      packCameraForFocus(viewports, null),
-      ...Array.from({ length: maxKnown + 1 }, (_, level) =>
-        packCameraForFocus(viewports, level),
-      ),
-    ],
-    segment = Math.min(Math.floor(position), anchors.length - 2),
-    amount = position >= anchors.length - 1 ? 1 : position - segment,
-    from = anchors[segment],
-    to = anchors[segment + 1],
-    focusAnchor = Math.round(position);
-  return {
-    mode: "inspection",
-    focusLevel: focusAnchor === 0 ? null : focusAnchor - 1,
-    focusAnchor,
-    inspectionProgress: position,
-    inputProgress: rawProgress,
-    x: from.x + (to.x - from.x) * amount,
-    y: from.y + (to.y - from.y) * amount,
-    z: from.z + (to.z - from.z) * amount,
-    focalLength:
-      from.focalLength + (to.focalLength - from.focalLength) * amount,
-    near: from.near,
-  };
-}
+const placeFrameRadius = (width, count) =>
+  Math.max(18, Math.min(28, (width - 24 - Math.max(0, count - 1) * 8) / (2 * count)));
 
 export class PackWorld extends FlowWorld {
   constructor(canvas) {
     super(canvas);
     this.showDragCount = false;
     this.revealedLevels = new Set([0]);
-    this.scaleRevealCount = 0;
     this.radixTransition = null;
-    this.camera = null;
-    this.cameraTransition = null;
-    this.focusGesture = null;
+    this.activationVisual = null;
     this.boundaryVisuals = new Map();
     this.boundaryClock = 0;
     this.previewPackState = null;
     this.carryPulse = null;
     this.massAnchorOverride = null;
-    this.activationVisual = null;
-    this.defenseCollapse = null;
     this.packImpacts = [];
     this.activePackProjectileId = null;
+    this.packControlX = null;
   }
 
   setRun(run) {
     this.revealedLevels = new Set([0]);
-    this.scaleRevealCount = 0;
     this.radixTransition = null;
-    this.camera = null;
-    this.cameraTransition = null;
-    this.focusGesture = null;
+    this.activationVisual = null;
     this.boundaryVisuals.clear();
     this.boundaryClock = this.clock;
     this.previewPackState = null;
     this.carryPulse = null;
     this.massAnchorOverride = null;
-    this.activationVisual = null;
-    this.defenseCollapse = null;
     this.packImpacts = [];
     this.activePackProjectileId = null;
+    this.packControlX = null;
     super.setRun(run);
     if (run?.stage.area === "pack")
       this.revealedLevels = new Set(run.pack.discoveredLevels);
   }
 
-  async settlePackOverview() {
-    if (this.focusGesture) this.endScaleFocus();
-    if (!this.run || this.run.stage.area !== "pack") return;
-    const layout = this.packLayout(),
-      target = packCameraForFocus(layout.planes, null),
-      from = { ...this.camera },
-      distance = Math.hypot(
-        from.x - target.x,
-        from.y - target.y,
-        from.z - target.z,
-        from.focalLength - target.focalLength,
-      );
-    if (distance < 0.5) {
-      this.camera = target;
-      this.cameraTransition = null;
-      return;
-    }
-    this.cameraTransition = {
-      kind: "return",
-      from,
-      to: target,
-      focusLevel: from.focusLevel,
-      started: this.clock,
-      duration: this.motion ? 145 : 45,
-    };
-    await new Promise((resolve) => {
-      const token = this.token;
-      const tick = () => {
-        if (token !== this.token || !this.cameraTransition) resolve();
-        else requestAnimationFrame(tick);
-      };
-      requestAnimationFrame(tick);
-    });
-  }
-
   drawTargets() {
-    if (this.run?.stage.area === "pack") {
-      if (this.run.pack.phase === "attack" || this.run.pack.phase === "break")
-        this.drawPackAttackLayers();
-      else this.drawPackDefense();
-      return;
-    }
-    return super.drawTargets();
+    if (this.run?.stage.area !== "pack") return super.drawTargets();
+    if (this.run.pack.phase === "pack") this.drawPackTarget();
   }
 
-  packDefenseLayout() {
-    const pack = this.run.pack,
-      locks = pack.defenseLocks,
-      count = locks.length,
-      enemy = this.enemyPoint(),
-      rx = Math.min(this.w * 0.48, 170),
-      ry = Math.min(88, Math.max(48, this.h * 0.16)),
-      start = Math.PI * 0.2,
-      span = Math.PI * 0.6,
-      groupWidth = Math.min(
-        count === 1 ? 210 : count === 2 ? 138 : 99,
-        (this.w - 24) / count,
-      );
-    return locks.map((lock, index) => {
-      const part = (index + 0.5) / count,
-        angle = start + span * part,
-        x = enemy.x + rx * Math.cos(angle),
-        y = enemy.y + 5 + ry * Math.sin(angle),
-        step = lock.digits.length > 1
-          ? Math.min(
-              count === 1 ? 58 : count === 2 ? 47 : 38,
-              (groupWidth - 12) / (lock.digits.length - 1),
-            )
-          : 0,
-        rawRadius = count === 1 ? 2.7 : count === 2 ? 2.4 : 2.15,
-        places = lock.digits.map((digit, placeIndex) => {
-          const level = lock.digits.length - placeIndex - 1,
-            placeX = x + ((lock.digits.length - 1) / 2 - placeIndex) * step,
-            spread = Math.min(12, Math.max(0, step * 0.3)),
-            centers = digit ? shape(digit, spread).dots : [],
-            unitRadius = digit
-              ? packNestedUnitShape(lock.radix, level, rawRadius).radius
-              : 0,
-            frameRadius = Math.min(
-              groupWidth * 0.25,
-              Math.max(9, unitRadius + spread + 3),
-            );
-          return {
-            level,
-            digit,
-            x: placeX,
-            y,
-            frameRadius,
-            units: centers.map((center) => ({
-              x: placeX + center.x,
-              y: y + center.y,
-            })),
-          };
-        });
-      return {
-        id: lock.id,
-        active: lock.activated,
-        x,
-        y,
-        angle,
-        groupWidth,
-        rawRadius,
-        places,
-      };
-    });
-  }
-
-  drawPackDefense() {
-    const c = this.ctx,
-      enemy = this.enemyPoint(),
-      ghosts = this.packDefenseLayout(),
-      collapse = this.defenseCollapse,
-      collapseProgress = collapse
-        ? clamp((this.clock - collapse.started) / collapse.duration, 0, 1)
+  packTargetLayout() {
+    const digits = this.run.pack.target.digits,
+      count = digits.length,
+      frameRadius = placeFrameRadius(this.w, count),
+      pitch = count > 1
+        ? Math.min(2 * frameRadius + 14, (this.w - 2 * frameRadius - 24) / (count - 1))
         : 0,
-      alpha = collapse ? 1 - ease(collapseProgress) : 1,
-      rx = Math.min(this.w * 0.48, 170),
-      ry = Math.min(88, Math.max(48, this.h * 0.16)),
-      start = Math.PI * 0.2,
-      span = Math.PI * 0.6;
-    if (!ghosts.length || alpha <= 0) return;
-    c.save();
-    c.globalAlpha = alpha;
-    c.strokeStyle = this.color;
-    c.lineWidth = 1.35;
-    c.setLineDash([4, 5]);
-    c.beginPath();
-    c.ellipse(enemy.x, enemy.y + 5, rx, ry, 0, start, start + span);
-    c.stroke();
-    c.setLineDash([]);
-    ghosts.forEach((ghost, index) => {
-      const pulse = this.activationVisual?.lockId === ghost.id
-        ? clamp((this.clock - this.activationVisual.started) / this.activationVisual.duration, 0, 1)
-        : null;
-      if (pulse !== null) {
-        const eased = ease(pulse),
-          x = ghost.x + (enemy.x - ghost.x) * eased,
-          y = ghost.y + (enemy.y + enemy.radius * 0.55 - ghost.y) * eased;
-        c.globalAlpha = 0.92 * (1 - pulse * 0.45);
-        c.strokeStyle = this.color;
-        c.lineWidth = 1.5;
-        c.beginPath();
-        c.moveTo(ghost.x, ghost.y);
-        c.lineTo(x, y);
-        c.stroke();
-        this.circle(x, y, 3.2, this.color, 1);
-      }
-      if (ghost.active) return;
-      const segment = span / ghosts.length,
-        a0 = start + segment * index + segment * 0.12,
-        a1 = start + segment * (index + 1) - segment * 0.12;
-      c.globalAlpha = alpha * 0.72;
-      c.lineWidth = 2;
-      c.beginPath();
-      c.ellipse(enemy.x, enemy.y + 5, rx, ry, 0, a0, a1);
-      c.stroke();
-      c.globalAlpha = alpha * 0.62;
-      c.beginPath();
-      c.moveTo(ghost.x, ghost.y - 5);
-      c.lineTo(enemy.x, enemy.y + enemy.radius * 0.7);
-      c.stroke();
-      for (const place of ghost.places) {
-        c.save();
-        c.globalAlpha = alpha * (place.digit ? 0.48 : 0.26);
-        c.lineWidth = 0.8;
-        c.setLineDash(place.digit ? [] : [2, 3]);
-        c.beginPath();
-        c.arc(place.x, place.y, place.frameRadius, 0, Math.PI * 2);
-        c.stroke();
-        c.setLineDash([]);
-        c.restore();
-        for (const unit of place.units)
-          this.drawPackGhostUnit(
-            this.run.pack.defenseLocks[index].radix,
-            place.level,
-            unit.x,
-            unit.y,
-            ghost.rawRadius,
-            alpha * 0.34,
-          );
-      }
-    });
-    c.restore();
+      x0 = (this.w - pitch * (count - 1)) / 2,
+      enemy = this.enemyPoint(),
+      y = enemy.y + enemy.radius + frameRadius + 8;
+    return {
+      x: this.w / 2,
+      y,
+      frameRadius,
+      places: digits.map((digit, index) => {
+        const x = x0 + pitch * index,
+          level = count - index - 1,
+          unitRadius = Math.min(7, frameRadius * 0.22),
+          centers = digit
+            ? shape(digit, Math.max(0, frameRadius - unitRadius - 4)).dots
+            : [];
+        return {
+          level,
+          digit,
+          x,
+          y,
+          frameRadius,
+          units: centers.map((center) => ({
+            x: x + center.x,
+            y: y + center.y,
+            radius: unitRadius,
+          })),
+        };
+      }),
+    };
   }
 
-  drawPackGhostUnit(base, level, x, y, rawRadius, alpha) {
+  drawPackTarget() {
     const c = this.ctx,
-      geometry = packNestedUnitShape(base, level, rawRadius),
-      radius = geometry.frameRadius * 0.9;
+      target = this.packTargetLayout(),
+      activation = this.activationVisual,
+      progress = activation
+        ? clamp((this.clock - activation.started) / activation.duration, 0, 1)
+        : 0,
+      alpha = activation ? 0.55 + progress * 0.4 : 0.42;
     c.save();
-    c.globalAlpha = alpha;
-    c.strokeStyle = this.color;
-    c.lineWidth = Math.max(0.65, rawRadius * 0.34);
-    c.beginPath();
-    c.arc(x, y, level === 0 ? rawRadius * 0.72 : radius, 0, Math.PI * 2);
-    c.stroke();
-    c.restore();
-    for (const child of geometry.children)
-      this.drawPackGhostUnit(
-        base,
-        level - 1,
-        x + child.x,
-        y + child.y,
-        rawRadius,
-        alpha,
-      );
-  }
-
-  packLayerGeometry(placeCount = packDigits(this.run).length) {
-    const enemy = this.enemyPoint();
-    return Array.from({ length: placeCount }, (_, level) => {
-      const radius = enemy.radius + (placeCount - level) * 8;
-      return {
-        level,
-        x: enemy.x,
-        y: enemy.y,
-        radius,
-        target: { x: enemy.x, y: enemy.y + radius },
-      };
-    });
-  }
-
-  drawPackAttackLayers() {
-    const c = this.ctx,
-      pack = this.run.pack,
-      layers = this.packLayerGeometry(
-        pack.attack?.placeCount || packDigits(this.run).length,
-      );
-    for (const layer of layers) {
-      const impact = this.packImpacts.findLast(
-          (candidate) => candidate.level === layer.level,
-        ),
-        age = impact ? Math.max(0, this.clock - impact.born) : Infinity;
-      c.save();
-      c.globalAlpha = impact ? 0.78 * clamp(1 - age / 700, 0.24, 1) : 0.56;
-      c.strokeStyle = impact ? "#ffd5d7" : this.color;
-      c.lineWidth = impact ? 2.5 : 1.8;
-      c.setLineDash(impact ? [] : [5, 5]);
+    for (const place of target.places) {
+      c.globalAlpha = place.digit ? alpha : alpha * 0.55;
+      c.fillStyle = this.color + "08";
+      c.strokeStyle = this.color + (place.digit ? "c0" : "72");
+      c.lineWidth = place.digit ? 1.3 : 1;
+      c.setLineDash(place.digit ? [] : [3, 4]);
       c.beginPath();
-      c.arc(layer.x, layer.y, layer.radius, -Math.PI * 0.82, Math.PI * 0.82);
+      c.roundRect(
+        place.x - place.frameRadius,
+        place.y - place.frameRadius,
+        place.frameRadius * 2,
+        place.frameRadius * 2,
+        9,
+      );
+      c.fill();
       c.stroke();
-      c.restore();
+      c.setLineDash([]);
+      for (const unit of place.units)
+        this.drawPackGhostUnit(unit.x, unit.y, unit.radius, alpha);
     }
+    c.restore();
   }
 
-  async playPackLockActivation(match) {
-    const token = this.token,
-      ghost = this.packDefenseLayout().find((candidate) => candidate.id === match.lockId);
-    if (!ghost) return false;
+  drawPackGhostUnit(x, y, radius, alpha) {
+    const c = this.ctx;
+    c.save();
+    c.globalAlpha = alpha;
+    c.fillStyle = this.color + "24";
+    c.strokeStyle = this.color + "e0";
+    c.lineWidth = 1.2;
+    c.beginPath();
+    c.arc(x, y, radius, 0, Math.PI * 2);
+    c.fill();
+    c.stroke();
+    c.restore();
+  }
+
+  async playPackTargetActivation() {
+    const target = this.packTargetLayout(),
+      token = this.token;
     this.busy = true;
     this.drag = null;
     this.hover = null;
     this.activationVisual = {
-      lockId: match.lockId,
       started: this.clock,
-      duration: this.motion ? 430 : 120,
+      duration: this.motion ? 300 : 95,
     };
     this.sync();
-    this.burst(ghost.x, ghost.y, this.color, 0.38);
+    this.burst(target.x, target.y, this.color, 0.32);
     await this.waitPackMotion(this.activationVisual.duration, token);
     if (token !== this.token) return false;
     this.activationVisual = null;
-    if (!match.allActivated) this.busy = false;
-    this.sync();
-    return true;
-  }
-
-  async animatePackDefenseCollapse() {
-    const token = this.token;
-    this.busy = true;
-    this.defenseCollapse = {
-      started: this.clock,
-      duration: this.motion ? 500 : 130,
-    };
-    await this.waitPackMotion(this.defenseCollapse.duration, token);
-    if (token !== this.token) return false;
-    this.defenseCollapse = null;
+    this.busy = false;
     this.sync();
     return true;
   }
@@ -432,12 +160,12 @@ export class PackWorld extends FlowWorld {
     this.drag = null;
     this.packImpacts = [];
     const token = this.token,
-      layers = this.packLayerGeometry(plan.placeCount);
+      enemy = this.enemyPoint(),
+      target = { x: enemy.x, y: enemy.y + enemy.radius * 0.48 };
     for (const payload of plan.payloads) {
       if (token !== this.token) return false;
-      const layer = layers.find((candidate) => candidate.level === payload.targetLayer),
-        dots = payload.rawIds.map((id) => this.units.get(id));
-      if (!layer || dots.some((dot) => !dot))
+      const dots = payload.rawIds.map((id) => this.units.get(id));
+      if (dots.some((dot) => !dot))
         throw new Error(`PACK attack payload has no visible unit: ${payload.itemId}`);
       this.activePackProjectileId = payload.itemId;
       for (const dot of dots) {
@@ -448,14 +176,12 @@ export class PackWorld extends FlowWorld {
       const center = {
           x: dots.reduce((sum, dot) => sum + dot.wx, 0) / dots.length,
           y: dots.reduce((sum, dot) => sum + dot.wy, 0) / dots.length,
-          z: dots[0].wz,
         },
-        target = this.unprojectPackPoint(layer.target.x, layer.target.y, center.z),
         dx = target.x - center.x,
         dy = target.y - center.y;
       await this.tweenPackWorld(
         payload.rawIds,
-        dots.map((dot) => ({ x: dot.wx + dx, y: dot.wy + dy, z: dot.wz })),
+        dots.map((dot) => ({ x: dot.wx + dx, y: dot.wy + dy })),
         this.motion ? 265 : 88,
         token,
         true,
@@ -463,8 +189,8 @@ export class PackWorld extends FlowWorld {
       if (token !== this.token) return false;
       for (const dot of dots) dot.flight = false;
       this.activePackProjectileId = null;
-      this.packImpacts.push({ level: payload.targetLayer, born: this.clock });
-      this.burst(layer.target.x, layer.target.y, "#ffd5d7", 0.48);
+      this.packImpacts.push({ itemId: payload.itemId, born: this.clock });
+      this.burst(target.x, target.y, "#ffd5d7", 0.48);
       if (!onImpact(payload.itemId).ok)
         throw new Error(`PACK attack payload failed: ${payload.itemId}`);
       this.onCue?.("hit");
@@ -498,22 +224,11 @@ export class PackWorld extends FlowWorld {
     return token === this.token;
   }
 
-  resize() {
-    super.resize();
-    if (this.run?.stage.area !== "pack") return;
-    const layout = this.packLayout();
-    this.camera = packCameraForFocus(layout.planes, null);
-    this.cameraTransition = null;
-    this.focusGesture = null;
-    this.sync();
-  }
-
-  radixChanged(from, to) {
-    if (from === to) return Promise.resolve(false);
+  async radixChanged(from, to) {
+    if (from === to || this.run?.stage.area !== "pack") return false;
     this.radixTransition = this.motion
-      ? { from, to, started: this.clock, duration: 240 }
+      ? { from, to, started: this.clock, duration: 220 }
       : null;
-    if (this.run?.stage.area !== "pack") return Promise.resolve(false);
     this.busy = true;
     this.previewPackState = null;
     this.sync();
@@ -521,21 +236,14 @@ export class PackWorld extends FlowWorld {
       ids = [...this.units.keys()].filter((id) => this.units.get(id)?.visible),
       targets = ids.map((id) => {
         const dot = this.units.get(id);
-        return { x: dot.twx, y: dot.twy, z: dot.twz };
+        return { x: dot.twx, y: dot.twy };
       });
-    return this.tweenPackWorld(ids, targets, this.motion ? 230 : 45, token, true)
-      .then(() => {
-        if (token !== this.token) return false;
-        for (const dot of this.units.values()) dot.manual = false;
-        this.busy = false;
-        this.sync();
-        return true;
-      })
-      .catch((error) => {
-        if (token === this.token) this.busy = false;
-        console.error(error);
-        return false;
-      });
+    await this.tweenPackWorld(ids, targets, this.motion ? 220 : 45, token, true);
+    if (token !== this.token) return false;
+    for (const dot of this.units.values()) dot.manual = false;
+    this.busy = false;
+    this.sync();
+    return true;
   }
 
   activeTransition() {
@@ -549,128 +257,13 @@ export class PackWorld extends FlowWorld {
       type: "radix-change",
       from: transition.from,
       to: transition.to,
-      progress: clamp(
-        (this.clock - transition.started) / transition.duration,
-        0,
-        1,
-      ),
+      progress: clamp((this.clock - transition.started) / transition.duration, 0, 1),
     };
   }
 
-  frame(t) {
-    const dt = Math.min(32, Math.max(0, t - this.last));
-    if (!this.paused && this.cameraTransition && this.run?.stage.area === "pack") {
-      const transition = this.cameraTransition,
-        progress = clamp(
-          (this.clock + dt - transition.started) / transition.duration,
-          0,
-          1,
-        ),
-        amount = this.motion ? ease(progress) : progress;
-      this.camera = Object.fromEntries(
-        ["x", "y", "z", "focalLength"].map((key) => [
-          key,
-          transition.from[key] + (transition.to[key] - transition.from[key]) * amount,
-        ]),
-      );
-      Object.assign(this.camera, {
-        mode: transition.kind === "return" ? "returning" : transition.to.mode,
-        focusLevel:
-          transition.kind === "return" ? transition.focusLevel : null,
-        near: transition.to.near,
-      });
-      if (progress >= 1) {
-        this.camera = { ...transition.to };
-        this.cameraTransition = null;
-      }
-      this.sync();
-    }
-    super.frame(t);
-  }
-
-  beginScaleFocus(x, y) {
-    const maxLevel = Math.max(0, ...this.revealedLevels);
-    this.focusGesture = {
-      startX: x,
-      startY: y,
-      x,
-      y,
-      moved: false,
-      maxLevel,
-      inputProgress: 0,
-      progress: 0,
-    };
-  }
-
-  moveScaleFocus(x, y) {
-    if (!this.focusGesture) return false;
-    const gesture = this.focusGesture;
-    gesture.x = x;
-    gesture.y = y;
-    const dx = x - gesture.startX,
-      dy = y - gesture.startY;
-    if (
-      !gesture.moved &&
-      (Math.abs(dx) < 12 || Math.abs(dx) < Math.abs(dy) * 1.2)
-    )
-      return false;
-    gesture.moved = true;
-    this.cameraTransition = null;
-    const step = clamp(
-        this.w * PACK_FOCUS_STEP_FRACTION,
-        PACK_FOCUS_STEP_MIN,
-        PACK_FOCUS_STEP_MAX,
-      ),
-      maxProgress = gesture.maxLevel + 1,
-      inputProgress =
-        dx >= 0
-          ? clamp(dx / step, 0, 1)
-          : clamp(-dx / step, 0, maxProgress),
-      layout = this.packLayout();
-    gesture.inputProgress = inputProgress;
-    gesture.progress = packFocusProgress(inputProgress, gesture.maxLevel);
-    this.camera = packCameraForInspection(
-      layout.planes,
-      inputProgress,
-      gesture.maxLevel,
-    );
-    this.sync();
-    return true;
-  }
-
-  endScaleFocus() {
-    if (!this.focusGesture) return;
-    const gesture = this.focusGesture;
-    this.focusGesture = null;
-    if (!gesture.moved) return;
-    const from = { ...this.camera },
-      to = packCameraForFocus(this.packLayout().planes, null),
-      distance = Math.hypot(from.x - to.x, from.y - to.y, from.z - to.z);
-    if (distance < 0.5) {
-      this.camera = to;
-      this.cameraTransition = null;
-      this.sync();
-      return;
-    }
-    this.cameraTransition = {
-      kind: "return",
-      from,
-      to,
-      focusLevel: from.focusLevel,
-      started: this.clock,
-      duration: this.motion ? 190 : 88,
-    };
-    this.camera = { ...from, mode: "returning", focusLevel: null };
-    this.sync();
-  }
-
-  cancelScaleFocus() {
-    this.endScaleFocus();
-  }
-
-  handle(p) {
+  handle(piece) {
     if (this.run?.stage.area === "pack") return null;
-    return super.handle(p);
+    return super.handle(piece);
   }
 
   packLayout() {
@@ -684,95 +277,52 @@ export class PackWorld extends FlowWorld {
         .sort((a, b) => a.level - b.level || a.order - b.order),
       discoveredLevels = state?.discoveredLevels || pack.discoveredLevels,
       massRawIds = state?.numberMassRawIds || pack.numberMassRawIds,
-      activeMax = Math.max(0, ...activeItems.map((item) => item.level)),
-      discoveredMax = Math.max(0, ...discoveredLevels, activeMax),
-      planes = packScaleViewports(discoveredMax, this.w, this.h, base, total)
-        .filter((plane) => discoveredLevels.includes(plane.level));
-    if (!this.camera) this.camera = packCameraForFocus(planes, null);
-    const slots = planes.map((plane) => {
-        const projected = projectPackPoint(
-            { x: plane.x, y: plane.y, z: plane.z },
-            this.camera,
-            this.w,
-            this.h,
-          ),
-          frameRadius = projected.visible
-            ? plane.frameWorldRadius * projected.scale
-            : 0;
+      discoveredMax = Math.max(0, ...discoveredLevels, ...activeItems.map((item) => item.level)),
+      placeCount = discoveredMax + 1,
+      frameRadius = placeFrameRadius(this.w, placeCount),
+      pitch = placeCount > 1
+        ? Math.min(2 * frameRadius + 14, (this.w - 2 * frameRadius - 24) / (placeCount - 1))
+        : 0,
+      x0 = (this.w - pitch * (placeCount - 1)) / 2,
+      slots = Array.from({ length: placeCount }, (_, index) => {
+        const level = discoveredMax - index;
         return {
-          ...plane,
-          worldX: plane.x,
-          worldY: plane.y,
-          worldZ: plane.z,
-          x: projected.x,
-          y: projected.y,
-          frameRadius,
+          level,
+          x: x0 + pitch * index,
+          y: this.h * 0.42,
           radius: frameRadius,
-          visible: projected.visible,
+          frameRadius,
+          visible: true,
         };
       }),
-      slotRadius = slots[0]?.frameRadius || 0,
-      items = [],
       levels = [],
+      items = [],
       leaves = [],
       boundaries = [],
-      massSlot = slots.find((slot) => slot.level === 0),
       massCenter = this.massAnchorOverride || {
         x: this.w / 2,
-        y: Math.min(this.h * 0.72, this.h - 140),
+        y: Math.min(this.h * 0.68, this.h - 115),
       },
-      massRadius = Math.min(41, this.w * 0.14, this.h * 0.1),
-      massShape = this.run.dots.length
-        ? shape(this.run.dots.length, massRadius)
-        : { dots: [], radius: 0, dotRadius: 0 },
-      massZ = massSlot?.worldZ ?? 0,
-      massWorld = this.unprojectPackPoint(
-        massCenter.x,
-        massCenter.y,
-        massZ,
-      ),
-      massProjection = projectPackPoint(
-        { ...massWorld, z: massZ },
-        this.camera,
-        this.w,
-        this.h,
-      ),
+      massRadius = Math.min(42, this.w * 0.14, this.h * 0.1),
+      massShape = shape(total, massRadius),
+      massDotRadius = Math.max(3.8, Math.min(7, massShape.dotRadius)),
       mass = {
         rawIds: [...massRawIds],
         quantity: massRawIds.length,
-        x: massProjection.x,
-        y: massProjection.y,
-        worldX: massWorld.x,
-        worldY: massWorld.y,
-        worldZ: massZ,
+        x: massCenter.x,
+        y: massCenter.y,
         radius: massShape.radius,
         dots: [],
       };
+
     for (const rawId of massRawIds) {
-      const dotIndex = this.run.dots.findIndex((dot) => dot.id === rawId),
-        offset = massShape.dots[dotIndex],
-        point = this.unprojectPackPoint(
-          massCenter.x + (offset?.x || 0),
-          massCenter.y + (offset?.y || 0),
-          massZ,
-        ),
-        projected = projectPackPoint(
-          { ...point, z: massZ },
-          this.camera,
-          this.w,
-          this.h,
-        );
-      if (!projected.visible) continue;
+      const index = this.run.dots.findIndex((dot) => dot.id === rawId),
+        offset = massShape.dots[index] || { x: 0, y: 0 };
       leaves.push({
         id: rawId,
-        worldX: point.x,
-        worldY: point.y,
-        worldZ: massZ,
-        worldRadius: Math.max(4.2, massShape.dotRadius / (massProjection.scale || 1)),
-        x: projected.x,
-        y: projected.y,
-        r: Math.max(2, massShape.dotRadius),
-        visible: true,
+        x: mass.x + offset.x,
+        y: mass.y + offset.y,
+        r: massDotRadius,
         rootItemId: "mass",
         level: null,
         container: "mass",
@@ -780,126 +330,95 @@ export class PackWorld extends FlowWorld {
     }
     mass.dots = leaves
       .filter((leaf) => leaf.container === "mass")
-      .map((leaf) => ({ id: leaf.id, x: leaf.x, y: leaf.y, r: leaf.r }));
+      .map(({ id, x, y, r }) => ({ id, x, y, r }));
 
     for (const slot of slots) {
       const levelItems = activeItems
           .filter((item) => item.level === slot.level)
           .sort((a, b) => a.order - b.order),
-        centerShape = levelItems.length ? shape(levelItems.length, 54) : null,
-        unitGeometry = packNestedUnitShape(base, slot.level),
-        unitPositionScale = centerShape
-          ? unitGeometry.radius / centerShape.dotRadius
-          : 0,
-        coefficient = levelItems.length
-          ? centerShape
+        centerRadius = levelItems.length > 1 ? slot.frameRadius * 0.42 : 0,
+        arrangement = levelItems.length
+          ? shape(levelItems.length, centerRadius)
           : { dots: [], nodes: [], radius: 0, dotRadius: 0 },
+        centerExtent = Math.max(0, ...arrangement.dots.map((point) => Math.hypot(point.x, point.y))),
+        unitMaxRadius = Math.max(
+          PACK_RAW_DOT_WORLD_RADIUS + 1,
+          slot.frameRadius - centerExtent - 2,
+        ),
         visuals = levelItems.map((item, index) => {
-          const point = coefficient.dots[index],
-            worldX = slot.worldX + (point?.x || 0) * unitPositionScale,
-            worldY = slot.worldY + (point?.y || 0) * unitPositionScale,
-            projection = projectPackPoint(
-              { x: worldX, y: worldY, z: slot.worldZ },
-              this.camera,
-              this.w,
-              this.h,
-            ),
-            itemGeometry = packNestedUnitShape(base, item.level),
+          const center = arrangement.dots[index] || { x: 0, y: 0 },
+            x = slot.x + center.x,
+            y = slot.y + center.y,
+            geometry = item.macro
+              ? compactPackNestedUnitShape(base, item.level, unitMaxRadius, PACK_RAW_DOT_WORLD_RADIUS)
+              : null,
             visual = {
               item,
               level: slot.level,
-              worldX,
-              worldY,
-              worldZ: slot.worldZ,
-              worldRadius: itemGeometry.radius,
-              x: projection.x,
-              y: projection.y,
-              r: projection.visible
-                ? itemGeometry.radius * projection.scale
-                : 0,
-              hitRadius: projection.visible
-                ? itemGeometry.radius * projection.scale
-                : 0,
-              visible: projection.visible,
+              x,
+              y,
+              radius: geometry?.radius ?? massDotRadius,
+              visible: true,
               representative: item.ids[0],
             };
           items.push(visual);
-          const placeNode = (node, x, y, z) => {
-            const geometry = packNestedUnitShape(base, node.level);
-            if (!node.macro) {
-              const projected = projectPackPoint(
-                { x, y, z },
-                this.camera,
-                this.w,
-                this.h,
-              );
+          if (item.macro) {
+            for (const dot of geometry.dots)
               leaves.push({
-                id: node.ids[0],
-                worldX: x,
-                worldY: y,
-                worldZ: z,
-                worldRadius: PACK_RAW_DOT_WORLD_RADIUS,
-                x: projected.x,
-                y: projected.y,
-                r: projected.visible
-                  ? PACK_RAW_DOT_WORLD_RADIUS * projected.scale
-                  : 0,
-                visible: projected.visible,
+                id: item.ids[dot.index],
+                x: x + dot.x,
+                y: y + dot.y,
+                r: dot.radius,
                 rootItemId: item.id,
                 level: slot.level,
+                container: "place",
               });
-              return;
+            for (const group of geometry.groups) {
+              const ids = item.ids.slice(group.start, group.start + group.count),
+                outer = group.groupLevel === item.level;
+              boundaries.push({
+                id: `${item.id}:g${group.groupLevel}:${group.start}`,
+                item: { id: item.id, ids },
+                x: x + group.x,
+                y: y + group.y,
+                radius: group.radius,
+                rootItemId: item.id,
+                level: slot.level,
+                outer,
+              });
             }
-            boundaries.push({
-              id: node.id,
-              item: node,
-              worldX: x,
-              worldY: y,
-              worldZ: z,
-              worldRadius: geometry.frameRadius,
-              contentWorldRadius: geometry.radius,
+          } else {
+            leaves.push({
+              id: item.ids[0],
+              x,
+              y,
+              r: massDotRadius,
               rootItemId: item.id,
               level: slot.level,
-              outer: node.id === item.id,
+              container: "place",
             });
-            node.children.forEach((childId, childIndex) => {
-              const child = this.run.pack.nodes[childId],
-                cell = geometry.children[childIndex];
-              if (!cell) return;
-              placeNode(child, x + cell.x, y + cell.y, z);
-            });
-          };
-          placeNode(item, worldX, worldY, slot.worldZ);
+          }
           return visual;
         });
-      levels.push({
-        level: slot.level,
-        slot: { ...slot },
-        items: visuals,
-        shape: coefficient,
-      });
+      levels.push({ level: slot.level, slot, items: visuals, shape: arrangement });
     }
-
     return {
       total,
       base,
-      slots: levels.map((level) => ({ ...level.slot })),
+      slots: slots.map((slot) => ({ ...slot })),
       items,
       levels,
       leaves,
       boundaries,
       mass,
-      slotRadius,
+      frameRadius,
       discoveredMax,
       discoveredLevels: [...discoveredLevels],
-      planes,
     };
   }
 
   packSelection(levelLayout, nodeId = levelLayout.shape.nodes?.[0]?.id) {
-    const node = levelLayout.shape.nodes?.find(
-      (candidate) => candidate.id === nodeId,
-    );
+    const node = levelLayout.shape.nodes?.find((candidate) => candidate.id === nodeId);
     if (!node) return null;
     const visuals = node.indices.map((index) => levelLayout.items[index]),
       dots = visuals.map((visual) => {
@@ -912,12 +431,11 @@ export class PackWorld extends FlowWorld {
           y = leaves.length
             ? leaves.reduce((sum, dot) => sum + dot.y, 0) / leaves.length
             : visual.y;
-        return { x, y, r: visual.hitRadius ?? visual.r };
+        return { x, y, r: visual.radius };
       }),
       x = dots.reduce((sum, dot) => sum + dot.x, 0) / dots.length,
       y = dots.reduce((sum, dot) => sum + dot.y, 0) / dots.length,
       itemIds = visuals.map((visual) => visual.item.id);
-
     return {
       pieceId: this.run.pieces[0].id,
       ids: visuals.flatMap((visual) => visual.item.ids),
@@ -956,7 +474,6 @@ export class PackWorld extends FlowWorld {
     if (!this.w) return;
     const layout = this.packLayout();
     this.revealedLevels = new Set(layout.discoveredLevels);
-
     for (const dot of this.run.dots)
       if (!this.units.has(dot.id))
         this.units.set(dot.id, {
@@ -965,64 +482,43 @@ export class PackWorld extends FlowWorld {
           y: this.h * 0.8,
           tx: this.w / 2,
           ty: this.h * 0.8,
-          r: 5,
-          tr: 5,
-          wx: 0,
-          wy: 0,
-          wz: 0,
-          twx: 0,
-          twy: 0,
-          twz: 0,
-          worldRadius: PACK_RAW_DOT_WORLD_RADIUS,
+          r: 4,
+          tr: 4,
+          wx: this.w / 2,
+          wy: this.h * 0.8,
+          twx: this.w / 2,
+          twy: this.h * 0.8,
           vx: 0,
           vy: 0,
           visible: false,
+          initialized: false,
         });
     for (const unit of this.units.values()) unit.visible = false;
-
     for (const leaf of layout.leaves) {
-      const d = this.units.get(leaf.id),
-        target = projectPackPoint(
-          { x: leaf.worldX, y: leaf.worldY, z: leaf.worldZ },
-          this.camera,
-          this.w,
-          this.h,
-        ),
-        current = d.initialized
-          ? projectPackPoint(
-              { x: d.wx, y: d.wy, z: d.wz },
-              this.camera,
-              this.w,
-              this.h,
-            )
-          : target;
-      Object.assign(d, {
-        twx: leaf.worldX,
-        twy: leaf.worldY,
-        twz: leaf.worldZ,
-        worldRadius: leaf.worldRadius,
-        tx: target.x,
-        ty: target.y,
-        tr: target.visible ? leaf.worldRadius * target.scale : 0,
-        x: current.x ?? this.w / 2,
-        y: current.y ?? this.h / 2,
-        r: current.visible ? leaf.worldRadius * current.scale : 0,
-        visible: current.visible,
+      const dot = this.units.get(leaf.id);
+      Object.assign(dot, {
+        twx: leaf.x,
+        twy: leaf.y,
+        tx: leaf.x,
+        ty: leaf.y,
+        tr: leaf.r,
+        visible: true,
         packItemId: leaf.rootItemId,
         packLevel: leaf.level,
       });
-      if (!d.initialized) {
-        d.wx = d.twx;
-        d.wy = d.twy;
-        d.wz = d.twz;
-        d.x = d.tx ?? this.w / 2;
-        d.y = d.ty ?? this.h / 2;
-        d.r = d.tr;
-        d.initialized = true;
-      } else if (!d.manual && !this.motion) {
-        d.wx = d.twx;
-        d.wy = d.twy;
-        d.wz = d.twz;
+      if (!dot.initialized) {
+        dot.wx = leaf.x;
+        dot.wy = leaf.y;
+        dot.x = leaf.x;
+        dot.y = leaf.y;
+        dot.r = leaf.r;
+        dot.initialized = true;
+      } else if (!dot.manual && !this.motion) {
+        dot.wx = leaf.x;
+        dot.wy = leaf.y;
+        dot.x = leaf.x;
+        dot.y = leaf.y;
+        dot.r = leaf.r;
       }
     }
     const activeBoundaries = new Set();
@@ -1031,13 +527,12 @@ export class PackWorld extends FlowWorld {
       const state = this.boundaryVisuals.get(boundary.id) || {
         id: boundary.id,
         rawIds: [...boundary.item.ids],
-        worldRadius: boundary.worldRadius,
         alpha: 0,
       };
       Object.assign(state, {
         rawIds: [...boundary.item.ids],
         targetAlpha: 1,
-        worldRadius: boundary.worldRadius,
+        radius: boundary.radius,
         outer: boundary.outer,
       });
       this.boundaryVisuals.set(boundary.id, state);
@@ -1045,36 +540,25 @@ export class PackWorld extends FlowWorld {
     for (const [id, state] of this.boundaryVisuals)
       if (!activeBoundaries.has(id)) state.targetAlpha = 0;
     const piece = this.run.pieces[0];
-    if (piece)
-      this.positions.set(piece.id, {
-        x: layout.mass.x,
-        y: layout.mass.y,
-      });
+    if (piece) this.positions.set(piece.id, { x: layout.mass.x, y: layout.mass.y });
   }
 
   read() {
     if (this.run?.stage.area !== "pack") return super.read();
     const layout = this.packLayout(),
       pack = this.run.pack,
-      state = this.previewPackState || pack,
-      moving =
-        !!this.focusGesture?.moved ||
-        !!this.cameraTransition ||
-        [...this.units.values()].some(
-          (d) =>
-            d.visible &&
-            (Math.hypot(d.wx - d.twx, d.wy - d.twy, d.wz - d.twz) > 0.08 ||
-              Math.abs(d.r - (d.tr ?? d.r)) > 0.1),
-        ),
+      moving = [...this.units.values()].some(
+        (dot) => dot.visible && Math.hypot(dot.x - dot.tx, dot.y - dot.ty) > 0.8,
+      ),
       items = layout.items.map((visual) => {
-        const center = visual.item.ids
+        const dots = visual.item.ids
             .map((id) => this.units.get(id))
             .filter((dot) => dot?.visible && Number.isFinite(dot.x)),
-          x = center.length
-            ? center.reduce((sum, dot) => sum + dot.x, 0) / center.length
+          x = dots.length
+            ? dots.reduce((sum, dot) => sum + dot.x, 0) / dots.length
             : visual.x,
-          y = center.length
-            ? center.reduce((sum, dot) => sum + dot.y, 0) / center.length
+          y = dots.length
+            ? dots.reduce((sum, dot) => sum + dot.y, 0) / dots.length
             : visual.y;
         return {
           id: visual.item.id,
@@ -1085,16 +569,8 @@ export class PackWorld extends FlowWorld {
           macro: visual.item.macro,
           x,
           y,
-          radius: visual.r,
-          frameRadius:
-            packNestedUnitShape(pack.base, visual.level).frameRadius *
-            projectPackPoint(
-              { x: visual.worldX, y: visual.worldY, z: visual.worldZ },
-              this.camera,
-              this.w,
-              this.h,
-            ).scale,
-          worldRadius: visual.worldRadius,
+          radius: visual.radius,
+          frameRadius: layout.frameRadius,
           visible: visual.visible,
           children: [...visual.item.children],
           tree: this.packTree(visual.item.id),
@@ -1119,7 +595,7 @@ export class PackWorld extends FlowWorld {
         ? [...(this.previewPackState.lowToHighDigits || [0])].reverse()
         : packDigits(this.run),
       control = this.packControl(),
-      ghosts = this.packDefenseLayout();
+      target = this.packTargetLayout();
     return {
       width: this.w,
       height: this.h,
@@ -1145,29 +621,19 @@ export class PackWorld extends FlowWorld {
         phase: pack.phase,
         attack: pack.attack
           ? {
-              placeCount: pack.attack.placeCount,
               payloads: structuredClone(pack.attack.payloads),
               impactedItemIds: [...pack.attack.impactedItemIds],
               resolvedRawIds: [...pack.attack.resolvedRawIds],
               activeItemId: this.activePackProjectileId,
             }
           : null,
-        layers: pack.phase === "attack" || pack.phase === "break"
-          ? this.packLayerGeometry(pack.attack?.placeCount || packDigits(this.run).length)
-          : [],
         digits: displayDigits,
-        notation: null,
-        locks: pack.defenseLocks.map(({ id, activated }) => ({ id, activated })),
-        defenseCleared: pack.defenseLocks.every((lock) => lock.activated),
-        defenseCollapsing: !!this.defenseCollapse,
-        settled: pack.settled,
-        ghosts: ghosts.map((ghost) => ({
-          id: ghost.id,
-          active: ghost.active,
-          x: ghost.x,
-          y: ghost.y,
-          radius: ghost.groupWidth * 0.5,
-          places: ghost.places.map((place) => ({
+        targetActivated: pack.target.activated,
+        targetGhost: {
+          x: target.x,
+          y: target.y,
+          radius: target.frameRadius,
+          places: target.places.map((place) => ({
             level: place.level,
             unitCount: place.units.length,
             empty: place.units.length === 0,
@@ -1175,40 +641,9 @@ export class PackWorld extends FlowWorld {
             y: place.y,
             frameRadius: place.frameRadius,
           })),
-        })),
-        slots: layout.slots.map((slot) => ({ ...slot })),
-        radixPoints: pack.base,
-        radixGeometry: packNestedUnitShape(pack.base, 1).children.map(
-          ({ x, y }) => ({ x, y }),
-        ),
-        camera: {
-          mode: this.camera?.mode ?? "overview",
-          focusLevel: this.camera?.focusLevel ?? null,
-          focusAnchor: this.camera?.focusAnchor ?? null,
-          inspectionProgress: this.camera?.inspectionProgress ?? 0,
-          inputProgress: this.camera?.inputProgress ?? 0,
-          x: this.camera?.x ?? 0,
-          y: this.camera?.y ?? 0,
-          z: this.camera?.z ?? 0,
-          focalLength: this.camera?.focalLength ?? 0,
-          moving: !!this.cameraTransition,
         },
-        viewports: layout.slots.map((slot) => ({
-          level: slot.level,
-          x: slot.x,
-          y: slot.y,
-          radius: slot.radius,
-          frameRadius: slot.frameRadius,
-          depth: slot.depth,
-          worldX: slot.worldX,
-          worldY: slot.worldY,
-          worldZ: slot.worldZ,
-          unitWorldRadius: slot.unitWorldRadius,
-          frameWorldRadius: slot.frameWorldRadius,
-          visible: slot.visible,
-          ghost: false,
-          revealed: true,
-        })),
+        slots: layout.slots.map((slot) => ({ ...slot })),
+        viewports: layout.slots.map((slot) => ({ ...slot })),
         revealedLevels: [...layout.discoveredLevels].sort((a, b) => a - b),
         revealCount: Math.max(0, ...layout.discoveredLevels),
         transition: this.activeTransition(),
@@ -1220,12 +655,6 @@ export class PackWorld extends FlowWorld {
             x: dot?.x ?? leaf.x,
             y: dot?.y ?? leaf.y,
             radius: dot?.r ?? leaf.r,
-            worldRadius: leaf.worldRadius,
-            world: {
-              x: dot?.wx ?? leaf.worldX,
-              y: dot?.wy ?? leaf.worldY,
-              z: dot?.wz ?? leaf.worldZ,
-            },
             visible: !!dot?.visible,
             rootItemId: leaf.rootItemId,
             level: leaf.level,
@@ -1264,10 +693,6 @@ export class PackWorld extends FlowWorld {
 
   begin(selection, x, y) {
     if (this.run?.stage.area !== "pack") return super.begin(selection, x, y);
-    const slot = this.packLayout().slots.find(
-        (candidate) => candidate.level === selection.level,
-      ),
-      worldPointer = this.unprojectPackPoint(x, y, slot?.worldZ ?? 0);
     this.drag = {
       ...selection,
       startX: x,
@@ -1275,47 +700,14 @@ export class PackWorld extends FlowWorld {
       x,
       y,
       offsets: selection.ids.map((id) => {
-        const d = this.units.get(id);
-        return { id, x: d.x - x, y: d.y - y };
+        const dot = this.units.get(id);
+        return { id, x: dot.x - x, y: dot.y - y };
       }),
       worldOffsets: selection.ids.map((id) => {
-        const d = this.units.get(id);
-        return {
-          id,
-          x: d.wx - worldPointer.x,
-          y: d.wy - worldPointer.y,
-        };
+        const dot = this.units.get(id);
+        return { id, x: dot.wx - x, y: dot.wy - y };
       }),
     };
-  }
-
-  unprojectPackPoint(x, y, z) {
-    const depth = Math.max(this.camera.near, z - this.camera.z),
-      scale = depth / this.camera.focalLength;
-    return {
-      x: this.camera.x + (x - this.w / 2) * scale,
-      y: this.camera.y + (y - this.h / 2) * scale,
-    };
-  }
-
-  projectPackUnit(dot) {
-    const projection = projectPackPoint(
-      { x: dot.wx, y: dot.wy, z: dot.wz },
-      this.camera,
-      this.w,
-      this.h,
-    );
-    dot.x = projection.x ?? this.w / 2;
-    dot.y = projection.y ?? this.h / 2;
-    dot.r = projection.visible
-      ? dot.worldRadius * projection.scale
-      : 0;
-    dot.visible = projection.visible;
-    dot.tx = dot.x;
-    dot.ty = dot.y;
-    dot.tr = dot.r;
-    dot.glowRadius = dot.r * 0.55;
-    return projection;
   }
 
   cancel() {
@@ -1330,32 +722,24 @@ export class PackWorld extends FlowWorld {
   move(x, y) {
     if (this.run?.stage.area !== "pack") return super.move(x, y);
     if (!this.drag) return;
-    const slot = this.packLayout().slots.find(
-        (candidate) => candidate.level === this.drag.level,
-      ),
-      worldPointer = this.unprojectPackPoint(x, y, slot?.worldZ ?? 0);
     this.drag.x = x;
     this.drag.y = y;
     if (this.drag.kind === "pack-mass") this.massAnchorOverride = { x, y };
-    this.drag.worldOffsets.forEach((offset) => {
+    this.drag.offsets.forEach((offset) => {
       const dot = this.units.get(offset.id);
-      dot.wx = worldPointer.x + offset.x;
-      dot.wy = worldPointer.y + offset.y;
-      dot.wz = slot?.worldZ ?? dot.wz;
+      dot.x = x + offset.x;
+      dot.y = y + offset.y;
+      dot.wx = dot.x;
+      dot.wy = dot.y;
       dot.manual = true;
-      this.projectPackUnit(dot);
     });
     this.hover = this.dropTarget(x, y);
   }
 
   hit(x, y) {
     if (this.run?.stage.area !== "pack") return super.hit(x, y);
-    const layout = this.packLayout(),
-      mass = layout.mass;
-    if (
-      mass.quantity &&
-      Math.hypot(x - mass.x, y - mass.y) <= Math.max(36, mass.radius + 13)
-    )
+    const mass = this.packLayout().mass;
+    if (mass.quantity && Math.hypot(x - mass.x, y - mass.y) <= Math.max(36, mass.radius + 13))
       return {
         pieceId: this.run.pieces[0].id,
         ids: [...mass.rawIds],
@@ -1372,41 +756,6 @@ export class PackWorld extends FlowWorld {
     return null;
   }
 
-  packFocusGestureHit(x, y) {
-    if (this.run?.stage.area !== "pack") return false;
-    const layout = this.packLayout();
-    for (const slot of layout.slots) {
-      if (!slot.visible || slot.frameRadius <= 0) continue;
-      if (Math.abs(Math.hypot(x - slot.x, y - slot.y) - slot.frameRadius) < 9)
-        return true;
-      const geometry = packNestedUnitShape(
-        layout.base,
-        Math.max(1, slot.level),
-      );
-      for (const cell of geometry.children) {
-        const point = projectPackPoint(
-          {
-            x: slot.worldX + cell.x,
-            y: slot.worldY + cell.y,
-            z: slot.worldZ,
-          },
-          this.camera,
-          this.w,
-          this.h,
-        );
-        if (
-          point.visible &&
-          Math.abs(
-            Math.hypot(x - point.x, y - point.y) -
-              cell.radius * point.scale * 0.55,
-          ) < 8
-        )
-          return true;
-      }
-    }
-    return false;
-  }
-
   dropTarget(x, y) {
     if (this.run?.stage.area !== "pack") return super.dropTarget(x, y);
     if (!this.drag || this.drag.kind !== "pack-mass") return { kind: "cancel" };
@@ -1421,55 +770,33 @@ export class PackWorld extends FlowWorld {
       center = { x: x + averageOffset.x, y: y + averageOffset.y },
       targets = layout.slots
         .filter((slot) => this.run.pack.discoveredLevels.includes(slot.level))
-        .map((slot) => ({
-          slot,
-          distance: Math.hypot(center.x - slot.x, center.y - slot.y),
-        }))
-        .sort((a, b) => a.distance - b.distance);
-    const target = targets.find(
-      ({ slot, distance }) =>
-        distance <= Math.max(46, slot.frameRadius + 32) &&
-        this.run.pack.numberMassRawIds.length >= this.run.pack.base ** slot.level,
-    );
-    if (target)
-      return { kind: "pack-input", level: target.slot.level };
-    return { kind: "cancel" };
+        .map((slot) => ({ slot, distance: Math.hypot(center.x - slot.x, center.y - slot.y) }))
+        .sort((a, b) => a.distance - b.distance),
+      target = targets.find(
+        ({ slot, distance }) =>
+          distance <= Math.max(46, slot.frameRadius + 32) &&
+          this.run.pack.numberMassRawIds.length >= this.run.pack.base ** slot.level,
+      );
+    return target ? { kind: "pack-input", level: target.slot.level } : { kind: "cancel" };
   }
 
   packControl() {
-    if (
-      this.run?.stage.area !== "pack" ||
-      this.run.status !== "play" ||
-      this.busy
-    ) return null;
+    if (this.run?.stage.area !== "pack" || this.run.status !== "play" || this.busy)
+      return null;
     const y = Math.min(this.h - 37, this.h * 0.9),
       x1 = this.w * 0.08,
       x2 = this.w * 0.92,
       options = [...new Set(this.run.stage.radices)].sort((a, b) => a - b),
       index = options.indexOf(this.run.pack.base),
-      position = (this.packControlX ?? x1 + ((x2 - x1) * Math.max(0, index)) / Math.max(1, options.length - 1)) - x1,
-      previewIndex = Math.round(
-        (position / Math.max(1, x2 - x1)) * (options.length - 1),
-      );
-    return {
-      x1,
-      x2,
-      y,
-      x: this.packControlX ?? x1 + ((x2 - x1) * Math.max(0, index)) / Math.max(1, options.length - 1),
-      current: this.run.pack.base,
-      preview: options[clamp(previewIndex, 0, options.length - 1)],
-      options,
-    };
+      x = this.packControlX ?? x1 + ((x2 - x1) * Math.max(0, index)) / Math.max(1, options.length - 1),
+      position = x - x1,
+      previewIndex = Math.round((position / Math.max(1, x2 - x1)) * (options.length - 1));
+    return { x1, x2, y, x, current: this.run.pack.base, preview: options[clamp(previewIndex, 0, options.length - 1)], options };
   }
 
   packControlHit(x, y) {
     const control = this.packControl();
-    if (!control) return false;
-    return (
-      Math.abs(y - control.y) <= 27 &&
-      x >= control.x1 - 30 &&
-      x <= control.x2 + 30
-    );
+    return !!control && Math.abs(y - control.y) <= 27 && x >= control.x1 - 30 && x <= control.x2 + 30;
   }
 
   beginPackControl(x) {
@@ -1481,18 +808,14 @@ export class PackWorld extends FlowWorld {
 
   movePackControl(x) {
     const control = this.packControl();
-    if (!control) return;
-    this.packControlX = clamp(x, control.x1, control.x2);
+    if (control) this.packControlX = clamp(x, control.x1, control.x2);
   }
 
   endPackControl() {
     const control = this.packControl();
     if (!control) return null;
     const position = (this.packControlX ?? control.x1) - control.x1,
-      index = Math.round(
-        (position / Math.max(1, control.x2 - control.x1)) *
-          (control.options.length - 1),
-      );
+      index = Math.round((position / Math.max(1, control.x2 - control.x1)) * (control.options.length - 1));
     this.packControlX = null;
     return control.options[clamp(index, 0, control.options.length - 1)];
   }
@@ -1505,7 +828,6 @@ export class PackWorld extends FlowWorld {
     if (this.run?.stage.area !== "pack") return super.drawPieces();
     const c = this.ctx,
       layout = this.packLayout();
-
     c.save();
     this.drawPackViewports(layout);
     this.drawNestedUnits(layout);
@@ -1529,21 +851,8 @@ export class PackWorld extends FlowWorld {
     c.arc(mass.x, mass.y, radius, 0, Math.PI * 2);
     c.stroke();
     c.setLineDash([]);
-    drawNumberReadout(
-      this,
-      mass.quantity,
-      mass.x,
-      mass.y - radius - 14,
-      this.color,
-      16,
-    );
-    this.label(
-      "Number Mass",
-      mass.x,
-      mass.y + mass.radius + 25,
-      this.color + "b8",
-      11,
-    );
+    drawNumberReadout(this, mass.quantity, mass.x, mass.y - radius - 14, this.color, 16);
+    this.label("Number Mass", mass.x, mass.y + mass.radius + 25, this.color + "b8", 11);
     c.restore();
   }
 
@@ -1554,22 +863,14 @@ export class PackWorld extends FlowWorld {
         digit = levelLayout.items.length,
         hot = this.carryPulse &&
           (this.carryPulse.fromLevel === slot.level || this.carryPulse.toLevel === slot.level);
-      if (!slot.visible) continue;
       c.save();
       c.globalAlpha = hot ? 1 : 0.88;
-      drawNumberReadout(
-        this,
-        digit,
-        slot.x,
-        slot.y + slot.frameRadius + 23,
-        this.color,
-        17,
-      );
+      drawNumberReadout(this, digit, slot.x, slot.y + slot.frameRadius + 23, this.color, 17);
       c.restore();
     }
   }
 
-  drawNestedUnits(layout) {
+  drawNestedUnits() {
     const dt = Math.min(32, Math.max(0, this.clock - this.boundaryClock));
     this.boundaryClock = this.clock;
     const amount = this.motion ? 1 - Math.exp(-dt / 110) : 1;
@@ -1583,97 +884,40 @@ export class PackWorld extends FlowWorld {
         this.boundaryVisuals.delete(id);
         continue;
       }
-      const dots = state.rawIds
-          .map((rawId) => this.units.get(rawId))
-          .filter((dot) => dot && Number.isFinite(dot.wx)),
-        x = dots.length
-          ? dots.reduce((sum, dot) => sum + dot.wx, 0) / dots.length
-          : this.w / 2,
-        y = dots.length
-          ? dots.reduce((sum, dot) => sum + dot.wy, 0) / dots.length
-          : this.h * 0.6,
-        z = dots.length
-          ? dots.reduce((sum, dot) => sum + dot.wz, 0) / dots.length
-          : 0,
-        projection = projectPackPoint({ x, y, z }, this.camera, this.w, this.h),
+      const dots = state.rawIds.map((rawId) => this.units.get(rawId)).filter((dot) => dot && Number.isFinite(dot.wx)),
+        x = dots.length ? dots.reduce((sum, dot) => sum + dot.wx, 0) / dots.length : this.w / 2,
+        y = dots.length ? dots.reduce((sum, dot) => sum + dot.wy, 0) / dots.length : this.h * 0.6,
         selected = this.drag?.itemIds?.includes(id),
-        alpha = (selected ? 0.82 : state.outer ? 0.56 : 0.34) * state.alpha;
-      if (!projection.visible) continue;
-      this.circle(
-        projection.x,
-        projection.y,
-        state.worldRadius * projection.scale * (selected ? 1.06 : 0.98),
-        this.color + Math.round(alpha * 255).toString(16).padStart(2, "0"),
-        Math.max(
-          0.9,
-          PACK_RAW_DOT_WORLD_RADIUS * projection.scale * (selected ? 0.2 : 0.16),
-        ),
-      );
-    }
-  }
-
-  drawRadixFrame(slot, base, alpha) {
-    if (!slot.visible) return;
-    const c = this.ctx,
-      frame = packNestedUnitShape(base, Math.max(1, slot.level)),
-      center = { x: slot.worldX, y: slot.worldY, z: slot.worldZ },
-      centerProjection = projectPackPoint(center, this.camera, this.w, this.h);
-    if (!centerProjection.visible) return;
-    c.save();
-    c.globalAlpha *= alpha;
-    c.strokeStyle = this.color;
-    c.lineWidth = Math.max(
-      0.9,
-      PACK_RAW_DOT_WORLD_RADIUS * centerProjection.scale * 0.16,
-    );
-    c.beginPath();
-    c.arc(
-      centerProjection.x,
-      centerProjection.y,
-      slot.frameWorldRadius * centerProjection.scale,
-      0,
-      Math.PI * 2,
-    );
-    c.stroke();
-    for (const cell of frame.children) {
-      const point = projectPackPoint(
-        { x: center.x + cell.x, y: center.y + cell.y, z: center.z },
-        this.camera,
-        this.w,
-        this.h,
-      );
-      if (!point.visible) continue;
-      const radius = cell.radius * point.scale * 0.52;
+        alpha = (selected ? 0.23 : state.outer ? 0.12 : 0.2) * state.alpha,
+        c = this.ctx;
+      c.save();
+      c.globalAlpha = alpha;
+      c.fillStyle = this.color;
+      c.strokeStyle = this.color;
+      c.lineWidth = state.outer ? 1.05 : 0.8;
       c.beginPath();
-      c.arc(point.x, point.y, radius, 0, Math.PI * 2);
+      c.arc(x, y, state.radius, 0, Math.PI * 2);
+      if (state.outer) c.fill();
       c.stroke();
+      c.restore();
     }
-    c.restore();
   }
 
   drawPackViewports(layout) {
-    const c = this.ctx,
-      transition = this.radixTransition,
-      focusLevel = this.camera?.focusLevel,
-      progress = transition
-        ? clamp((this.clock - transition.started) / transition.duration, 0, 1)
-        : 1;
-
+    const c = this.ctx;
     for (const levelLayout of layout.levels) {
       const slot = levelLayout.slot,
         hot = this.hover?.kind === "pack-input" && this.hover.level === slot.level,
-        alpha = hot
-          ? 0.64
-          : focusLevel === slot.level
-            ? 0.76
-            : levelLayout.items.length
-              ? 0.46
-              : 0.38;
+        filled = levelLayout.items.length > 0;
       c.save();
-      if (transition) {
-        this.drawRadixFrame(slot, transition.from, alpha * (1 - progress));
-        this.drawRadixFrame(slot, transition.to, alpha * progress);
-      } else this.drawRadixFrame(slot, this.run.pack.base, alpha);
+      c.globalAlpha = hot ? 1 : filled ? 0.92 : 0.62;
+      c.fillStyle = this.color + (hot ? "22" : "0c");
+      c.strokeStyle = this.color + (hot ? "ff" : filled ? "c4" : "74");
+      c.lineWidth = hot ? 2.2 : 1.35;
+      c.beginPath();
+      c.roundRect(slot.x - slot.frameRadius, slot.y - slot.frameRadius, slot.frameRadius * 2, slot.frameRadius * 2, 9);
+      c.fill();
+      c.stroke();
       c.restore();
     }
   }
@@ -1681,11 +925,8 @@ export class PackWorld extends FlowWorld {
   drawPackControl() {
     const control = this.packControl();
     if (!control) return;
-    const c = this.ctx;
-    const selectedX =
-      control.x1 +
-      ((control.x2 - control.x1) * control.options.indexOf(control.preview)) /
-        Math.max(1, control.options.length - 1);
+    const c = this.ctx,
+      selectedX = control.x1 + ((control.x2 - control.x1) * control.options.indexOf(control.preview)) / Math.max(1, control.options.length - 1);
     c.save();
     c.strokeStyle = this.color + "4d";
     c.lineWidth = 2;
@@ -1694,9 +935,7 @@ export class PackWorld extends FlowWorld {
     c.lineTo(control.x2, control.y);
     c.stroke();
     control.options.forEach((n, index) => {
-      const x =
-          control.x1 +
-          ((control.x2 - control.x1) * index) / Math.max(1, control.options.length - 1),
+      const x = control.x1 + ((control.x2 - control.x1) * index) / Math.max(1, control.options.length - 1),
         selected = n === control.preview;
       drawSelectorDots(this, n, x, control.y, this.color, {
         radius: 10,
@@ -1718,9 +957,10 @@ export class PackWorld extends FlowWorld {
         if (!dot.manual) {
           dot.wx += (dot.twx - dot.wx) * amount;
           dot.wy += (dot.twy - dot.wy) * amount;
-          dot.wz += (dot.twz - dot.wz) * amount;
         }
-        this.projectPackUnit(dot);
+        dot.x = dot.wx;
+        dot.y = dot.wy;
+        dot.r += (dot.tr - dot.r) * amount;
       }
     }
     super.drawUnits(dt);
@@ -1731,7 +971,7 @@ export class PackWorld extends FlowWorld {
       const dot = this.units.get(id);
       dot.visible = true;
       dot.manual = true;
-      return { x: dot.wx, y: dot.wy, z: dot.wz };
+      return { x: dot.wx, y: dot.wy };
     });
     if (!this.motion) ms = preserveReducedDuration ? ms : 1;
     const start = this.clock;
@@ -1749,14 +989,15 @@ export class PackWorld extends FlowWorld {
           if (!dot || !target) return;
           dot.wx = origin.x + (target.x - origin.x) * progress;
           dot.wy = origin.y + (target.y - origin.y) * progress;
-          dot.wz = origin.z + (target.z - origin.z) * progress;
-          this.projectPackUnit(dot);
+          dot.x = dot.wx;
+          dot.y = dot.wy;
         });
         if (progress < 1) requestAnimationFrame(tick);
         else resolve();
       };
       requestAnimationFrame(tick);
     });
+    return token === this.token;
   }
 
   async animatePack(result) {
@@ -1765,8 +1006,7 @@ export class PackWorld extends FlowWorld {
     this.hover = null;
     const token = this.token,
       drag = this.drag;
-    if (drag?.kind === "pack-mass")
-      this.massAnchorOverride = { x: drag.x, y: drag.y };
+    if (drag?.kind === "pack-mass") this.massAnchorOverride = { x: drag.x, y: drag.y };
     this.drag = null;
     for (const dot of this.units.values()) {
       dot.manual = true;
@@ -1775,41 +1015,28 @@ export class PackWorld extends FlowWorld {
     }
     this.previewPackState = result.initialState;
     this.sync();
-
     for (const step of result.steps) {
       if (token !== this.token) return;
       this.previewPackState = step.state;
       if (step.type === "carry")
-        this.carryPulse = {
-          fromLevel: step.fromLevel,
-          toLevel: step.toLevel,
-          born: this.clock,
-        };
+        this.carryPulse = { fromLevel: step.fromLevel, toLevel: step.toLevel, born: this.clock };
       this.sync();
       const moving = [...this.units.values()].filter(
-          (dot) =>
-            dot.visible &&
-            Math.hypot(dot.wx - dot.twx, dot.wy - dot.twy, dot.wz - dot.twz) > 0.1,
+          (dot) => dot.visible && Math.hypot(dot.wx - dot.twx, dot.wy - dot.twy) > 0.1,
         ),
         ids = moving.map((dot) => dot.id),
-        targets = moving.map((dot) => ({ x: dot.twx, y: dot.twy, z: dot.twz }));
-      const duration = step.type === "carry"
-        ? this.motion ? 145 : 58
-        : this.motion ? 58 : 21;
-      if (ids.length)
-        await this.tweenPackWorld(ids, targets, duration, token, true);
+        targets = moving.map((dot) => ({ x: dot.twx, y: dot.twy })),
+        duration = step.type === "carry" ? (this.motion ? 145 : 58) : (this.motion ? 58 : 21);
+      if (ids.length) await this.tweenPackWorld(ids, targets, duration, token, true);
       if (token !== this.token) return;
       if (step.type === "carry") {
-        const slot = this.packLayout().slots.find(
-          (candidate) => candidate.level === step.toLevel,
-        );
+        const slot = this.packLayout().slots.find((candidate) => candidate.level === step.toLevel);
         if (slot) this.burst(slot.x, slot.y, this.color, 0.22);
         this.onCue?.("merge");
       } else {
         await this.tweenPackWorld([], [], this.motion ? 30 : 18, token, true);
       }
     }
-
     this.previewPackState = null;
     this.massAnchorOverride = null;
     this.carryPulse = null;

@@ -34,7 +34,9 @@ const server = createServer(async (req, res) => {
 });
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const base = `http://127.0.0.1:${server.address().port}`;
-const browser = await chromium.launch();
+const browser = await chromium.launch({
+  executablePath: process.env.CHROMIUM_PATH || undefined,
+});
 const context = await browser.newContext({
   viewport: { width: 390, height: 844 },
   reducedMotion: "no-preference",
@@ -53,69 +55,6 @@ page.on("response", (r) => {
 });
 const { read, settled, route, audit, drag, width, packBase, solveCurrent } =
   driver(page, base);
-async function inspectScaleMouse(deltas, direction = "left", screenshotPath = null) {
-  const bounds = await page.locator("#world").boundingBox(),
-    y = bounds.y + 58,
-    startX = bounds.x +
-      (direction === "left" ? bounds.width * 0.75 : Math.min(24, bounds.width * 0.08));
-  await page.mouse.move(startX, y);
-  await page.mouse.down();
-  await page.mouse.move(startX + (direction === "left" ? -5 : 5), y);
-  const jitter = await read(),
-    states = [];
-  assert.equal(jitter.pack.camera.mode, "overview");
-  assert.equal(jitter.pack.camera.moving, false);
-  for (const [index, delta] of deltas.entries()) {
-    await page.mouse.move(startX + delta, y, { steps: 8 });
-    states.push(await read());
-    if (screenshotPath && index === deltas.length - 1)
-      await capture(screenshotPath);
-  }
-  await page.mouse.up();
-  const released = await read(),
-    home = await settled();
-  return { jitter, states, released, home };
-}
-async function inspectScaleTouch(deltas, direction = "left", screenshotPath = null) {
-  const bounds = await page.locator("#world").boundingBox(),
-    x = bounds.x +
-      (direction === "left" ? bounds.width * 0.75 : Math.min(24, bounds.width * 0.08)),
-    y = bounds.y + 58,
-    cdp = await context.newCDPSession(page);
-  await cdp.send("Input.dispatchTouchEvent", {
-    type: "touchStart",
-    touchPoints: [{ x, y }],
-  });
-  await cdp.send("Input.dispatchTouchEvent", {
-    type: "touchMove",
-    touchPoints: [{ x: x + (direction === "left" ? -5 : 5), y }],
-  });
-  await page.waitForTimeout(16);
-  const jitter = await read(),
-    states = [];
-  assert.equal(jitter.pack.camera.mode, "overview");
-  assert.equal(jitter.pack.camera.moving, false);
-  for (const [index, delta] of deltas.entries()) {
-    await cdp.send("Input.dispatchTouchEvent", {
-      type: "touchMove",
-      touchPoints: [{ x: x + delta, y }],
-    });
-    await page.waitForTimeout(16);
-    states.push(await read());
-    if (screenshotPath && index === deltas.length - 1)
-      await capture(screenshotPath);
-  }
-  await cdp.send("Input.dispatchTouchEvent", {
-    type: "touchEnd",
-    touchPoints: [],
-  });
-  await page.waitForTimeout(16);
-  await cdp.detach();
-  const released = await read(),
-    home = await settled();
-  return { jitter, states, released, home };
-}
-const focusStep = (width) => Math.min(56, Math.max(40, width * 0.145));
 async function captureCanvasTrace() {
   await page.evaluate(() => {
     window.__canvasTrace = { enabled: true, labels: [], curves: 0 };
@@ -297,8 +236,32 @@ try {
   assert.equal(packState.status, "play");
   assert.equal(packState.pack.base, 3);
   assert.equal(packState.pack.control.current, 3);
-  assert.equal(packState.pack.ghosts.length, 1);
-  assert.equal(packState.pack.ghosts[0].active, false);
+  assert.equal(packState.pack.targetGhost.places.length, 2);
+  assert.equal(packState.pack.targetActivated, false);
+  assert.equal("camera" in packState.pack, false);
+  assert.equal("ghosts" in packState.pack, false);
+  assert.equal("locks" in packState.pack, false);
+  assert.deepEqual(
+    packState.pack.targetGhost.places.map((place) => place.unitCount),
+    [3, 2],
+  );
+  assert.ok(packState.pack.targetGhost.places.every((place) =>
+    !("radix" in place) && !("base" in place) && !("children" in place),
+  ));
+  assert.ok(
+    ["radix", "base", "digits", "notation", "targetRadix"].every(
+      (key) => !(key in packState.pack.targetGhost),
+    ),
+  );
+  const flatBeforeSwipe = packState.pack.slots.map(({ x, y, frameRadius }) => [x, y, frameRadius]);
+  const worldBox = await page.locator("#world").boundingBox();
+  await page.mouse.move(worldBox.x + worldBox.width * 0.76, worldBox.y + worldBox.height * 0.27);
+  await page.mouse.down();
+  await page.mouse.move(worldBox.x + worldBox.width * 0.24, worldBox.y + worldBox.height * 0.27, { steps: 8 });
+  await page.mouse.up();
+  packState = await read();
+  assert.deepEqual(packState.pack.slots.map(({ x, y, frameRadius }) => [x, y, frameRadius]), flatBeforeSwipe);
+  assert.equal("camera" in packState.pack, false);
   const visibleText = await page.locator("body").innerText();
   assert.doesNotMatch(visibleText, /base\s*[345]|[345]進|[0-9]+₍?[345]/i);
   assert.deepEqual(packState.pack.revealedLevels, [0]);
@@ -341,7 +304,7 @@ try {
   packState = await settled();
   assert.deepEqual(packState.pack.digits, [1, 2, 2]);
   assert.equal(packState.pack.numberMass.quantity, 0);
-  assert.equal(packState.pack.ghosts.every((ghost) => !ghost.active), true);
+  assert.equal(packState.pack.targetActivated, false);
   assert.deepEqual(packState.pack.directInputLevels, []);
   await page.waitForTimeout(450);
   assert.equal((await read()).status, "play", "a mismatching structure has no penalty or attack");
@@ -457,10 +420,10 @@ try {
   assert.equal(packControl.preview, packControl.current);
   assert.equal(packControl.options.length, 9, "PACK exposes radix 2 through 10");
   await capture("artifacts/pack-base4-canonical.png");
-  assert.equal(packState.pack.ghosts.every((ghost) => !ghost.active), true);
+  assert.equal(packState.pack.targetActivated, false);
 
-  // Correct structure activates the lock, removes the defense, sends the same
-  // raw IDs through the old layered attack, breaks the enemy, and advances.
+  // Correct structure activates the single target and sends the same raw IDs
+  // through the identity-preserving attack before BREAK advances the run.
   await packBase(5);
   packState = await settled();
   assert.equal(packState.pack.numberMass.quantity, 17);
@@ -494,7 +457,7 @@ try {
     beforeFinalRun,
   );
   let finalPhase = await read();
-  assert.equal(finalPhase.pack.defenseCleared, true);
+  assert.equal(finalPhase.pack.targetActivated, true);
   assert.equal(await page.locator('#keyboard-controls input[data-pack-radix]').count(), 0);
   assert.equal(finalPhase.pack.control, null);
   const attackBase = finalPhase.pack.base,
@@ -512,46 +475,53 @@ try {
   const afterBreak = await settled();
   assert.ok(afterBreak.runToken > beforeFinalRun, "BREAK advances to the next problem");
   assert.equal(afterBreak.progress.pack.wins, 1);
-  console.log("PACK single ghost, wrong-radix exploration, radix reset, defense release, attack, BREAK, and adaptive progression verified.");
+  console.log("PACK single target, wrong-radix exploration, radix reset, activation, attack, BREAK, and adaptive progression verified.");
 
-  // The base 4 target retains an empty middle place. Both lock orders complete.
+  // A single radix-4 target retains its empty middle place, then activates once.
   async function packWholeMass() {
     for (let gesture = 0; gesture < 36; gesture++) {
       const s = await settled();
       if (s.rule !== "pack" || s.status !== "play" || s.pack.complete) return s;
       const mass = s.pack.numberMass,
-        l0 = s.pack.slots.find((slot) => slot.level === 0);
-      await drag(mass, l0, mass.quantity);
+        l0 = s.pack.slots.find((slot) => slot.level === 0),
+        token = s.runToken;
+      await drag(mass, l0, mass.quantity, false);
+      await page.waitForFunction(
+        (startToken) => {
+          const current = window.__readFlow();
+          return current.runToken !== startToken || current.pack?.targetActivated || !current.busy;
+        },
+        token,
+      );
+      const current = await read();
+      if (current.runToken !== token || current.pack?.targetActivated || current.pack?.complete)
+        return current;
     }
     throw new Error("PACK Number Mass did not empty through incremental gestures");
   }
   packState = await route("pack", () => true, 3);
-  assert.equal(packState.pack.ghosts.length, 2);
+  assert.equal(packState.pack.targetGhost.places.length, 2);
   assert.deepEqual(
-    packState.pack.ghosts[1].places.map((place) => place.unitCount),
-    [1, 0, 1],
+    packState.pack.targetGhost.places.map((place) => place.unitCount),
+    [3, 2],
   );
+  assert.ok(packState.pack.targetGhost.places.every((place) => !place.empty));
   await packBase(4);
+  const middleZeroRun = packState.runToken;
   packState = await packWholeMass();
-  assert.equal(packState.pack.locks.filter((lock) => lock.activated).length, 1);
-  assert.equal(packState.pack.defenseCleared, false);
-  assert.equal(packState.pack.ghosts[0].active, false);
-  assert.equal(packState.pack.ghosts[1].active, true);
-  await packBase(5);
-  await packWholeMass();
-  assert.ok((await settled()).runToken > packState.runToken);
+  assert.equal(packState.pack.targetActivated, false);
+  assert.deepEqual(packState.pack.digits, [1, 0, 1]);
+  assert.equal((await settled()).runToken, middleZeroRun);
+  assert.equal(packState.pack.places.find((place) => place.level === 1).digit, 0);
 
   await page.emulateMedia({ reducedMotion: "reduce" });
   packState = await route("pack", () => true, 3);
   await packBase(5);
+  const reducedMotionRun = packState.runToken;
   packState = await packWholeMass();
-  assert.equal(packState.pack.locks.filter((lock) => lock.activated).length, 1);
-  assert.equal(packState.pack.defenseCleared, false);
-  await packBase(4);
-  const orderRun = packState.runToken;
-  await packWholeMass();
-  assert.ok((await settled()).runToken > orderRun);
-  console.log("PACK two defense locks activate in either order; the base 4 ghost preserves its empty middle place.");
+  assert.equal(packState.pack.targetActivated, true);
+  assert.ok((await settled()).runToken > reducedMotionRun);
+  console.log("PACK single target, middle-zero place, activation, attack, BREAK, and reduced-motion progression verified.");
   await route("link", (p) => p.ammo[0] === 14 && p.gates[0] === 3);
   let s = await read();
   const linkHandle = s.pieces[0].handle;
@@ -718,12 +688,23 @@ try {
     }
   }
 
-  // PACK stays inside portrait and narrow-landscape canvases; Number Mass and L0
-  // occupy separate hit regions, and the radix slider has its own lower track.
+  // PACK stays flat and inside portrait and narrow-landscape canvases.
   for (const [w, h] of [[320, 568], [390, 844], [412, 915], [844, 390]]) {
     await page.setViewportSize({ width: w, height: h });
     s = await route("pack", () => true, 5);
-    assert.equal(s.pack.ghosts.length, 3);
+    assert.equal(s.pack.targetGhost.places.length, 2);
+    assert.equal("camera" in s.pack, false);
+    assert.equal("ghosts" in s.pack, false);
+    assert.equal("locks" in s.pack, false);
+    assert.equal(new Set(s.pack.slots.map((slot) => slot.frameRadius)).size, 1);
+    assert.equal(new Set(s.pack.slots.map((slot) => slot.y)).size, 1);
+    assert.deepEqual(s.pack.slots.map((slot) => slot.x), [...s.pack.slots].map((slot) => slot.x).sort((a, b) => a - b));
+    for (const place of s.pack.targetGhost.places) {
+      assert.equal("radix" in place, false);
+      assert.equal("base" in place, false);
+      assert.equal("children" in place, false);
+      assert.ok(place.x - place.frameRadius >= 0 && place.x + place.frameRadius <= s.width);
+    }
     assert.equal(
       await page.evaluate(
         () =>
@@ -741,18 +722,38 @@ try {
     assert.ok(l0.y - l0.frameRadius >= 0 && l0.y + l0.frameRadius + 35 < s.height);
     assert.ok(Math.hypot(mass.x - l0.x, mass.y - l0.y) > mass.radius + l0.frameRadius + 12);
     assert.ok(control.x1 >= 0 && control.x2 <= s.width && control.y < s.height);
-    for (const ghost of s.pack.ghosts) {
-      assert.ok(ghost.places.length >= 2 && ghost.places.length <= 3);
-      for (const place of ghost.places) {
-        assert.ok(place.x - place.frameRadius >= 0 && place.x + place.frameRadius <= s.width);
-        assert.ok(place.y - place.frameRadius >= 0 && place.y + place.frameRadius <= s.height);
-      }
+    for (const place of s.pack.targetGhost.places) {
+      assert.ok(place.y - place.frameRadius >= 0 && place.y + place.frameRadius <= s.height);
     }
     assert.equal(await page.locator('#keyboard-controls input[data-pack-radix]').count(), 1);
     assert.equal(await page.locator('#keyboard-controls input[data-pack-radix]').getAttribute("min"), "2");
     assert.equal(await page.locator('#keyboard-controls input[data-pack-radix]').getAttribute("max"), "10");
     await audit();
   }
+
+  // Upper radix-10 units keep their ten raw dots legible inside one flat place.
+  await page.setViewportSize({ width: 320, height: 568 });
+  s = await route("pack", () => true, 5);
+  await packBase(10);
+  s = await settled();
+  const base10Mass = s.pack.numberMass,
+    base10Slot = s.pack.slots.find((slot) => slot.level === 0);
+  await drag(base10Mass, base10Slot, 17);
+  s = await settled();
+  const upperTen = s.pack.items.find((item) => item.level === 1);
+  assert.ok(upperTen, "base 10 creates a visible upper unit");
+  assert.equal(upperTen.rawIds.length, 10);
+  const upperDots = s.pack.renderedDots.filter((dot) => dot.rootItemId === upperTen.id);
+  assert.equal(upperDots.length, 10);
+  assert.ok(upperDots.every((dot) => dot.radius >= 4.2));
+  const upperSlot = s.pack.slots.find((slot) => slot.level === 1);
+  assert.ok(upperDots.every((dot) =>
+    Math.abs(dot.x - upperSlot.x) <= upperSlot.frameRadius + 1 &&
+    Math.abs(dot.y - upperSlot.y) <= upperSlot.frameRadius + 1,
+  ));
+  assert.ok(upperDots.some((dot, index) => upperDots.slice(index + 1).some((other) =>
+    Math.hypot(dot.x - other.x, dot.y - other.y) < dot.radius + other.radius + 1,
+  )), "spacing compression may allow slight overlap without merging the dots");
 
   // Native touch stream on the smallest portrait layout, then verify all
   // discovered place readouts still fit after L1 and L2 appear.

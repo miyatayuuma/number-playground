@@ -259,161 +259,83 @@ export function placeSlotLayout(total, base, width, y) {
   }));
 }
 
-// PACK's frame describes a scale's radix grammar. Its points are hollow marks,
-// kept separate from the filled dots that represent quantity.
-export function radixFrame(base, radius = 48) {
-  if (!Number.isInteger(base) || base < 2 || base > 10)
-    throw new RangeError("PACK radix frame must have 2–10 points");
-  const points = shape(base, radius).dots
-    .map(({ x, y }) => ({ x, y }))
-    .sort(
-      (a, b) =>
-        Math.atan2(a.y, a.x) - Math.atan2(b.y, b.x),
-    );
-  return { base, radius, points };
-}
+// PACK place units keep canonical raw-dot geometry. Contiguous raw identities
+// define transparent radix groups, while only spacing changes to compact them.
+export const PACK_RAW_DOT_WORLD_RADIUS = 4.2;
 
-export const PACK_RAW_DOT_WORLD_RADIUS = 8;
-export const PACK_FOCUS_DOT_SCREEN_RADIUS = 7;
-export const PACK_SCALE_DEPTH_RATIO = 1.5;
-export const PACK_CHILD_GAP_RATIO = 0.16;
-
-function packPattern(base) {
-  const points = (base === 4
-      ? [
-          { x: -1, y: -1 },
-          { x: 1, y: -1 },
-          { x: 1, y: 1 },
-          { x: -1, y: 1 },
-        ]
-      : shape(base, 54).dots),
-    outerRadius = Math.max(...points.map((point) => Math.hypot(point.x, point.y)));
-  let nearest = Infinity;
-  for (let i = 0; i < points.length; i++)
-    for (let j = i + 1; j < points.length; j++)
-      nearest = Math.min(
-        nearest,
-        Math.hypot(points[i].x - points[j].x, points[i].y - points[j].y),
-      );
-  return {
-    points: points.map((point) => ({
-      x: point.x / outerRadius,
-      y: point.y / outerRadius,
-    })),
-    nearestSeparation: nearest / outerRadius,
-  };
-}
-
-// The same factorization pattern is recursively packed as tightly as its child
-// footprints allow. Unit frames have their own scale reference radius and may
-// sit inside the full child footprint; they are grouping contours, not walls.
-export function packNestedUnitShape(
+export function compactPackNestedUnitShape(
   base,
-  levels = 1,
+  levels,
+  maxRadius = 18,
   rawRadius = PACK_RAW_DOT_WORLD_RADIUS,
 ) {
+  if (!Number.isInteger(base) || base < 2 || base > 10)
+    throw new RangeError("PACK compact radix must be 2–10");
   if (!Number.isInteger(levels) || levels < 0)
-    throw new RangeError("PACK nested depth must be non-negative");
-  if (!(rawRadius > 0)) throw new RangeError("PACK raw dot radius must be positive");
+    throw new RangeError("PACK compact depth must be non-negative");
+  if (!(rawRadius > 0) || !(maxRadius >= rawRadius))
+    throw new RangeError("PACK compact radii must be positive and ordered");
+  const quantity = base ** levels;
+  if (quantity > 36)
+    throw new RangeError("PACK compact units support at most 36 raw dots");
   if (levels === 0)
     return {
       base,
-      levels: 0,
+      levels,
+      quantity: 1,
       radius: rawRadius,
-      frameRadius: rawRadius,
       rawRadius,
-      children: [],
+      maxRadius,
+      spacingScale: 0,
+      dots: [{ x: 0, y: 0, radius: rawRadius, index: 0 }],
+      groups: [],
     };
 
-  const pattern = packPattern(base),
-    inner = packNestedUnitShape(base, levels - 1, rawRadius),
-    childCenterRadius =
-      (inner.radius * (2 + PACK_CHILD_GAP_RATIO)) /
-      pattern.nearestSeparation;
+  const centerRadius = Math.max(0, maxRadius - rawRadius),
+    canonical = shape(quantity, 54);
+  let minimumGap = Infinity;
+  for (let i = 0; i < canonical.dots.length; i++)
+    for (let j = i + 1; j < canonical.dots.length; j++)
+      minimumGap = Math.min(
+        minimumGap,
+        Math.hypot(
+          canonical.dots[i].x - canonical.dots[j].x,
+          canonical.dots[i].y - canonical.dots[j].y,
+        ),
+      );
+  const readableSpacingScale = (rawRadius * 1.3) / minimumGap,
+    spacingScale = Math.max(centerRadius / canonical.radius, readableSpacingScale),
+    dots = canonical.dots.map(({ x, y }, index) => ({
+      x: x * spacingScale,
+      y: y * spacingScale,
+      radius: rawRadius,
+      index,
+    })),
+    groups = [];
+  for (let groupLevel = 1; groupLevel <= levels; groupLevel++) {
+    const groupSize = base ** groupLevel;
+    for (let start = 0; start < quantity; start += groupSize) {
+      const members = dots.slice(start, start + groupSize),
+        x = members.reduce((sum, dot) => sum + dot.x, 0) / members.length,
+        y = members.reduce((sum, dot) => sum + dot.y, 0) / members.length,
+        radius = Math.max(
+          rawRadius + 1,
+          ...members.map(
+            (dot) => Math.hypot(dot.x - x, dot.y - y) + rawRadius + 1,
+          ),
+        );
+      groups.push({ groupLevel, start, count: members.length, x, y, radius });
+    }
+  }
   return {
     base,
     levels,
-    radius: childCenterRadius + inner.radius,
-    frameRadius: rawRadius * PACK_SCALE_DEPTH_RATIO ** levels,
+    quantity,
+    radius: Math.max(...dots.map((dot) => Math.hypot(dot.x, dot.y) + dot.radius)),
     rawRadius,
-    childGapRatio: PACK_CHILD_GAP_RATIO,
-    children: pattern.points.map((point, index) => ({
-      index,
-      x: point.x * childCenterRadius,
-      y: point.y * childCenterRadius,
-      radius: inner.radius,
-      inner,
-    })),
+    maxRadius,
+    spacingScale,
+    dots,
+    groups,
   };
-}
-
-// Scale planes share a short, uniform depth ratio. The active radix does not
-// affect their canonical positions; the overview lane reserves the larger
-// envelope from the supported base-4/base-5 grammars. Comparison frames
-// project to the reference raw-dot radius, while contents may protrude.
-export function packScaleViewports(maxLevel, width, height, base = 4, total = 17) {
-  maxLevel = Math.max(0, Math.trunc(maxLevel));
-  total = Math.max(1, Math.trunc(total));
-  const visibleMax = maxLevel,
-    showNext = visibleMax < 2,
-    lastLevel = visibleMax + (showNext ? 1 : 0),
-    levels = Array.from({ length: lastLevel + 1 }, (_, index) => lastLevel - index),
-    layoutMax = Math.max(2, visibleMax),
-    count = layoutMax + 1,
-    focalLength = Math.max(1, Math.min(width, height) * 1.15),
-    baseDistance =
-      (focalLength * PACK_RAW_DOT_WORLD_RADIUS) /
-      PACK_FOCUS_DOT_SCREEN_RADIUS,
-    overviewFrameRadius = PACK_FOCUS_DOT_SCREEN_RADIUS,
-    maxContentRadius = Math.max(
-      ...[4, 5].flatMap((layoutBase) =>
-        Array.from({ length: layoutMax + 1 }, (_, level) => {
-          const maxItems = Math.min(
-              layoutBase - 1,
-              Math.floor(total / layoutBase ** level),
-            ),
-            geometry = packNestedUnitShape(layoutBase, level);
-          return Array.from({ length: Math.max(1, maxItems) }, (_, i) => {
-            const count = i + 1,
-              arrangement = shape(count, 54),
-              centerRadius = Math.max(
-                0,
-                ...arrangement.dots.map((dot) => Math.hypot(dot.x, dot.y)),
-              ),
-              extent =
-                centerRadius * geometry.radius / arrangement.dotRadius +
-                geometry.radius;
-            return (
-              (extent * PACK_FOCUS_DOT_SCREEN_RADIUS) /
-              (PACK_RAW_DOT_WORLD_RADIUS * PACK_SCALE_DEPTH_RATIO ** level)
-            );
-          });
-        }).flat(),
-      ),
-    ),
-    pitch = Math.min(
-      Math.max(overviewFrameRadius * 2 + 18, maxContentRadius * 2 + 10),
-      (width - maxContentRadius * 2 - 24) / Math.max(1, count - 1),
-    );
-  return levels.map((level) => {
-    const unitWorldRadius =
-        PACK_RAW_DOT_WORLD_RADIUS * PACK_SCALE_DEPTH_RATIO ** level,
-      frameWorldRadius = unitWorldRadius,
-      depth = baseDistance * PACK_SCALE_DEPTH_RATIO ** level,
-      overviewOffsetX = (layoutMax / 2 - level) * pitch;
-    return {
-      level,
-      x: (overviewOffsetX * depth) / focalLength,
-      y: 0,
-      z: depth,
-      depth,
-      focalLength,
-      baseDistance,
-      overviewOffsetX,
-      unitWorldRadius,
-      frameWorldRadius,
-      overviewFrameRadius,
-      ghost: level > visibleMax,
-    };
-  });
 }
