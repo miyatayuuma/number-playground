@@ -1,7 +1,7 @@
 import { World } from "./view.mjs";
 import { shape, arrayShape } from "./shapes.mjs";
 import { activeTargets } from "./model.mjs";
-import { drawNumberReadout, drawSelectorDots } from "./number-selector.mjs";
+import { drawSelectorDots } from "./number-selector.mjs";
 export class FlowWorld extends World {
   setRun(run) {
     this.sparkTransitionTargetIndex = null;
@@ -366,7 +366,6 @@ export class FlowWorld extends World {
           dotScale: 0.62,
           minimumDotRadius: 1.15,
         });
-        drawNumberReadout(this, p.width, h.x, h.y - 23, this.color, 12);
         this.label("‹", h.x - 19, h.y, this.color, 17);
         this.label("›", h.x + 19, h.y, this.color, 17);
         c.restore();

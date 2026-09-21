@@ -63,7 +63,13 @@ const { read, settled, route, audit, drag, width, packBase, solveCurrent } =
   driver(page, base);
 async function captureCanvasTrace() {
   await page.evaluate(() => {
-    window.__canvasTrace = { enabled: true, labels: [], curves: 0 };
+    window.__canvasTrace = {
+      enabled: true,
+      labels: [],
+      arcs: [],
+      roundRects: [],
+      curves: 0,
+    };
   });
   await page.waitForTimeout(160);
   return page.evaluate(() => {
@@ -139,6 +145,52 @@ function assertPackGeometry(state) {
       `unit ${item.id} stays inside its Place Frame`,
     );
   }
+}
+function assertWidthSelectorVisual(trace, { handle, value, active, area, viewport }) {
+  const nearHandle = (entry) =>
+      Math.abs(entry.x - handle.x) <= 28 && Math.abs(entry.y - handle.y) <= 13,
+    selectorNumerals = trace.labels.filter((label) =>
+      Math.abs(label.x - handle.x) <= 28 &&
+      label.y >= handle.y - 34 &&
+      label.y <= handle.y + 13 &&
+      /^\d+$/.test(label.text),
+    ),
+    restingDots = new Set(
+      trace.arcs
+        .filter((arc) => nearHandle(arc))
+        .map((arc) => `${arc.x.toFixed(2)},${arc.y.toFixed(2)}`),
+    );
+  if (!active) {
+    assert.equal(selectorNumerals.length, 0, `${area} resting selector has no Arabic numeral`);
+    assert.ok(restingDots.size >= value, `${area} resting selector retains canonical dots`);
+    assert.equal(
+      trace.roundRects.some((frame) => frame.width === 50 && frame.height === 36),
+      false,
+      `${area} resting state has no active feedback frame`,
+    );
+    return;
+  }
+
+  const frames = trace.roundRects.filter((frame) => frame.width === 50 && frame.height === 36);
+  assert.ok(frames.length, `${area} active feedback frame is drawn`);
+  const frame = frames[0],
+    center = { x: frame.x + frame.width / 2, y: frame.y + frame.height / 2 },
+    frameLabels = trace.labels.filter((label) =>
+      Math.abs(label.x - center.x) < 0.1 && Math.abs(label.y - center.y) < 0.1,
+    ),
+    frameDots = trace.arcs.filter((arc) =>
+      Math.abs(arc.x - center.x) < frame.width / 2 &&
+      Math.abs(arc.y - center.y) < frame.height / 2,
+    );
+  assert.deepEqual(
+    [...new Set(frameLabels.map((label) => label.text))],
+    [String(value)],
+    `${area} active feedback contains only its current numeral at the exact frame center`,
+  );
+  assert.equal(frameDots.length, 0, `${area} active feedback contains no dots`);
+  assert.ok(frame.x >= 0 && frame.x + frame.width <= viewport.width);
+  assert.ok(frame.y >= 0 && frame.y + frame.height <= viewport.height);
+  assert.ok(center.y < handle.y - 15, `${area} feedback remains above the touched selector`);
 }
 try {
   await page.goto(base);
@@ -885,6 +937,96 @@ try {
     (await read()).pieces.map((p) => p.width),
     [4, 4],
   );
+  const selectorViewports = [
+    [320, 568],
+    [390, 844],
+    [412, 915],
+    [844, 390],
+  ];
+  await mkdir(resolve(root, "artifacts"), { recursive: true });
+  for (const [viewportWidth, viewportHeight] of selectorViewports) {
+    const viewport = { width: viewportWidth, height: viewportHeight };
+    await page.setViewportSize(viewport);
+    for (const rule of ["link", "gear"]) {
+      s = await route(
+        rule,
+        rule === "gear"
+          ? (problem) => problem.ammo[0] === 12 && problem.ammo[1] === 20
+          : (problem) => problem.ammo[0] === 14 && problem.gates[0] === 3,
+      );
+      await width(s.pieces[0].id, 3);
+      s = await read();
+      const handle = s.pieces.find((piece) => piece.handle)?.handle;
+      assert.ok(handle, `${rule} width selector remains available`);
+      let trace = await captureCanvasTrace();
+      assertWidthSelectorVisual(trace, {
+        handle,
+        value: 3,
+        active: false,
+        area: rule,
+        viewport,
+      });
+      if (viewportWidth === 390)
+        await capture(`artifacts/selector-${rule}-resting.png`);
+
+      await touchStartAt(handle, 23);
+      trace = await captureCanvasTrace();
+      assertWidthSelectorVisual(trace, {
+        handle,
+        value: 3,
+        active: true,
+        area: rule,
+        viewport,
+      });
+      if (viewportWidth === 390)
+        await capture(`artifacts/selector-${rule}-active-3.png`);
+
+      await touchMoveTo({ x: handle.x + 12, y: handle.y }, 23);
+      trace = await captureCanvasTrace();
+      s = await read();
+      assert.deepEqual(
+        s.pieces.map((piece) => piece.width),
+        rule === "gear" ? [4, 4] : [4],
+        `${rule} still applies the active width through its existing gesture`,
+      );
+      assertWidthSelectorVisual(trace, {
+        handle,
+        value: 4,
+        active: true,
+        area: rule,
+        viewport,
+      });
+
+      await touchMoveTo({ x: handle.x + 24, y: handle.y }, 23);
+      trace = await captureCanvasTrace();
+      s = await read();
+      assert.deepEqual(
+        s.pieces.map((piece) => piece.width),
+        rule === "gear" ? [5, 5] : [5],
+        `${rule} updates the displayed width live`,
+      );
+      assertWidthSelectorVisual(trace, {
+        handle,
+        value: 5,
+        active: true,
+        area: rule,
+        viewport,
+      });
+
+      await touchEnd();
+      s = await settled();
+      trace = await captureCanvasTrace();
+      assertWidthSelectorVisual(trace, {
+        handle,
+        value: 5,
+        active: false,
+        area: rule,
+        viewport,
+      });
+    }
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await settled();
   // Keep the fun coarse selection, but distinguish deliberate fast peels.
   await route("spark", (p) => p.ammo[0] === 4 && p.ammo[1] === 5);
   const sparkSelectorState = await read();

@@ -2,9 +2,17 @@ import assert from "node:assert/strict";
 import { generateProblem, PROBLEM_BANK } from "../src/stages.mjs";
 export async function instrument(context) {
   await context.addInitScript(() => {
-    window.__canvasTrace = { enabled: false, labels: [], curves: 0 };
+    window.__canvasTrace = {
+      enabled: false,
+      labels: [],
+      arcs: [],
+      roundRects: [],
+      curves: 0,
+    };
     const fillText = CanvasRenderingContext2D.prototype.fillText,
-      bezierCurveTo = CanvasRenderingContext2D.prototype.bezierCurveTo;
+      bezierCurveTo = CanvasRenderingContext2D.prototype.bezierCurveTo,
+      arc = CanvasRenderingContext2D.prototype.arc,
+      roundRect = CanvasRenderingContext2D.prototype.roundRect;
     CanvasRenderingContext2D.prototype.fillText = function (text, x, y, ...rest) {
       if (this.canvas?.id === "world" && window.__canvasTrace.enabled)
         window.__canvasTrace.labels.push({
@@ -19,6 +27,16 @@ export async function instrument(context) {
       if (this.canvas?.id === "world" && window.__canvasTrace.enabled)
         window.__canvasTrace.curves++;
       return bezierCurveTo.apply(this, args);
+    };
+    CanvasRenderingContext2D.prototype.arc = function (x, y, radius, ...rest) {
+      if (this.canvas?.id === "world" && window.__canvasTrace.enabled)
+        window.__canvasTrace.arcs.push({ x, y, radius });
+      return arc.call(this, x, y, radius, ...rest);
+    };
+    CanvasRenderingContext2D.prototype.roundRect = function (x, y, width, height, ...rest) {
+      if (this.canvas?.id === "world" && window.__canvasTrace.enabled)
+        window.__canvasTrace.roundRects.push({ x, y, width, height });
+      return roundRect.call(this, x, y, width, height, ...rest);
     };
     const q = new URLSearchParams(location.search);
     if (q.has("fixtureSeed")) {
