@@ -302,7 +302,7 @@ function pauseMenu() {
     "pause",
   );
 }
-function start(id, changeHash = true) {
+function start(id, changeHash = true, restartProblem = null) {
   epoch++;
   world.token = epoch;
   pointer = null;
@@ -313,13 +313,15 @@ function start(id, changeHash = true) {
   ruleId = id;
   document.body.classList.remove("entrance");
   const p = progress[id],
-    problem = generateProblem(
-      id,
-      p?.difficulty || 1,
-      `${Date.now()}-${serial++}`,
-      p?.recent || [],
-    );
-  if (p) {
+    problem = restartProblem
+      ? structuredClone(restartProblem)
+      : generateProblem(
+          id,
+          p?.difficulty || 1,
+          `${Date.now()}-${serial++}`,
+          p?.recent || [],
+        );
+  if (p && !restartProblem) {
     p.recent.push(problem.id);
     p.recent = p.recent.slice(-10);
     save();
@@ -689,9 +691,12 @@ overlay.addEventListener("click", (e) => {
   const action = button.dataset.menu;
   if (action === "close") closeMenu();
   if (action === "retry") {
-    recordResult(progress[ruleId], false);
-    save();
-    start(ruleId);
+    if (ruleId === "pack") start(ruleId, true, run.stage);
+    else {
+      recordResult(progress[ruleId], false);
+      save();
+      start(ruleId);
+    }
   }
   if (action === "areas") areaMenu();
   if (action === "sound") {

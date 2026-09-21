@@ -1,5 +1,6 @@
 import { gcd } from "./math.mjs";
 import { factors } from "./shapes.mjs";
+import { packCanonicalDigits } from "./model.mjs";
 
 export const AREAS = [
   { id: "spark", name: "スパーク", color: "#ffc977", glyph: "✦" },
@@ -279,19 +280,118 @@ gearSpecs.forEach((spec, i) => {
   bank.gear.push({ ...clean, id, area: "gear", difficulty });
 });
 
-// PACK keeps the same quantity and gives each run one hidden target structure.
-bank.pack.push({
-  id: "pack:17:5-4",
-  area: "pack",
-  difficulty: 1,
-  ammo: [17],
-  quantity: 17,
-  radices: [2, 3, 4, 5, 6, 7, 8, 9, 10],
-  startRadix: 3,
-  targetRadix: 5,
-  family: "radix",
-  targets: [],
+const PACK_RADICES = Object.freeze([2, 3, 4, 5, 6, 7, 8, 9, 10]);
+const PACK_PROFILES = Object.freeze({
+  1: { minQuantity: 3, maxQuantity: 12, minRadix: 2, maxRadix: 5, minPlaces: 2, maxPlaces: 2, noZero: true },
+  2: { minQuantity: 5, maxQuantity: 17, minRadix: 2, maxRadix: 6, minPlaces: 2, maxPlaces: 3, noMiddleZero: true },
+  3: { minQuantity: 8, maxQuantity: 22, minRadix: 2, maxRadix: 8, minPlaces: 2, maxPlaces: 4, minNonZeroPlaces: 2 },
+  4: { minQuantity: 10, maxQuantity: 27, minRadix: 2, maxRadix: 10, minPlaces: 2, maxPlaces: 4, minNonZeroPlaces: 2 },
+  5: { minQuantity: 12, maxQuantity: 31, minRadix: 2, maxRadix: 10, minPlaces: 2, maxPlaces: 5 },
 });
+
+export function classifyPackCandidate(quantity, targetRadix) {
+  const digits = packCanonicalDigits(quantity, targetRadix),
+    zeroCount = digits.filter((digit) => digit === 0).length;
+  return {
+    quantity,
+    targetRadix,
+    digits,
+    placeCount: digits.length,
+    zeroCount,
+    middleZero: digits.slice(1, -1).includes(0),
+    nonZeroPlaceCount: digits.length - zeroCount,
+  };
+}
+
+function packCandidateAllowed(candidate, difficulty) {
+  const profile = PACK_PROFILES[difficulty];
+  return (
+    candidate.quantity >= profile.minQuantity &&
+    candidate.quantity <= profile.maxQuantity &&
+    candidate.targetRadix >= profile.minRadix &&
+    candidate.targetRadix <= profile.maxRadix &&
+    candidate.targetRadix <= candidate.quantity &&
+    candidate.placeCount >= profile.minPlaces &&
+    candidate.placeCount <= profile.maxPlaces &&
+    (!profile.noZero || candidate.zeroCount === 0) &&
+    (!profile.noMiddleZero || !candidate.middleZero) &&
+    (!profile.minNonZeroPlaces || candidate.nonZeroPlaceCount >= profile.minNonZeroPlaces)
+  );
+}
+
+function makePackCandidateBank() {
+  const candidates = [];
+  for (let quantity = 3; quantity <= 31; quantity++)
+    for (const targetRadix of PACK_RADICES) {
+      if (quantity < targetRadix) continue;
+      candidates.push({
+        id: `pack:q${quantity}:b${targetRadix}`,
+        area: "pack",
+        ammo: [quantity],
+        quantity,
+        radices: PACK_RADICES,
+        targetRadix,
+        family: "radix",
+        targets: [],
+      });
+    }
+  return candidates;
+}
+bank.pack.push(...makePackCandidateBank());
+
+function seededHash(seed) {
+  let hash = 2166136261;
+  for (const ch of String(seed))
+    hash = Math.imul(hash ^ ch.charCodeAt(0), 16777619) >>> 0;
+  return hash;
+}
+
+export function packCandidatesForDifficulty(difficulty = 1) {
+  const level = Math.max(1, Math.min(5, Math.trunc(difficulty) || 1));
+  return bank.pack.filter((candidate) =>
+    packCandidateAllowed(
+      classifyPackCandidate(candidate.quantity, candidate.targetRadix),
+      level,
+    ),
+  );
+}
+
+function selectPackProblem(difficulty, seed, recentHistory) {
+  const pool = packCandidatesForDifficulty(difficulty);
+  let choices = pool.filter((candidate) => !recentHistory.includes(candidate.id));
+  if (!choices.length) choices = pool;
+
+  const recentCandidates = [...recentHistory]
+    .reverse()
+    .map((id) => /^pack:q(\d+):b(\d+)$/.exec(id))
+    .filter(Boolean),
+    recentCandidate = recentCandidates[0];
+  if (recentCandidates.length) {
+    const recentQuantities = new Set(
+      recentCandidates.slice(0, 2).map((candidate) => Number(candidate[1])),
+    );
+    const alternativeQuantity = choices.filter(
+      (candidate) => !recentQuantities.has(candidate.quantity),
+    );
+    if (alternativeQuantity.length) choices = alternativeQuantity;
+    const alternativeRadix = choices.filter(
+      (candidate) => candidate.targetRadix !== Number(recentCandidate[2]),
+    );
+    if (alternativeRadix.length) choices = alternativeRadix;
+  }
+
+  const selected = choices[seededHash(seed) % choices.length],
+    startChoices = PACK_RADICES.filter(
+      (radix) => radix !== selected.targetRadix && radix <= selected.quantity,
+    ),
+    eligibleStarts = startChoices.length
+      ? startChoices
+      : PACK_RADICES.filter((radix) => radix !== selected.targetRadix),
+    startRadix = eligibleStarts[
+      seededHash(`${seed}|pack-start`) % eligibleStarts.length
+    ];
+  return { ...structuredClone(selected), difficulty, seed, startRadix };
+}
 
 export const PROBLEM_BANK = bank;
 export function generateProblem(
@@ -303,13 +403,7 @@ export function generateProblem(
   if (!bank[ruleId]) throw new RangeError("Unknown rule");
   if (ruleId === "pack") {
     difficulty = Math.max(1, Math.min(5, Math.trunc(difficulty) || 1));
-    const problem = structuredClone(bank.pack[0]);
-    return {
-      ...problem,
-      id: `${problem.id}:d${difficulty}-single-target`,
-      difficulty,
-      seed,
-    };
+    return selectPackProblem(difficulty, seed, recentHistory);
   }
   difficulty = Math.max(1, Math.min(5, Math.trunc(difficulty) || 1));
   const candidates = bank[ruleId].filter((p) => p.difficulty === difficulty);
@@ -321,9 +415,6 @@ export function generateProblem(
       );
   const fresh = pool.filter((p) => !recentHistory.includes(p.id));
   const choices = fresh.length ? fresh : pool;
-  let h = 2166136261;
-  for (const ch of String(seed))
-    h = Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0;
-  const result = structuredClone(choices[h % choices.length]);
+  const result = structuredClone(choices[seededHash(seed) % choices.length]);
   return { ...result, difficulty, seed };
 }

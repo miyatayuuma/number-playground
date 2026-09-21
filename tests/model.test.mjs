@@ -28,7 +28,13 @@ import {
   resolvePackAttackPayload,
   completePackBreak,
 } from "../src/model.mjs";
-import { PROBLEM_BANK, generateProblem, divisors } from "../src/stages.mjs";
+import {
+  PROBLEM_BANK,
+  generateProblem,
+  divisors,
+  classifyPackCandidate,
+  packCandidatesForDifficulty,
+} from "../src/stages.mjs";
 import { gcd } from "../src/math.mjs";
 import {
   shape,
@@ -56,6 +62,19 @@ import {
   restoreProgress,
   recordResult,
 } from "../src/progress.mjs";
+const packFixture = (overrides = {}) => ({
+  id: "pack:test-fixture:q17:b5",
+  area: "pack",
+  difficulty: 1,
+  ammo: [17],
+  quantity: 17,
+  radices: [2, 3, 4, 5, 6, 7, 8, 9, 10],
+  startRadix: 3,
+  targetRadix: 5,
+  family: "radix",
+  targets: [],
+  ...overrides,
+});
 function audit(run) {
   const ids = accountedIds(run);
   assert.equal(ids.length, run.dots.length);
@@ -137,7 +156,11 @@ export function solve(problem) {
 }
 test("every generated construction is solvable and conserves every dot", () => {
   for (const [rule, bank] of Object.entries(PROBLEM_BANK)) {
-    if (rule === "pack") assert.equal(bank.length, 1);
+    if (rule === "pack") {
+      assert.ok(bank.length >= 200);
+      solve(packFixture());
+      continue;
+    }
     else assert.ok(bank.length >= 30, rule);
     for (const p of bank) solve(p);
   }
@@ -294,7 +317,7 @@ test("SPARK 7 -> 3 -> 4 spends each original raw identity exactly once", () => {
 });
 
 test("PACK starts with one Number Mass and only an empty L0", () => {
-  const run = createRun(structuredClone(PROBLEM_BANK.pack[0])),
+  const run = createRun(packFixture()),
     original = run.dots.map((dot) => dot.id);
   assert.equal(run.pack.numberMassRawIds.length, 17);
   assert.deepEqual(run.pack.numberMassRawIds, original);
@@ -310,14 +333,129 @@ test("PACK problems define exactly one hidden target and preserve its radix-neut
   assert.deepEqual(packCanonicalDigits(17, 5), [3, 2]);
   assert.deepEqual(packCanonicalDigits(17, 3), [1, 2, 2]);
   for (let difficulty = 1; difficulty <= 5; difficulty++) {
-    const problem = generateProblem("pack", difficulty, "single-target"),
+    const problem = generateProblem("pack", difficulty, "generated-target"),
       run = createRun(problem);
-    assert.equal(problem.targetRadix, 5);
+    assert.ok(problem.quantity >= 3 && problem.quantity <= 31);
+    assert.ok(problem.targetRadix >= 2 && problem.targetRadix <= 10);
+    assert.ok(problem.quantity >= problem.targetRadix);
+    assert.notEqual(problem.startRadix, problem.targetRadix);
+    assert.ok(problem.radices.includes(problem.startRadix));
+    assert.ok(problem.radices.includes(problem.targetRadix));
     assert.equal("targetRadices" in problem, false);
     assert.deepEqual(Object.keys(run.pack.target).sort(), ["activated", "digits", "radix"]);
-    assert.deepEqual(run.pack.target.digits, packCanonicalDigits(17, 5));
+    assert.deepEqual(
+      run.pack.target.digits,
+      packCanonicalDigits(problem.quantity, problem.targetRadix),
+    );
     assert.equal(run.pack.target.activated, false);
   }
+});
+
+test("PACK generation samples valid quantity and radix structures across every difficulty", () => {
+  const expected = {
+    1: { q: [3, 12], r: [2, 5], places: [2, 2] },
+    2: { q: [5, 17], r: [2, 6], places: [2, 3] },
+    3: { q: [8, 22], r: [2, 8], places: [2, 4] },
+    4: { q: [10, 27], r: [2, 10], places: [2, 4] },
+    5: { q: [12, 31], r: [2, 10], places: [2, 5] },
+  };
+  for (let difficulty = 1; difficulty <= 5; difficulty++) {
+    const samples = Array.from({ length: 600 }, (_, seed) =>
+      generateProblem("pack", difficulty, `profile-${difficulty}-${seed}`),
+    );
+    for (const problem of samples) {
+      const { q, r, places } = expected[difficulty],
+        classified = classifyPackCandidate(problem.quantity, problem.targetRadix),
+        run = createRun(problem);
+      assert.ok(Number.isInteger(problem.quantity));
+      assert.ok(problem.quantity >= q[0] && problem.quantity <= q[1]);
+      assert.ok(problem.quantity >= 3 && problem.quantity <= 31);
+      assert.ok(problem.targetRadix >= r[0] && problem.targetRadix <= r[1]);
+      assert.ok(problem.quantity >= problem.targetRadix);
+      assert.ok(problem.radices.includes(problem.targetRadix));
+      assert.ok(problem.startRadix >= 2 && problem.startRadix <= 10);
+      assert.ok(problem.radices.includes(problem.startRadix));
+      assert.notEqual(problem.startRadix, problem.targetRadix);
+      assert.ok(problem.startRadix <= problem.quantity);
+      assert.ok(classified.placeCount >= places[0] && classified.placeCount <= places[1]);
+      assert.equal(classified.digits[0] === 0, false, "canonical digits omit leading zero");
+      assert.ok(classified.digits.every((digit) => digit >= 0 && digit < problem.targetRadix));
+      assert.equal(
+        classified.digits.reduce((value, digit) => value * problem.targetRadix + digit, 0),
+        problem.quantity,
+      );
+      assert.deepEqual(run.pack.target.digits, packCanonicalDigits(problem.quantity, problem.targetRadix));
+      assert.equal(run.pack.target.radix, problem.targetRadix);
+      assert.equal(run.dots.length, problem.quantity);
+      assert.equal(new Set(run.dots.map((dot) => dot.id)).size, problem.quantity);
+      assert.equal(isCanonicalPack(run), true);
+      if (difficulty === 1) {
+        assert.equal(classified.placeCount, 2);
+        assert.equal(classified.zeroCount, 0);
+      }
+      if (difficulty === 2) assert.equal(classified.middleZero, false);
+      if (difficulty === 3 || difficulty === 4)
+        assert.ok(classified.nonZeroPlaceCount >= 2);
+    }
+
+    if (difficulty === 2)
+      assert.ok(samples.some((problem) =>
+        classifyPackCandidate(problem.quantity, problem.targetRadix).zeroCount > 0,
+      ), "D2 includes a terminal zero remainder");
+    if (difficulty === 3)
+      assert.ok(samples.some((problem) =>
+        classifyPackCandidate(problem.quantity, problem.targetRadix).middleZero,
+      ), "D3 includes an internal zero place");
+
+    assert.ok(new Set(samples.map((problem) => problem.quantity)).size > 1);
+    assert.ok(new Set(samples.map((problem) => problem.targetRadix)).size > 1);
+    if (difficulty >= 3)
+      assert.ok(new Set(samples.map((problem) => classifyPackCandidate(problem.quantity, problem.targetRadix).placeCount)).size > 1);
+    if (difficulty >= 4)
+      assert.ok(samples.some((problem) => classifyPackCandidate(problem.quantity, problem.targetRadix).zeroCount > 0));
+    if (difficulty === 5) {
+      assert.ok(samples.some((problem) => classifyPackCandidate(problem.quantity, problem.targetRadix).placeCount >= 4));
+      assert.ok(samples.some((problem) => classifyPackCandidate(problem.quantity, problem.targetRadix).nonZeroPlaceCount === 1));
+      assert.ok(samples.some((problem) => classifyPackCandidate(problem.quantity, problem.targetRadix).zeroCount >= 2));
+    }
+  }
+
+  const d1 = Array.from({ length: 2400 }, (_, seed) =>
+    generateProblem("pack", 1, `start-radix-${seed}`),
+  );
+  const startsByTarget = new Map();
+  for (const problem of d1) {
+    const starts = startsByTarget.get(problem.targetRadix) || new Set();
+    starts.add(problem.startRadix);
+    startsByTarget.set(problem.targetRadix, starts);
+  }
+  assert.ok([...startsByTarget.values()].some((starts) => starts.size > 1));
+});
+
+test("PACK selection is deterministic and respects exact recent history before soft radix variety", () => {
+  const first = generateProblem("pack", 2, "history-seed"),
+    repeated = generateProblem("pack", 2, "history-seed"),
+    withRecent = generateProblem("pack", 2, "history-seed", [first.id]);
+  assert.deepEqual(
+    [first.id, first.quantity, first.targetRadix, first.startRadix],
+    [repeated.id, repeated.quantity, repeated.targetRadix, repeated.startRadix],
+  );
+  assert.notEqual(withRecent.id, first.id);
+  assert.notEqual(withRecent.targetRadix, first.targetRadix);
+  assert.deepEqual(
+    withRecent,
+    generateProblem("pack", 2, "history-seed", [first.id]),
+  );
+
+  const pool = packCandidatesForDifficulty(1),
+    exhaustedHistory = pool.map((problem) => problem.id),
+    fallback = generateProblem("pack", 1, "exhausted-pool", exhaustedHistory);
+  assert.ok(pool.some((problem) => problem.id === fallback.id));
+  assert.ok(fallback.quantity >= fallback.targetRadix);
+  assert.deepEqual(
+    fallback,
+    generateProblem("pack", 1, "exhausted-pool", exhaustedHistory),
+  );
 });
 
 test("PACK radix notation preserves zeros and only appears for settled completion", () => {
@@ -339,7 +477,7 @@ test("PACK radix notation preserves zeros and only appears for settled completio
     "leading zeros are omitted while the middle zero remains",
   );
 
-  const run = createRun(generateProblem("pack", 3, "notation-gating"));
+  const run = createRun(packFixture());
   assert.equal(packCompletionNotation(run), null, "unpacked Number Mass stays blank");
   assert.ok(setPackBase(run, 4));
   assert.ok(pourPackMass(run, 0).ok);
@@ -372,7 +510,7 @@ test("PACK radix notation preserves zeros and only appears for settled completio
 });
 
 test("PACK target matching requires a complete settled canonical structure", () => {
-  const run = createRun({ ...generateProblem("pack", 3, "settle"), targetRadix: 4 });
+  const run = createRun({ ...packFixture(), targetRadix: 4 });
   assert.equal(matchPackTarget(run).ok, false, "Number Mass is not yet packed");
   assert.ok(setPackBase(run, 4));
   assert.ok(pourPackMass(run, 0).ok);
@@ -391,7 +529,7 @@ test("PACK target matching requires a complete settled canonical structure", () 
 });
 
 test("PACK wrong radix has no penalty and resetting radix preserves the single target", () => {
-  const run = createRun(generateProblem("pack", 3, "wrong-radix")),
+  const run = createRun(packFixture()),
     original = run.dots.map((dot) => dot.id),
     target = structuredClone(run.pack.target);
   assert.ok(setPackBase(run, 4));
@@ -408,7 +546,7 @@ test("PACK wrong radix has no penalty and resetting radix preserves the single t
 });
 
 test("PACK target activation is single-shot and attack resolves the original identity set", () => {
-  const run = createRun(generateProblem("pack", 1, "attack")),
+  const run = createRun(packFixture()),
     original = run.dots.map((dot) => dot.id);
   assert.ok(setPackBase(run, 5));
   pourUntilMassEmpty(run, 0);
@@ -438,7 +576,7 @@ test("PACK target activation is single-shot and attack resolves the original ide
 });
 
 test("PACK base 4 / 17 feeds one carry at a time and keeps carry automatic", () => {
-  const run = createRun(structuredClone(PROBLEM_BANK.pack[0])),
+  const run = createRun(packFixture()),
     original = run.dots.map((dot) => dot.id);
   assert.equal(setPackBase(run, 4), true);
   const first = pourPackMass(run, 0);
@@ -480,7 +618,7 @@ test("PACK base 4 / 17 feeds one carry at a time and keeps carry automatic", () 
 });
 
 test("PACK base 5 / 17 permits only complete L1 units when mass is short", () => {
-  const run = createRun(structuredClone(PROBLEM_BANK.pack[0]));
+  const run = createRun(packFixture());
   assert.ok(setPackBase(run, 5));
   const first = pourPackMass(run, 0);
   assert.equal(first.consumedRawIds.length, 5);
@@ -506,7 +644,7 @@ test("PACK base 5 / 17 permits only complete L1 units when mass is short", () =>
 
 test("PACK stops after carry and preserves unique raw IDs on direct input", () => {
   const run = createRun({
-      ...structuredClone(PROBLEM_BANK.pack[0]),
+      ...packFixture(),
       ammo: [32],
       quantity: 32,
     }),
@@ -533,7 +671,7 @@ test("PACK stops after carry and preserves unique raw IDs on direct input", () =
 });
 
 test("PACK radix 2 and 10 carry safely, conserve mass, and reset to raw IDs", () => {
-  const run = createRun(structuredClone(PROBLEM_BANK.pack[0])),
+  const run = createRun(packFixture()),
     original = run.dots.map((dot) => dot.id);
   assert.equal(run.stage.radices[0], 2);
   assert.equal(run.stage.radices.at(-1), 10);
@@ -591,7 +729,7 @@ test("number selector shapes reuse canonical factorization geometry and zero is 
 
 test("PACK direct input consumes the raw identities for one discovered upper unit", () => {
   const l1Run = createRun({
-      ...structuredClone(PROBLEM_BANK.pack[0]),
+      ...packFixture(),
       ammo: [8],
       quantity: 8,
     }),
@@ -618,7 +756,7 @@ test("PACK direct input consumes the raw identities for one discovered upper uni
   assert.ok(isCanonicalPack(l1Run));
 
   const l2Run = createRun({
-      ...structuredClone(PROBLEM_BANK.pack[0]),
+      ...packFixture(),
       ammo: [32],
       quantity: 32,
     }),
@@ -651,7 +789,7 @@ test("PACK direct input consumes the raw identities for one discovered upper uni
 });
 
 test("PACK radix change returns all active hierarchy to Number Mass and clears discovery", () => {
-  const run = createRun(structuredClone(PROBLEM_BANK.pack[0])),
+  const run = createRun(packFixture()),
     original = run.dots.map((dot) => dot.id);
   setPackBase(run, 4);
   assert.ok(pourPackMass(run, 0).ok);
@@ -674,7 +812,7 @@ test("PACK readouts count raw descendants from active unit hierarchies", () => {
     [5, { digits: [3, 2], raw: [15, 2] }],
   ]);
   for (const [base, values] of expected) {
-    const run = createRun(structuredClone(PROBLEM_BANK.pack[0]));
+    const run = createRun(packFixture());
     if (run.pack.base !== base) assert.equal(setPackBase(run, base), true);
     while (run.pack.numberMassRawIds.length) {
       const result = pourPackMass(run, 0);
@@ -732,7 +870,7 @@ test("PACK uses identical frame dimensions at every place level", () => {
 });
 
 test("PACK L0 uses one framed raw dot without adding child structure", () => {
-  const run = createRun(structuredClone(PROBLEM_BANK.pack[0]));
+  const run = createRun(packFixture());
   assert.ok(pourPackMass(run, 0, 1).ok);
   const rawItem = activePackItems(run).find((item) => item.level === 0),
     geometry = compactPackNestedUnitShape(
@@ -800,7 +938,7 @@ test("PACK adaptive packing preserves topology, containment, and shared overlap 
 });
 
 test("PACK radix reset removes old grouping while preserving all raw identities", () => {
-  const run = createRun(structuredClone(PROBLEM_BANK.pack[0])),
+  const run = createRun(packFixture()),
     rawIds = run.dots.map((dot) => dot.id);
   assert.ok(setPackBase(run, 4));
   assert.ok(pourPackMass(run, 0).ok);
@@ -818,7 +956,7 @@ test("PACK radix reset removes old grouping while preserving all raw identities"
 });
 
 test("PACK repeated L0 gestures reach canonical base-4 structure without attacking", () => {
-  const run = createRun(structuredClone(PROBLEM_BANK.pack[0])),
+  const run = createRun(packFixture()),
     original = run.dots.map((dot) => dot.id);
   setPackBase(run, 4);
   const gestures = pourUntilMassEmpty(run, 0);
@@ -873,14 +1011,13 @@ test("PACK single target follows the existing saved difficulty progression", () 
     restoreProgress({ pack: { difficulty: 5, wins: 2, retries: 1 } }).pack,
     { difficulty: 5, wins: 2, retries: 1, recent: [] },
   );
-    assert.equal(generateProblem("pack", 5, 999).targetRadix, 5);
   assert.equal(generateProblem("pack", 5, 999).difficulty, 5);
   const progress = freshProgress().pack;
   recordResult(progress, true);
   recordResult(progress, true);
   recordResult(progress, true);
   assert.equal(progress.difficulty, 2);
-  assert.equal(generateProblem("pack", progress.difficulty, "next").targetRadix, 5);
+  assert.equal(generateProblem("pack", progress.difficulty, "next").difficulty, 2);
 });
 
 test("gear only clears on the greatest common divisor", () => {

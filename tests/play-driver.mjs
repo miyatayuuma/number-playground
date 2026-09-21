@@ -60,12 +60,11 @@ export function driver(page, base) {
     return read();
   }
   async function route(rule, predicate = () => true, difficulty) {
-    const example =
-      rule === "pack"
-        ? generateProblem("pack", difficulty || 1, "fixture-pack")
-        : PROBLEM_BANK[rule].find(
-            (p) => predicate(p) && (!difficulty || p.difficulty === difficulty),
-          );
+    const example = rule === "pack"
+      ? generateProblem("pack", difficulty || 1, "fixture-pack")
+      : PROBLEM_BANK[rule].find(
+          (p) => predicate(p) && (!difficulty || p.difficulty === difficulty),
+        );
     assert.ok(example, `fixture ${rule}`);
     const d = difficulty || example.difficulty;
     let seed = 0;
@@ -199,6 +198,12 @@ export function driver(page, base) {
         );
       } else if (s.rule === "pack") {
         if (s.pack.complete) return s;
+        const problem = PROBLEM_BANK.pack.find((candidate) => candidate.id === s.stage);
+        assert.ok(problem, "generated PACK candidate is in the programmatic pool");
+        if (s.pack.base !== problem.targetRadix) {
+          await packBase(problem.targetRadix);
+          s = await read();
+        }
         const source = s.pack.numberMass,
           place = s.pack.slots.find((slot) => slot.level === 0);
         assert.ok(source.quantity && place, "PACK source and L0");
