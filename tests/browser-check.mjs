@@ -431,10 +431,13 @@ try {
   assert.ok(carryReadouts.pack.places.some((place) => place.readoutOpacity >= 0.67));
   assert.ok(carryReadouts.pack.places.every((place) => place.readoutOpacity <= 0.68));
   assert.ok(carryReadouts.pack.places.length <= 2, "only the changed source/destination places are visible");
-  await page.waitForTimeout(550);
+  await page.waitForFunction(() =>
+    (window.__readFlow?.().pack?.places || []).every((place) => place.readoutOpacity < 0.75),
+  );
   carryReadouts = await read();
-  assert.ok(carryReadouts.pack.places.every((place) => place.readoutOpacity < 0.75));
-  await page.waitForTimeout(350);
+  await page.waitForFunction(() =>
+    (window.__readFlow?.().pack?.places || []).every((place) => place.readoutOpacity === 0.25),
+  );
   carryReadouts = await read();
   assert.ok(carryReadouts.pack.places.every((place) => place.readoutOpacity === 0.25));
   await capture("artifacts/pack-stream-motion.png");
@@ -823,10 +826,10 @@ try {
   packState = await packWholeMass();
   assert.equal(packState.pack.notation?.digits, "101");
   assert.ok(packState.pack.places.some((place) => place.readoutOpacity > 0.25), "carry readouts remain visible with reduced motion");
-  await page.waitForTimeout(520);
-  assert.ok((await read()).pack.places.every((place) => place.readoutOpacity === 0.25));
-  await page.waitForTimeout(240);
-  assert.equal((await read()).pack.notation?.phase, "compact");
+  await page.waitForFunction(() =>
+    window.__readFlow?.().pack?.places?.every((place) => place.readoutOpacity === 0.25),
+  );
+  await page.waitForFunction(() => window.__readFlow?.().pack?.notation?.phase === "compact");
   packState = await route(
     "pack",
     (problem) => problem.quantity === 17 && problem.targetRadix === 5,
