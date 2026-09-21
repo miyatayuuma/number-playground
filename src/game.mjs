@@ -1,5 +1,4 @@
-µ¨¥zºè¯
-â¶)à²Ö§uªİ¢ëiºĞk¢G§¦*^import { generateProblem, AREAS } from "./stages.mjs";
+import { generateProblem, AREAS } from "./stages.mjs";
 import {
   createRun,
   activeTargets,
@@ -764,7 +763,7 @@ document.querySelector("#keyboard-controls").addEventListener("click", (e) => {
         index: Number(b.dataset.target),
       });
     else if (b.dataset.gate) drop({ kind: "gate" });
-    else if (b.dataset.reµ¨¥Â¸­yêë¢°k¢G§¦*^lease) {
+    else if (b.dataset.release) {
       world.move(world.w * 0.75, world.h * 0.8);
       drop({ kind: "space" });
     }

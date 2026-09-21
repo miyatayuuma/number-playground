@@ -174,7 +174,7 @@ try {
   );
 
   // Sequential SPARK uses one enemy position: future layers stay hidden
- µ¨¥Â¸­yêë¢°k¢G§¦*^ // until the currently active quantity has actually impacted.
+  // until the currently active quantity has actually impacted.
   let sparkState = await route(
     "spark",
     (p) =>
