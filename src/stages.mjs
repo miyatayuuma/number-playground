@@ -279,8 +279,7 @@ gearSpecs.forEach((spec, i) => {
   bank.gear.push({ ...clean, id, area: "gear", difficulty });
 });
 
-// PACK keeps the same quantity while difficulty adds hidden defense locks.
-// Radix 3 is a safe exploratory choice; the supported targets use 5, 4, and 3.
+// PACK keeps the same quantity and gives each run one hidden target structure.
 bank.pack.push({
   id: "pack:17:5-4",
   area: "pack",
@@ -289,8 +288,7 @@ bank.pack.push({
   quantity: 17,
   radices: [2, 3, 4, 5, 6, 7, 8, 9, 10],
   startRadix: 3,
-  targetRadixPool: [5, 4, 3],
-  targetRadices: [5],
+  targetRadix: 5,
   family: "radix",
   targets: [],
 });
@@ -305,13 +303,11 @@ export function generateProblem(
   if (!bank[ruleId]) throw new RangeError("Unknown rule");
   if (ruleId === "pack") {
     difficulty = Math.max(1, Math.min(5, Math.trunc(difficulty) || 1));
-    const problem = structuredClone(bank.pack[0]),
-      lockCount = difficulty <= 2 ? 1 : difficulty <= 3 ? 2 : 3;
+    const problem = structuredClone(bank.pack[0]);
     return {
       ...problem,
-      id: `${problem.id}:d${difficulty}-locks-${lockCount}`,
+      id: `${problem.id}:d${difficulty}-single-target`,
       difficulty,
-      targetRadices: problem.targetRadixPool.slice(0, lockCount),
       seed,
     };
   }

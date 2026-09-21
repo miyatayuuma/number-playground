@@ -12,7 +12,7 @@ import {
   setPackBase,
   beginPackTransition,
   settlePackTransition,
-  matchPackDefense,
+  matchPackTarget,
   beginPackAttack,
   resolvePackAttackPayload,
   completePackBreak,
@@ -34,7 +34,6 @@ let progress = freshProgress(),
   ruleId = null,
   widthPointer = null,
   packPointer = false,
-  packFocusPointer = false,
   peel = null,
   serial = 0,
   sound = true,
@@ -135,7 +134,7 @@ function keyboardUI() {
       inputs = state.directInputLevels
         .map(
           (level) =>
-            `<button data-pack-input="${level}">Number MassをL${level}へ流す</button>`,
+            `<button data-pack-input="${level}">Number Massを${level + 1}番目のplaceへ流す</button>`,
         )
         .join("");
     controls.innerHTML = radix + inputs;
@@ -194,7 +193,6 @@ function openPanel(html, kind) {
   peel = null;
   widthPointer = null;
   packPointer = false;
-  packFocusPointer = false;
   world.cancelPackControl?.();
   selected = null;
   if (!world.busy) world.cancel();
@@ -310,7 +308,6 @@ function start(id, changeHash = true) {
   peel = null;
   widthPointer = null;
   packPointer = false;
-  packFocusPointer = false;
   selected = null;
   ruleId = id;
   document.body.classList.remove("entrance");
@@ -356,37 +353,32 @@ async function transferPackMass(level) {
   settlePackTransition(run);
   selected = null;
   announce("");
-  const match = matchPackDefense(run);
+  const match = matchPackTarget(run);
   if (match.ok) {
-    const activating = world.playPackLockActivation(match);
+    const activating = world.playPackTargetActivation();
     keyboardUI();
     if (!(await activating) || token !== epoch) return false;
-    if (match.allActivated) {
-      const collapse = world.animatePackDefenseCollapse();
-      keyboardUI();
-      if (!(await collapse) || token !== epoch) return false;
-      const plan = beginPackAttack(run);
-      if (!plan.ok)
-        throw new Error(`PACK defense cleared without attack plan: ${plan.reason}`);
-      keyboardUI();
-      world.sync();
-      if (
-        !(await world.animatePackAttack(
-          plan,
-          (itemId) => resolvePackAttackPayload(run, itemId),
-        )) || token !== epoch
-      )
-        return false;
-      if (!(await world.animatePackBreak()) || token !== epoch) return false;
-      if (!completePackBreak(run)) throw new Error("PACK BREAK failed to settle");
-      recordResult(progress.pack, true);
-      save();
-      syncHUD();
-      announce("防御解除。攻撃。BREAK。");
-      keyboardUI();
-      nextProblem();
-      return true;
-    }
+    const plan = beginPackAttack(run);
+    if (!plan.ok)
+      throw new Error(`PACK target matched without attack plan: ${plan.reason}`);
+    keyboardUI();
+    world.sync();
+    if (
+      !(await world.animatePackAttack(
+        plan,
+        (itemId) => resolvePackAttackPayload(run, itemId),
+      )) || token !== epoch
+    )
+      return false;
+    if (!(await world.animatePackBreak()) || token !== epoch) return false;
+    if (!completePackBreak(run)) throw new Error("PACK BREAK failed to settle");
+    recordResult(progress.pack, true);
+    save();
+    syncHUD();
+    announce("攻撃。BREAK。");
+    keyboardUI();
+    nextProblem();
+    return true;
   }
   keyboardUI();
   return true;
@@ -503,16 +495,7 @@ canvas.addEventListener("pointerdown", (e) => {
     return;
   }
   const hit = world.hit(p.x, p.y);
-  if (!hit) {
-    if (run.stage.area !== "pack") return;
-    if (world.packFocusGestureHit?.(p.x, p.y)) return;
-    e.preventDefault();
-    pointer = e.pointerId;
-    packFocusPointer = true;
-    canvas.setPointerCapture(pointer);
-    world.beginScaleFocus(p.x, p.y);
-    return;
-  }
+  if (!hit) return;
   e.preventDefault();
   pointer = e.pointerId;
   canvas.setPointerCapture(pointer);
@@ -555,10 +538,6 @@ canvas.addEventListener("pointermove", (e) => {
     world.movePackControl(p.x);
     return;
   }
-  if (packFocusPointer) {
-    world.moveScaleFocus(p.x, p.y);
-    return;
-  }
   if (widthPointer) {
     const width = Math.max(
       0,
@@ -582,14 +561,6 @@ canvas.addEventListener("pointermove", (e) => {
 canvas.addEventListener("pointerup", (e) => {
   if (e.pointerId !== pointer) return;
   const p = point(e);
-  if (packFocusPointer) {
-    packFocusPointer = false;
-    pointer = null;
-    world.endScaleFocus();
-    if (canvas.hasPointerCapture(e.pointerId))
-      canvas.releasePointerCapture(e.pointerId);
-    return;
-  }
   updatePeel(p, e.timeStamp);
   peel = null;
   if (packPointer) {
@@ -645,10 +616,6 @@ function cancelPointer() {
     if (packPointer) {
       packPointer = false;
       world.cancelPackControl?.();
-    }
-    if (packFocusPointer) {
-      packFocusPointer = false;
-      world.cancelScaleFocus?.();
     }
     if (widthPointer) {
       setWidth(run, widthPointer.pieceId, widthPointer.value);

@@ -26,7 +26,7 @@ function createPackState(stage, ids) {
     nodes,
     nextMacroId: 0,
     nextOrder: ids.length,
-    defenseLocks: createPackDefenseLocks(stage),
+    target: createPackTarget(stage),
   };
 }
 
@@ -53,33 +53,12 @@ export function packCanonicalDigits(quantity, radix) {
   return canonicalDigitsForQuantity(quantity, radix);
 }
 
-function createPackDefenseLocks(stage) {
+function createPackTarget(stage) {
   const quantity = stage.quantity || stage.ammo.reduce((sum, n) => sum + n, 0),
-    targetRadices = stage.targetRadices || [];
-  if (
-    !Array.isArray(targetRadices) ||
-    !targetRadices.length ||
-    targetRadices.length > 3
-  )
-    throw new RangeError("PACK requires at least one defense lock");
-  const radices = new Set(),
-    structures = new Set();
-  return targetRadices.map((radix, index) => {
-    if (!stage.radices.includes(radix) || radices.has(radix))
-      throw new RangeError("PACK target radices must be valid and unique");
-    const digits = canonicalDigitsForQuantity(quantity, radix),
-      signature = digits.join(",");
-    if (structures.has(signature))
-      throw new RangeError("PACK target structures must be unique");
-    radices.add(radix);
-    structures.add(signature);
-    return {
-      id: `lock-${index}`,
-      radix,
-      digits,
-      activated: false,
-    };
-  });
+    radix = stage.targetRadix;
+  if (!stage.radices.includes(radix))
+    throw new RangeError("PACK target radix must be selectable");
+  return { radix, digits: canonicalDigitsForQuantity(quantity, radix), activated: false };
 }
 
 function requirePack(run) {
@@ -212,7 +191,7 @@ export function packDigits(run) {
   ).reverse();
 }
 
-export function matchPackDefense(run) {
+export function matchPackTarget(run) {
   if (
     run?.stage?.area !== "pack" ||
     run.status !== "play" ||
@@ -224,18 +203,11 @@ export function matchPackDefense(run) {
     return { ok: false, reason: "not-settled" };
 
   const digits = packDigits(run),
-    target = run.pack.defenseLocks.find(
-      (lock) => !lock.activated && sameDigits(lock.digits, digits),
-    );
-  if (!target) return { ok: false, reason: "no-match" };
+    target = run.pack.target;
+  if (target.activated || !sameDigits(target.digits, digits))
+    return { ok: false, reason: "no-match" };
   target.activated = true;
-  return {
-    ok: true,
-    lockId: target.id,
-    activatedCount: run.pack.defenseLocks.filter((lock) => lock.activated).length,
-    lockCount: run.pack.defenseLocks.length,
-    allActivated: run.pack.defenseLocks.every((lock) => lock.activated),
-  };
+  return { ok: true, targetRadix: target.radix };
 }
 
 function sameDigits(a, b) {
@@ -256,11 +228,10 @@ export function beginPackTransition(run) {
   return true;
 }
 
-export function packDefenseCleared(run) {
+export function packTargetActivated(run) {
   return (
     run?.stage?.area === "pack" &&
-    run.pack.defenseLocks.length > 0 &&
-    run.pack.defenseLocks.every((lock) => lock.activated)
+    run.pack.target?.activated === true
   );
 }
 
@@ -270,23 +241,22 @@ export function buildPackAttackPlan(run) {
     run.pack?.phase !== "pack" ||
     run.pack.numberMassRawIds.length !== 0 ||
     run.pack.settled !== true ||
-    !packDefenseCleared(run) ||
+    !packTargetActivated(run) ||
     !isCanonicalPack(run)
   )
-    return { ok: false, reason: "defense-not-cleared-or-unsettled" };
+    return { ok: false, reason: "target-not-activated-or-unsettled" };
   const payloads = activePackItems(run)
       .sort((a, b) => b.level - a.level || a.order - b.order)
       .map((item) => ({
         itemId: item.id,
         level: item.level,
-        targetLayer: item.level,
         rawIds: [...item.ids],
         weight: item.ids.length,
       })),
     rawIds = payloads.flatMap((payload) => payload.rawIds);
   if (rawIds.length !== run.dots.length || new Set(rawIds).size !== rawIds.length)
     return { ok: false, reason: "identity-accounting-failed" };
-  return { ok: true, placeCount: packDigits(run).length, rawIds, payloads };
+  return { ok: true, rawIds, payloads };
 }
 
 export function beginPackAttack(run) {
@@ -294,7 +264,6 @@ export function beginPackAttack(run) {
   if (!plan.ok) return plan;
   run.pack.phase = "attack";
   run.pack.attack = {
-    placeCount: plan.placeCount,
     payloads: plan.payloads.map((payload) => ({ ...payload, rawIds: [...payload.rawIds] })),
     impactedItemIds: [],
     resolvedRawIds: [],

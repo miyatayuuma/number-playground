@@ -16,10 +16,10 @@ import {
   setPackBase,
   isCanonicalPack,
   packCanonicalDigits,
-  matchPackDefense,
+  matchPackTarget,
   beginPackTransition,
   settlePackTransition,
-  packDefenseCleared,
+  packTargetActivated,
   buildPackAttackPlan,
   beginPackAttack,
   resolvePackAttackPayload,
@@ -33,25 +33,15 @@ import {
   arrayShape,
   packCoefficientShape,
   placeSlotLayout,
-  radixFrame,
-  packScaleViewports,
-  packNestedUnitShape,
+  compactPackNestedUnitShape,
   PACK_RAW_DOT_WORLD_RADIUS,
-  PACK_FOCUS_DOT_SCREEN_RADIUS,
-  PACK_SCALE_DEPTH_RATIO,
-  PACK_CHILD_GAP_RATIO,
 } from "../src/shapes.mjs";
 import {
   canonicalSelectorShape,
   drawNumberReadout,
   drawSelectorDots,
 } from "../src/number-selector.mjs";
-import {
-  packCameraForFocus,
-  packCameraForInspection,
-  packFocusProgress,
-  projectPackPoint,
-} from "../src/pack-view.mjs";
+
 import {
   freshProgress,
   restoreProgress,
@@ -306,106 +296,65 @@ test("PACK starts with one Number Mass and only an empty L0", () => {
   audit(run);
 });
 
-test("PACK derives hidden, unique defense structures from the shared difficulty", () => {
+test("PACK problems define exactly one hidden target and preserve its radix-neutral digits", () => {
   assert.deepEqual(packCanonicalDigits(17, 4), [1, 0, 1]);
   assert.deepEqual(packCanonicalDigits(17, 5), [3, 2]);
   assert.deepEqual(packCanonicalDigits(17, 3), [1, 2, 2]);
-  assert.deepEqual(generateProblem("pack", 1, 0).targetRadices, [5]);
-  assert.deepEqual(generateProblem("pack", 2, 0).targetRadices, [5]);
-  assert.deepEqual(generateProblem("pack", 3, 0).targetRadices, [5, 4]);
-  assert.deepEqual(generateProblem("pack", 5, 0).targetRadices, [5, 4, 3]);
-  for (const difficulty of [1, 3, 5]) {
-    const run = createRun(generateProblem("pack", difficulty, "targets")),
-      locks = run.pack.defenseLocks;
-    assert.equal(locks.length, difficulty <= 2 ? 1 : difficulty === 3 ? 2 : 3);
-    assert.equal(new Set(locks.map((lock) => lock.radix)).size, locks.length);
-    assert.equal(new Set(locks.map((lock) => lock.digits.join(","))).size, locks.length);
-    assert.ok(locks.every((lock) => lock.activated === false));
+  for (let difficulty = 1; difficulty <= 5; difficulty++) {
+    const problem = generateProblem("pack", difficulty, "single-target"),
+      run = createRun(problem);
+    assert.equal(problem.targetRadix, 5);
+    assert.equal("targetRadices" in problem, false);
+    assert.deepEqual(Object.keys(run.pack.target).sort(), ["activated", "digits", "radix"]);
+    assert.deepEqual(run.pack.target.digits, packCanonicalDigits(17, 5));
+    assert.equal(run.pack.target.activated, false);
   }
-  const base4Target = createRun(generateProblem("pack", 3, 1)).pack.defenseLocks
-    .find((lock) => lock.radix === 4);
-  assert.deepEqual(base4Target.digits, [1, 0, 1]);
 });
 
-test("PACK defense matching waits for the full settled canonical structure", () => {
-  const run = createRun(generateProblem("pack", 1, "settle"));
-  assert.equal(matchPackDefense(run).ok, false, "Number Mass is not yet packed");
+test("PACK target matching requires a complete settled canonical structure", () => {
+  const run = createRun({ ...generateProblem("pack", 3, "settle"), targetRadix: 4 });
+  assert.equal(matchPackTarget(run).ok, false, "Number Mass is not yet packed");
   assert.ok(setPackBase(run, 4));
   assert.ok(pourPackMass(run, 0).ok);
   assert.ok(beginPackTransition(run));
-  assert.equal(matchPackDefense(run).ok, false, "carry presentation has not settled");
-  assert.equal(run.pack.defenseLocks[0].activated, false);
+  assert.equal(matchPackTarget(run).ok, false, "carry presentation has not settled");
+  assert.equal(run.pack.target.activated, false);
   assert.ok(settlePackTransition(run));
   assert.deepEqual(packDigits(run), [1, 0]);
-  assert.equal(matchPackDefense(run).reason, "not-settled", "remaining mass prevents matching");
-  assert.equal(run.pack.defenseLocks[0].activated, false);
+  assert.equal(matchPackTarget(run).reason, "not-settled", "remaining mass prevents matching");
+  assert.equal(run.pack.target.activated, false);
+  pourUntilMassEmpty(run, 0);
+  assert.deepEqual(packDigits(run), [1, 0, 1]);
+  assert.equal(matchPackTarget(run).ok, true);
+  assert.equal(packTargetActivated(run), true);
+  assert.equal(matchPackTarget(run).ok, false, "a target activates only once");
 });
 
-test("PACK multi-ghost locks activate independently in either order and persist across radix resets", () => {
-  function explore(order) {
-    const run = createRun(generateProblem("pack", 3, `order-${order.join("")}`)),
-      original = run.dots.map((dot) => dot.id);
-    assert.equal(buildPackAttackPlan(run).ok, false);
-    for (const [index, radix] of order.entries()) {
-      if (run.pack.base !== radix) assert.ok(setPackBase(run, radix));
-      pourUntilMassEmpty(run, 0);
-      beginPackTransition(run);
-      assert.equal(matchPackDefense(run).ok, false);
-      settlePackTransition(run);
-      const match = matchPackDefense(run);
-      assert.equal(match.ok, true, `radix ${radix} activates its matching lock`);
-      assert.equal(match.allActivated, index === order.length - 1);
-      assert.equal(packDefenseCleared(run), index === order.length - 1);
-      assert.equal(
-        buildPackAttackPlan(run).ok,
-        index === order.length - 1,
-        "the attack waits until every lock has activated",
-      );
-      assert.deepEqual(
-        [...accountedIds(run)].sort((a, b) => a - b),
-        original,
-        "activation retains the one raw identity set",
-      );
-      if (index + 1 < order.length) {
-        const activeLockIds = run.pack.defenseLocks
-          .filter((lock) => lock.activated)
-          .map((lock) => lock.id);
-        assert.ok(setPackBase(run, order[index + 1]));
-        assert.deepEqual(
-          run.pack.numberMassRawIds,
-          original,
-          "radix changes restore all raw identities to Number Mass",
-        );
-        assert.deepEqual(
-          run.pack.defenseLocks.filter((lock) => lock.activated).map((lock) => lock.id),
-          activeLockIds,
-          "activated defense state persists while player structure resets",
-        );
-        assert.deepEqual(run.pack.discoveredLevels, [0]);
-      }
-    }
-    assert.equal(buildPackAttackPlan(run).ok, true);
-    return run;
-  }
-
-  const fiveThenFour = explore([5, 4]),
-    fourThenFive = explore([4, 5]);
-  assert.deepEqual(
-    fiveThenFour.pack.defenseLocks.map((lock) => lock.activated),
-    fourThenFive.pack.defenseLocks.map((lock) => lock.activated),
-  );
+test("PACK wrong radix has no penalty and resetting radix preserves the single target", () => {
+  const run = createRun(generateProblem("pack", 3, "wrong-radix")),
+    original = run.dots.map((dot) => dot.id),
+    target = structuredClone(run.pack.target);
+  assert.ok(setPackBase(run, 4));
+  pourUntilMassEmpty(run, 0);
+  assert.deepEqual(packDigits(run), [1, 0, 1]);
+  assert.equal(matchPackTarget(run).ok, false);
+  assert.equal(run.status, "play");
+  assert.equal(run.pack.target.activated, false);
+  assert.ok(setPackBase(run, 3));
+  assert.deepEqual(run.pack.numberMassRawIds, original);
+  assert.deepEqual(run.pack.target, target);
+  assert.deepEqual(run.pack.discoveredLevels, [0]);
+  audit(run);
 });
 
-test("PACK refuses duplicate activation and attack input, then resolves one final identity-preserving attack", () => {
+test("PACK target activation is single-shot and attack resolves the original identity set", () => {
   const run = createRun(generateProblem("pack", 1, "attack")),
     original = run.dots.map((dot) => dot.id);
   assert.ok(setPackBase(run, 5));
   pourUntilMassEmpty(run, 0);
   settlePackTransition(run);
-  const match = matchPackDefense(run);
-  assert.equal(match.ok, true);
-  assert.equal(match.allActivated, true);
-  assert.equal(matchPackDefense(run).ok, false, "rebuilding the active target adds no progress");
+  assert.equal(matchPackTarget(run).ok, true);
+  assert.equal(matchPackTarget(run).ok, false, "rebuilding the target adds no progress");
   assert.equal(buildPackAttackPlan(run).ok, true);
   const plan = beginPackAttack(run);
   assert.equal(plan.ok, true);
@@ -414,6 +363,7 @@ test("PACK refuses duplicate activation and attack input, then resolves one fina
   assert.equal(pourPackMass(run, 0).ok, false);
   assert.deepEqual([...plan.rawIds].sort((a, b) => a - b), original);
   assert.equal(new Set(plan.rawIds).size, original.length);
+  assert.equal(plan.payloads.some((payload) => "targetLayer" in payload), false);
   for (const payload of plan.payloads)
     assert.equal(resolvePackAttackPayload(run, payload.itemId).ok, true);
   assert.equal(run.status, "break");
@@ -652,190 +602,48 @@ test("PACK radix change returns all active hierarchy to Number Mass and clears d
   audit(run);
 });
 
-test("PACK raw dots share world size and camera projection defines every level", () => {
-  const five = radixFrame(5, 40),
-    four = radixFrame(4, 40),
-    initial = packScaleViewports(0, 390, 844, 5),
-    recursive4 = packScaleViewports(2, 390, 844, 4),
-    recursive5 = packScaleViewports(2, 390, 844, 5),
-    unit0 = packNestedUnitShape(4, 0),
-    unit1 = packNestedUnitShape(4, 1),
-    unit2 = packNestedUnitShape(4, 2),
-    collectRawRadii = (unit) =>
-      unit.levels === 0
-        ? [unit.radius]
-        : unit.children.flatMap((child) => collectRawRadii(child.inner));
-  assert.equal(five.points.length, 5);
-  assert.equal(four.points.length, 4);
-  assert.notDeepEqual(five.points, four.points);
-  assert.equal(unit1.children.length, 4);
-  assert.equal(unit1.radius < 36, true, "compact L1 content is smaller than Pass 5 geometry");
-  assert.equal(unit2.radius < 162, true, "recursive L2 content is smaller than Pass 5 geometry");
-  assert.ok(unit1.frameRadius < unit1.radius, "the unit frame is not a child container");
-  assert.ok(
-    Math.max(
-      ...unit1.children.map(
-        ({ x, y, radius }) => Math.hypot(x, y) + radius,
-      ),
-    ) > unit1.frameRadius,
-    "compact children may extend beyond their comparison frame",
-  );
-  const childCenters = unit1.children.map(({ x, y }) => ({ x, y }));
-  for (let i = 0; i < childCenters.length; i++)
-    for (let j = i + 1; j < childCenters.length; j++)
-      assert.ok(
-        Math.hypot(
-          childCenters[i].x - childCenters[j].x,
-          childCenters[i].y - childCenters[j].y,
-        ) > 2 * PACK_RAW_DOT_WORLD_RADIUS + 1,
-        "compact 2×2 raw children remain distinct",
-      );
-  const spacingRatio1 = Math.hypot(unit1.children[0].x, unit1.children[0].y) / unit0.radius,
-    spacingRatio2 = Math.hypot(unit2.children[0].x, unit2.children[0].y) / unit1.radius;
-  assert.ok(Math.abs(spacingRatio1 - spacingRatio2) < 1e-12, "L2 reuses the same recursive packing rule");
-  assert.equal(unit1.children[0].radius, unit0.radius);
-  assert.equal(unit2.children[0].radius, unit1.radius);
-  assert.deepEqual(
-    recursive4.map(({ level, ghost }) => [level, ghost]),
-    [
-      [2, false],
-      [1, false],
-      [0, false],
-    ],
-  );
-  assert.deepEqual(
-    initial.map(({ level, ghost }) => [level, ghost]),
-    [
-      [1, true],
-      [0, false],
-    ],
-  );
-  assert.ok(initial[0].overviewOffsetX < initial[1].overviewOffsetX);
-  assert.equal(
-    initial.find((slot) => slot.level === 1).x,
-    recursive4.find((slot) => slot.level === 1).x,
-    "canonical L1 center stays stable as higher levels become known",
-  );
-  assert.deepEqual(
-    recursive4.map(({ level, depth, x }) => [level, depth, x]),
-    recursive5.map(({ level, depth, x }) => [level, depth, x]),
-    "base 5 to base 4 does not alter the camera depth axis",
-  );
-  assert.ok(
-    recursive4
-      .filter((slot) => slot.level > 0)
-      .every((slot) =>
-        Math.abs(
-          slot.depth /
-            recursive4.find((previous) => previous.level === slot.level - 1).depth -
-            PACK_SCALE_DEPTH_RATIO,
-        ) < 1e-12,
-      ),
-    "neighboring scale planes use the selected short depth ratio",
-  );
-
-  const overview = packCameraForFocus(initial, null),
-    overviewProjection = initial.map((slot) =>
-      projectPackPoint({ x: slot.x, y: slot.y, z: slot.z }, overview, 390, 844),
+test("PACK compact upper units preserve canonical topology and visible dots", () => {
+  for (const [base, levels] of [[2, 4], [4, 2], [5, 1], [8, 1], [10, 1]]) {
+    const quantity = base ** levels,
+      maxRadius = 22,
+      geometry = compactPackNestedUnitShape(base, levels, maxRadius),
+      canonical = shape(quantity, 54);
+    assert.equal(geometry.dots.length, quantity);
+    assert.equal(geometry.rawRadius, PACK_RAW_DOT_WORLD_RADIUS);
+    assert.ok(geometry.radius <= maxRadius + PACK_RAW_DOT_WORLD_RADIUS * 1.5);
+    assert.ok(geometry.dots.every((dot) => dot.radius >= PACK_RAW_DOT_WORLD_RADIUS));
+    assert.deepEqual(
+      geometry.dots.map(({ x, y }) => [x, y]),
+      canonical.dots.map(({ x, y }) => [x * geometry.spacingScale, y * geometry.spacingScale]),
     );
-  assert.ok(overviewProjection[0].x < overviewProjection[1].x);
-  assert.ok(
-    recursive4.every(
-      (slot) =>
-        Math.abs(
-          slot.frameWorldRadius *
-            overview.focalLength /
-            slot.depth -
-            slot.overviewFrameRadius,
-        ) < 1e-8,
-    ),
-    "overview perspective projects every scale frame to the same radius",
-  );
-
-  for (const level of [0, 1, 2]) {
-    const plane = recursive4.find((slot) => slot.level === level),
-      camera = packCameraForFocus(recursive4, level),
-      center = projectPackPoint(
-        { x: plane.x, y: plane.y, z: plane.z },
-        camera,
-        390,
-        844,
-      );
-    assert.equal(center.x, 195);
-    assert.equal(center.y, 422);
-    assert.ok(
-      Math.abs(
-        PACK_RAW_DOT_WORLD_RADIUS * center.scale -
-          PACK_FOCUS_DOT_SCREEN_RADIUS,
-      ) < 1e-8,
-      `raw@L${level} projects to the common focus diameter`,
-    );
-  }
-
-  const levelTwo = recursive4.find((slot) => slot.level === 2),
-    overviewFrameRadii = recursive4.map((slot) =>
-      slot.frameWorldRadius * overview.focalLength / slot.depth,
-    );
-  assert.ok(overviewFrameRadii.every((radius) => Math.abs(radius - PACK_FOCUS_DOT_SCREEN_RADIUS) < 1e-8));
-  assert.equal(collectRawRadii(unit2).length, 16);
-  assert.ok(collectRawRadii(unit2).every((radius) => radius === PACK_RAW_DOT_WORLD_RADIUS));
-
-  const cameraAt1 = packCameraForInspection(recursive4, 1, 2),
-    cameraAt15 = packCameraForInspection(recursive4, 1.5, 2),
-    cameraNear1 = packCameraForInspection(recursive4, 1.15, 2),
-    cameraNear2 = packCameraForInspection(recursive4, 1.85, 2),
-    cameraAt3 = packCameraForInspection(recursive4, 3, 2),
-    l0 = packCameraForFocus(recursive4, 0),
-    l1 = packCameraForFocus(recursive4, 1),
-    l2 = packCameraForFocus(recursive4, 2);
-  assert.equal(cameraAt1.z, l0.z);
-  assert.equal(cameraAt1.x, l0.x);
-  assert.ok(cameraAt15.z > l0.z && cameraAt15.z < l1.z, "intermediate drag positions project continuously");
-  assert.ok(cameraNear1.inspectionProgress < 1.15 && cameraNear1.inspectionProgress > 1);
-  assert.ok(cameraNear2.inspectionProgress > 1.85 && cameraNear2.inspectionProgress < 2);
-  assert.equal(cameraNear1.focusLevel, 0);
-  assert.equal(cameraNear2.focusLevel, 1);
-  assert.equal(cameraAt3.z, l2.z);
-  assert.equal(cameraAt3.focusLevel, 2);
-  assert.equal(packFocusProgress(1, 2), 1, "focus wells keep canonical anchors fixed");
-  const focusAt2 = packCameraForFocus(recursive4, 2),
-    focusCenter = projectPackPoint(
-      { x: levelTwo.x, y: levelTwo.y, z: levelTwo.z },
-      focusAt2,
-      390,
-      844,
-    ),
-    focusedRawRadius = PACK_RAW_DOT_WORLD_RADIUS * focusCenter.scale,
-    focusedFrameRadius = levelTwo.frameWorldRadius * focusCenter.scale;
-  assert.ok(Math.abs(focusedRawRadius - PACK_FOCUS_DOT_SCREEN_RADIUS) < 1e-8);
-  assert.ok(
-    Math.abs(focusedFrameRadius / focusedRawRadius - PACK_SCALE_DEPTH_RATIO ** 2) < 1e-8,
-    "focus uses the same projection for dots and unit frame without fit scaling",
-  );
-  assert.ok(
-    packNestedUnitShape(5, 1).children.every((child, i, all) =>
-      all.every((other, j) =>
-        i === j ||
-        Math.hypot(child.x - other.x, child.y - other.y) >
-          2 * child.radius + 1,
-      ),
-    ),
-    "base-five children keep visually separate raw identities too",
-  );
-  assert.equal(PACK_CHILD_GAP_RATIO, 0.16);
-
-  assert.ok(
-    [320, 390, 844].every((width) => {
-      const layout = packScaleViewports(2, width, width === 844 ? 390 : 844, 4),
-        camera = packCameraForFocus(layout, null),
-        projected = layout.map((slot) =>
-          projectPackPoint({ x: slot.x, y: slot.y, z: slot.z }, camera, width, width === 844 ? 390 : 844),
+    const expectedGroups = Array.from({ length: levels }, (_, i) => quantity / base ** (i + 1))
+      .reduce((sum, count) => sum + count, 0);
+    assert.equal(geometry.groups.length, expectedGroups);
+    for (const group of geometry.groups) {
+      const members = geometry.dots.slice(group.start, group.start + group.count);
+      assert.equal(group.count, base ** group.groupLevel);
+      assert.equal(group.count, members.length);
+      assert.ok(members.every((dot, index) => dot.index === group.start + index));
+      assert.ok(members.every((dot) =>
+        Math.hypot(dot.x - group.x, dot.y - group.y) + dot.radius <= group.radius,
+      ));
+    }
+    let minCenterDistance = Infinity;
+    for (let i = 0; i < geometry.dots.length; i++)
+      for (let j = i + 1; j < geometry.dots.length; j++)
+        minCenterDistance = Math.min(
+          minCenterDistance,
+          Math.hypot(
+            geometry.dots[i].x - geometry.dots[j].x,
+            geometry.dots[i].y - geometry.dots[j].y,
+          ),
         );
-      return projected.every((point) => point.visible) &&
-        projected[0].x < projected[1].x && projected[1].x < projected[2].x;
-    }),
-    "overview keeps higher-to-lower order at mobile and landscape widths",
-  );
+    assert.ok(
+      minCenterDistance >= PACK_RAW_DOT_WORLD_RADIUS * 1.3 - 1e-8,
+      `base ${base} allows slight overlap while retaining distinct centers`,
+    );
+    if (base === 10) assert.equal(geometry.dots.length, 10);
+  }
 });
 
 test("PACK radix reset removes old grouping while preserving all raw identities", () => {
@@ -901,7 +709,7 @@ test("PACK factorization geometry does not depend on the active radix", () => {
   assert.deepEqual(factors(17), [17]);
 });
 
-test("PACK lock count follows the existing saved difficulty progression", () => {
+test("PACK single target follows the existing saved difficulty progression", () => {
   assert.deepEqual(freshProgress().pack, {
     difficulty: 1,
     wins: 0,
@@ -912,14 +720,14 @@ test("PACK lock count follows the existing saved difficulty progression", () => 
     restoreProgress({ pack: { difficulty: 5, wins: 2, retries: 1 } }).pack,
     { difficulty: 5, wins: 2, retries: 1, recent: [] },
   );
-  assert.equal(generateProblem("pack", 5, 999).targetRadices.length, 3);
+    assert.equal(generateProblem("pack", 5, 999).targetRadix, 5);
   assert.equal(generateProblem("pack", 5, 999).difficulty, 5);
   const progress = freshProgress().pack;
   recordResult(progress, true);
   recordResult(progress, true);
   recordResult(progress, true);
   assert.equal(progress.difficulty, 2);
-  assert.equal(generateProblem("pack", progress.difficulty, "next").targetRadices.length, 1);
+  assert.equal(generateProblem("pack", progress.difficulty, "next").targetRadix, 5);
 });
 
 test("gear only clears on the greatest common divisor", () => {
