@@ -1,4 +1,5 @@
-import { generateProblem, AREAS } from "./stages.mjs";
+µ¨¥zºè¯
+â¶)à²Ö§uªİ¢ëiºĞk¢G§¦*^import { generateProblem, AREAS } from "./stages.mjs";
 import {
   createRun,
   activeTargets,
@@ -492,6 +493,9 @@ canvas.addEventListener("pointerdown", (e) => {
     tone("pick");
     return;
   }
+  const packReadoutTouch = run.stage.area === "pack"
+    ? world.beginPackReadoutPointer?.(p.x, p.y)
+    : false;
   const handle = world.handleHit(p.x, p.y);
   if (handle) {
     e.preventDefault();
@@ -502,7 +506,14 @@ canvas.addEventListener("pointerdown", (e) => {
     return;
   }
   const hit = world.hit(p.x, p.y);
-  if (!hit) return;
+  if (!hit) {
+    if (packReadoutTouch) {
+      e.preventDefault();
+      pointer = e.pointerId;
+      canvas.setPointerCapture(pointer);
+    } else if (run.stage.area === "pack") world.cancelPackReadoutPointer?.();
+    return;
+  }
   e.preventDefault();
   pointer = e.pointerId;
   canvas.setPointerCapture(pointer);
@@ -545,6 +556,7 @@ canvas.addEventListener("pointermove", (e) => {
     world.movePackControl(p.x);
     return;
   }
+  if (run.stage.area === "pack") world.movePackReadoutPointer?.(p.x, p.y);
   if (widthPointer) {
     const width = Math.max(
       0,
@@ -568,6 +580,10 @@ canvas.addEventListener("pointermove", (e) => {
 canvas.addEventListener("pointerup", (e) => {
   if (e.pointerId !== pointer) return;
   const p = point(e);
+  if (run.stage.area === "pack") {
+    world.movePackReadoutPointer?.(p.x, p.y);
+    world.endPackReadoutPointer?.();
+  }
   updatePeel(p, e.timeStamp);
   peel = null;
   if (packPointer) {
@@ -620,6 +636,7 @@ function cancelPointer() {
   peel = null;
   if (pointer !== null) {
     pointer = null;
+    world.endPackReadoutPointer?.();
     if (packPointer) {
       packPointer = false;
       world.cancelPackControl?.();
@@ -642,7 +659,7 @@ world.onResize = () => {
     world.busy = false;
     world.previewPackState = null;
     world.massAnchorOverride = null;
-    world.carryPulse = null;
+    world.clearPackReadoutPresentation?.();
     for (const d of world.units.values()) {
       d.manual = false;
       d.flight = false;
@@ -664,7 +681,7 @@ function failSafe(error) {
     world.busy = false;
     world.previewPackState = null;
     world.massAnchorOverride = null;
-    world.carryPulse = null;
+    world.clearPackReadoutPresentation?.();
     for (const d of world.units.values()) d.manual = false;
     if (run?.stage.area === "pack" && run.status === "play")
       settlePackTransition(run);
@@ -747,7 +764,7 @@ document.querySelector("#keyboard-controls").addEventListener("click", (e) => {
         index: Number(b.dataset.target),
       });
     else if (b.dataset.gate) drop({ kind: "gate" });
-    else if (b.dataset.release) {
+    else if (b.dataset.reµ¨¥Â¸­yêë¢°k¢G§¦*^lease) {
       world.move(world.w * 0.75, world.h * 0.8);
       drop({ kind: "space" });
     }

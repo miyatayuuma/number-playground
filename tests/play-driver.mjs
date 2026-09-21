@@ -7,7 +7,12 @@ export async function instrument(context) {
       bezierCurveTo = CanvasRenderingContext2D.prototype.bezierCurveTo;
     CanvasRenderingContext2D.prototype.fillText = function (text, x, y, ...rest) {
       if (this.canvas?.id === "world" && window.__canvasTrace.enabled)
-        window.__canvasTrace.labels.push({ text: String(text), x, y });
+        window.__canvasTrace.labels.push({
+          text: String(text),
+          x,
+          y,
+          alpha: this.globalAlpha,
+        });
       return fillText.call(this, text, x, y, ...rest);
     };
     CanvasRenderingContext2D.prototype.bezierCurveTo = function (...args) {
