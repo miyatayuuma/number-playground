@@ -28,7 +28,10 @@ export class PackWorld extends FlowWorld {
     this.boundaryVisuals = new Map();
     this.boundaryClock = 0;
     this.previewPackState = null;
-    this.carryPulse = null;
+    this.carryReadoutHighlights = new Map();
+    this.packReadoutPointerActive = false;
+    this.activePackReadoutLevel = null;
+    this.packReadoutRelease = null;
     this.massAnchorOverride = null;
     this.packImpacts = [];
     this.activePackProjectileId = null;
@@ -43,7 +46,7 @@ export class PackWorld extends FlowWorld {
     this.boundaryVisuals.clear();
     this.boundaryClock = this.clock;
     this.previewPackState = null;
-    this.carryPulse = null;
+    this.clearPackReadoutPresentation();
     this.massAnchorOverride = null;
     this.packImpacts = [];
     this.activePackProjectileId = null;
@@ -249,6 +252,7 @@ export class PackWorld extends FlowWorld {
   async radixChanged(from, to) {
     if (from === to || this.run?.stage.area !== "pack") return false;
     this.clearPackNotation();
+    this.clearPackReadoutPresentation();
     this.radixTransition = this.motion
       ? { from, to, started: this.clock, duration: 220 }
       : null;
@@ -300,6 +304,102 @@ export class PackWorld extends FlowWorld {
     const hadNotation = !!this.packNotation;
     this.packNotation = null;
     return hadNotation;
+  }
+
+  clearPackReadoutPresentation() {
+    this.carryReadoutHighlights.clear();
+    this.packReadoutPointerActive = false;
+    this.activePackReadoutLevel = null;
+    this.packReadoutRelease = null;
+  }
+
+  packPlaceAt(x, y) {
+    if (this.run?.stage.area !== "pack") return null;
+    const cornerRadius = 9;
+    return this.packLayout().slots
+      .map((slot) => {
+        const dx = Math.abs(x - slot.x),
+          dy = Math.abs(y - slot.y),
+          radius = slot.frameRadius + 3,
+          corner = Math.min(cornerRadius, radius),
+          inside =
+            dx <= radius &&
+            dy <= radius &&
+            (dx <= radius - corner ||
+              dy <= radius - corner ||
+              Math.hypot(dx - (radius - corner), dy - (radius - corner)) <= corner);
+        return inside ? { level: slot.level, distance: Math.hypot(dx, dy) } : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.distance - b.distance)[0]?.level ?? null;
+  }
+
+  isPackReadoutTextAt(x, y) {
+    if (this.run?.stage.area !== "pack") return false;
+    const c = this.ctx;
+    c.save();
+    c.font = "600 17px ui-rounded,system-ui,sans-serif";
+    const hit = this.packLayout().levels.some(({ slot, rawQuantity }) => {
+      const width = c.measureText(String(rawQuantity)).width;
+      return (
+        Math.abs(x - slot.x) <= width / 2 + 4 &&
+        Math.abs(y - (slot.y + slot.frameRadius + 23)) <= 12
+      );
+    });
+    c.restore();
+    return hit;
+  }
+
+  beginPackReadoutPointer(x, y) {
+    if (this.run?.stage.area !== "pack") return false;
+    this.packReadoutPointerActive = true;
+    return this.movePackReadoutPointer(x, y);
+  }
+
+  movePackReadoutPointer(x, y) {
+    if (!this.packReadoutPointerActive) return false;
+    this.activePackReadoutLevel = this.packPlaceAt(x, y);
+    if (this.activePackReadoutLevel !== null) this.packReadoutRelease = null;
+    return this.activePackReadoutLevel !== null;
+  }
+
+  endPackReadoutPointer() {
+    if (!this.packReadoutPointerActive) return false;
+    const level = this.activePackReadoutLevel;
+    this.packReadoutPointerActive = false;
+    this.activePackReadoutLevel = null;
+    this.packReadoutRelease = level === null ? null : { level, started: this.clock };
+    return level !== null;
+  }
+
+  cancelPackReadoutPointer() {
+    this.packReadoutPointerActive = false;
+    this.activePackReadoutLevel = null;
+    this.packReadoutRelease = null;
+  }
+
+  packReadoutOpacity(level) {
+    const normal = 0.25;
+    if (this.packReadoutPointerActive && this.activePackReadoutLevel === level)
+      return 0.70;
+    const carry = this.carryReadoutHighlights.get(level);
+    if (carry) {
+      const elapsed = Math.max(0, this.clock - carry.started),
+        hold = this.motion ? 500 : 350,
+        fade = this.motion ? 300 : 100;
+      if (elapsed <= hold) return 0.75;
+      if (elapsed < hold + fade)
+        return 0.25 + 0.5 * (1 - (elapsed - hold) / fade);
+      this.carryReadoutHighlights.delete(level);
+    }
+    const released = this.packReadoutRelease;
+    if (released?.level === level) {
+      const elapsed = Math.max(0, this.clock - released.started),
+        fade = this.motion ? 160 : 90;
+      if (elapsed < fade) return 0.25 + 0.45 * (1 - elapsed / fade);
+      this.packReadoutRelease = null;
+    }
+    return normal;
   }
 
   packNotationPresentation(layout) {
@@ -689,6 +789,7 @@ export class PackWorld extends FlowWorld {
           n: place.itemIds.length,
           digit: place.itemIds.length,
           rawQuantity: levelLayout.rawQuantity,
+          readoutOpacity: this.packReadoutOpacity(levelLayout.level),
           x: place.anchor.x,
           y: place.anchor.y,
           radius: place.radius,
@@ -847,6 +948,7 @@ export class PackWorld extends FlowWorld {
 
   hit(x, y) {
     if (this.run?.stage.area !== "pack") return super.hit(x, y);
+    if (this.isPackReadoutTextAt(x, y)) return null;
     const mass = this.packLayout().mass;
     if (mass.quantity && Math.hypot(x - mass.x, y - mass.y) <= Math.max(36, mass.radius + 13))
       return {
@@ -971,11 +1073,9 @@ export class PackWorld extends FlowWorld {
     const c = this.ctx;
     for (const levelLayout of layout.levels) {
       const slot = levelLayout.slot,
-        rawQuantity = levelLayout.rawQuantity,
-        hot = this.carryPulse &&
-          (this.carryPulse.fromLevel === slot.level || this.carryPulse.toLevel === slot.level);
+        rawQuantity = levelLayout.rawQuantity;
       c.save();
-      c.globalAlpha = hot ? 1 : 0.88;
+      c.globalAlpha = this.packReadoutOpacity(slot.level);
       drawNumberReadout(
         this,
         rawQuantity,
@@ -1191,11 +1291,23 @@ export class PackWorld extends FlowWorld {
     }
     this.previewPackState = result.initialState;
     this.sync();
+    let previousState = result.initialState;
     for (const step of result.steps) {
       if (token !== this.token) return;
       this.previewPackState = step.state;
-      if (step.type === "carry")
-        this.carryPulse = { fromLevel: step.fromLevel, toLevel: step.toLevel, born: this.clock };
+      if (step.type === "carry") {
+        const levels = new Set([
+            ...previousState.discoveredLevels,
+            ...step.state.discoveredLevels,
+          ]),
+          changed = [...levels].filter(
+            (level) =>
+              packRawQuantityForLevel(this.run, level, previousState.active) !==
+              packRawQuantityForLevel(this.run, level, step.state.active),
+          );
+        for (const level of changed)
+          this.carryReadoutHighlights.set(level, { started: this.clock });
+      }
       this.sync();
       const moving = [...this.units.values()].filter(
           (dot) => dot.visible && Math.hypot(dot.wx - dot.twx, dot.wy - dot.twy) > 0.1,
@@ -1212,10 +1324,10 @@ export class PackWorld extends FlowWorld {
       } else {
         await this.tweenPackWorld([], [], this.motion ? 30 : 18, token, true);
       }
+      previousState = step.state;
     }
     this.previewPackState = null;
     this.massAnchorOverride = null;
-    this.carryPulse = null;
     for (const dot of this.units.values()) dot.manual = false;
     this.sync();
     await this.tween([], [], this.motion ? 90 : 35, token);

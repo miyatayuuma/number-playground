@@ -44,12 +44,18 @@ const context = await browser.newContext({
 });
 await instrument(context);
 const page = await context.newPage(),
-  errors = [];
+  errors = [],
+  touchSession = await context.newCDPSession(page);
 async function capture(path) {
   if (process.env.CAPTURE_BROWSER_ARTIFACTS === "0") return;
   await page.screenshot({ path: resolve(root, path), timeout: 30000 });
 }
-page.on("pageerror", (e) => errors.push(e.stack));
+page.on("pageerror", (e) =>
+  errors.push(`pageerror ${e.name}: ${e.message}\n${e.stack}`),
+);
+page.on("console", (message) => {
+  if (message.type() === "error") errors.push(`console ${message.text()}`);
+});
 page.on("response", (r) => {
   if (r.status() >= 400) errors.push(`${r.status()} ${r.url()}`);
 });
@@ -63,6 +69,26 @@ async function captureCanvasTrace() {
   return page.evaluate(() => {
     window.__canvasTrace.enabled = false;
     return window.__canvasTrace;
+  });
+}
+async function touchStartAt(point, id = 1) {
+  const bounds = await page.locator("#world").boundingBox();
+  await touchSession.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [{
+      id,
+      x: bounds.x + point.x,
+      y: bounds.y + point.y,
+      radiusX: 1,
+      radiusY: 1,
+      force: 1,
+    }],
+  });
+}
+async function touchEnd() {
+  await touchSession.send("Input.dispatchTouchEvent", {
+    type: "touchEnd",
+    touchPoints: [],
   });
 }
 function assertPackGeometry(state) {
@@ -309,6 +335,38 @@ try {
   assert.deepEqual(packState.pack.originalRawIds, packState.pack.rawIds);
   assert.equal(packState.pack.rawIds.length, 17);
   assert.equal(new Set(packState.pack.rawIds).size, 17);
+  assert.deepEqual(
+    packState.pack.places.map(({ rawQuantity, readoutOpacity }) => [rawQuantity, readoutOpacity]),
+    [[0, 0.25]],
+    "zero raw quantity remains visible at the subdued baseline opacity",
+  );
+  const initialPlace = packState.pack.slots.find((slot) => slot.level === 0);
+  await touchStartAt(initialPlace);
+  let touchedPack = await read();
+  assert.equal(touchedPack.pack.places[0].readoutOpacity, 0.70);
+  assert.equal(touchedPack.pack.places[0].rawQuantity, 0);
+  await touchEnd();
+  await page.waitForTimeout(100);
+  touchedPack = await read();
+  assert.ok(
+    touchedPack.pack.places[0].readoutOpacity > 0.25 &&
+      touchedPack.pack.places[0].readoutOpacity < 0.70,
+    "release fades the touched place quickly toward normal",
+  );
+  await page.waitForTimeout(100);
+  assert.equal((await read()).pack.places[0].readoutOpacity, 0.25);
+  await touchStartAt({
+    x: initialPlace.x,
+    y: initialPlace.y + initialPlace.frameRadius + 23,
+  });
+  await page.waitForTimeout(30);
+  assert.equal(
+    (await read()).pack.places[0].readoutOpacity,
+    0.25,
+    "the raw quantity text itself is not a touch target",
+  );
+  assert.equal((await read()).dragIds.length, 0, "the overlapping Number Mass hit area ignores the readout text");
+  await touchEnd();
   const originalPackIds = [...packState.pack.originalRawIds],
     firstMass = packState.pack.numberMass,
     firstL0 = packState.pack.slots.find((slot) => slot.level === 0);
@@ -330,12 +388,48 @@ try {
   assert.equal(new Set(streamMotion.pack.renderedDots.map((dot) => dot.id)).size, 17);
   assert.deepEqual([...streamMotion.pack.rawIds].sort((a, b) => a - b), originalPackIds);
   await capture("artifacts/pack-stream-motion.png");
+  await page.waitForFunction(() => {
+    const places = window.__readFlow?.().pack?.places || [];
+    return places.some((place) => place.readoutOpacity >= 0.74);
+  });
+  let carryReadouts = await read();
+  assert.deepEqual(
+    carryReadouts.pack.places
+      .filter((place) => place.readoutOpacity >= 0.74)
+      .map((place) => place.level)
+      .sort((a, b) => a - b),
+    [0, 1],
+    "the first carry emphasizes only its changed source and destination places",
+  );
+  await page.waitForTimeout(550);
+  carryReadouts = await read();
+  assert.ok(carryReadouts.pack.places.every((place) => place.readoutOpacity < 0.75));
+  await page.waitForTimeout(350);
+  carryReadouts = await read();
+  assert.ok(carryReadouts.pack.places.every((place) => place.readoutOpacity === 0.25));
+  await capture("artifacts/pack-stream-motion.png");
   packState = await settled();
   assert.deepEqual(packState.pack.digits, [1, 0]);
   assert.equal(packState.pack.numberMass.quantity, 14);
   assert.deepEqual(packState.pack.revealedLevels, [0, 1]);
   assert.equal(packState.pack.complete, false, "one gesture stops at its first carry");
   assert.equal(packState.pack.places.find((place) => place.level === 1).digit, 1);
+  const carrySlots = [0, 1].map((level) =>
+    packState.pack.slots.find((slot) => slot.level === level),
+  );
+  await touchStartAt(carrySlots[1], 2);
+  touchedPack = await read();
+  assert.deepEqual(
+    touchedPack.pack.places
+      .filter((place) => place.readoutOpacity === 0.70)
+      .map((place) => place.level),
+    [1],
+    "touching one visible frame emphasizes only that place",
+  );
+  assert.ok(touchedPack.pack.places.find((place) => place.level === 0).readoutOpacity <= 0.25);
+  await touchEnd();
+  await page.waitForTimeout(180);
+  assert.ok((await read()).pack.places.every((place) => place.readoutOpacity === 0.25));
   await packWholeMass();
   packState = await settled();
   assert.deepEqual(packState.pack.digits, [1, 2, 2]);
@@ -345,7 +439,7 @@ try {
   assert.deepEqual(packState.pack.directInputLevels, []);
   assertPackGeometry(packState);
   const mobileViewports = [
-    [320, 720, "pack-320-portrait"],
+    [320, 568, "pack-320-portrait"],
     [390, 844, "pack-390-portrait"],
     [412, 915, "pack-412-portrait"],
     [812, 375, "pack-narrow-landscape"],
@@ -365,13 +459,17 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(90);
   packState = await settled();
+  await page.waitForFunction(() =>
+    window.__readFlow?.().pack?.places?.every((place) => place.readoutOpacity === 0.25),
+  );
   const readoutTrace = await captureCanvasTrace();
   for (const place of packState.pack.places) {
     const y = place.slot.y + place.slot.frameRadius + 23;
     assert.ok(readoutTrace.labels.some((label) =>
       label.text === String(place.rawQuantity) &&
       Math.abs(label.x - place.slot.x) < 0.1 &&
-      Math.abs(label.y - y) < 0.1,
+      Math.abs(label.y - y) < 0.1 &&
+      Math.abs(label.alpha - 0.25) < 0.001,
     ), `visible decimal raw-quantity readout ${place.rawQuantity}`);
   }
   await page.waitForTimeout(450);
@@ -381,6 +479,7 @@ try {
   await packBase(2);
   packState = await settled();
   assert.equal(packState.pack.base, 2);
+  assert.ok(packState.pack.places.every((place) => place.readoutOpacity === 0.25), "radix changes clear old readout emphasis");
   await drag(
     packState.pack.numberMass,
     packState.pack.slots.find((slot) => slot.level === 0),
@@ -516,10 +615,19 @@ try {
     "completed wrong radix shows equality feedback",
   );
   assert.equal(
-    packCanvasTrace.labels.some(({ text }) => text === "101"),
+    packCanvasTrace.labels.some(({ text, alpha }) => text === "101" && alpha === 0.76),
     true,
-    "middle zero is rendered in the completed notation",
+    "middle zero notation remains more visible than the raw quantity readouts",
   );
+  for (const place of packState.pack.places) {
+    const y = place.slot.y + place.slot.frameRadius + 23;
+    assert.ok(packCanvasTrace.labels.some(({ text, x, y: labelY, alpha }) =>
+      text === String(place.rawQuantity) &&
+      Math.abs(x - place.slot.x) < 0.1 &&
+      Math.abs(labelY - y) < 0.1 &&
+      alpha <= 0.75,
+    ), `raw quantity stays below completed notation opacity at level ${place.level}`);
+  }
   await page.waitForTimeout(1350);
   packState = await read();
   assert.equal(packState.pack.notation?.phase, "compact");
@@ -609,6 +717,7 @@ try {
   const afterBreak = await settled();
   assert.ok(afterBreak.runToken > beforeFinalRun, "BREAK advances to the next problem");
   assert.equal(afterBreak.pack.notation, null, "next problem clears prior notation");
+  assert.ok(afterBreak.pack.places.every((place) => place.readoutOpacity === 0.25), "next problem clears prior raw-quantity emphasis");
   assert.equal(afterBreak.progress.pack.wins, 1);
   console.log("PACK single target, wrong-radix exploration, radix reset, activation, attack, BREAK, and adaptive progression verified.");
 
@@ -651,9 +760,13 @@ try {
 
   await page.emulateMedia({ reducedMotion: "reduce" });
   packState = await route("pack", () => true, 3);
+  assert.ok(packState.pack.places.every((place) => place.readoutOpacity === 0.25));
   await packBase(4);
   packState = await packWholeMass();
   assert.equal(packState.pack.notation?.digits, "101");
+  assert.ok(packState.pack.places.some((place) => place.readoutOpacity > 0.25), "carry readouts remain visible with reduced motion");
+  await page.waitForTimeout(520);
+  assert.ok((await read()).pack.places.every((place) => place.readoutOpacity === 0.25));
   await page.waitForTimeout(240);
   assert.equal((await read()).pack.notation?.phase, "compact");
   packState = await route("pack", () => true, 3);
