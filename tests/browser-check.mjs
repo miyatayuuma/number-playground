@@ -50,7 +50,12 @@ async function capture(path) {
   if (process.env.CAPTURE_BROWSER_ARTIFACTS === "0") return;
   await page.screenshot({ path: resolve(root, path), timeout: 30000 });
 }
-page.on("pageerror", (e) => errors.push(e.stack));
+page.on("pageerror", (e) =>
+  errors.push(`pageerror ${e.name}: ${e.message}\n${e.stack}`),
+);
+page.on("console", (message) => {
+  if (message.type() === "error") errors.push(`console ${message.text()}`);
+});
 page.on("response", (r) => {
   if (r.status() >= 400) errors.push(`${r.status()} ${r.url()}`);
 });
@@ -169,7 +174,7 @@ try {
   );
 
   // Sequential SPARK uses one enemy position: future layers stay hidden
-  // until the currently active quantity has actually impacted.
+ µ¨¥Â¸­yêë¢°k¢G§¦*^ // until the currently active quantity has actually impacted.
   let sparkState = await route(
     "spark",
     (p) =>
