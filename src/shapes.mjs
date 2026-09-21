@@ -1,7 +1,7 @@
 // Four stays a 2×2 motif, with two visibly separated vertical pairs.
-export function factors(n) {
-  if (!Number.isInteger(n) || n < 1 || n > 36)
-    throw new RangeError("Shape must contain 1–36 dots");
+export function factors(n, maxDots = 36) {
+  if (!Number.isInteger(n) || n < 1 || n > maxDots)
+    throw new RangeError(`Shape must contain 1–${maxDots} dots`);
   const out = [];
   while (n > 1) {
     let f = n % 4 === 0 ? 4 : n % 2 === 0 ? 2 : 0;
@@ -18,8 +18,8 @@ export function factors(n) {
   }
   return out.reverse();
 }
-function geometry(n) {
-  const fs = factors(n);
+function geometry(n, maxDots = 36, buildNodes = true) {
+  const fs = factors(n, maxDots);
   function build(depth, orientation = 0) {
     if (depth === fs.length)
       return { radius: 1, dots: [{ x: 0, y: 0, branch: 0 }], groups: [] };
@@ -86,7 +86,7 @@ function geometry(n) {
     return { dots, groups, radius: distance + cr };
   }
   const result = build(0);
-  result.nodes = hierarchy(n, result.groups);
+  if (buildNodes) result.nodes = hierarchy(n, result.groups);
   return result;
 }
 // Nodes partition their parent: a fast peel can descend exactly one edge.
@@ -259,69 +259,175 @@ export function placeSlotLayout(total, base, width, y) {
   }));
 }
 
-// PACK place units keep canonical raw-dot geometry. Contiguous raw identities
-// define transparent radix groups, while only spacing changes to compact them.
+// PACK gives every place the same frame grammar. These ratios are shared by
+// all radices and levels; nested content is fitted inside the resulting unit.
 export const PACK_RAW_DOT_WORLD_RADIUS = 4.2;
+export const PACK_MAX_SIBLING_OVERLAP = 0.3;
+export const PACK_MAX_NESTED_RAW_DOTS = 1000;
+export const PACK_PLACE_PADDING_RATIO = 0.12;
+export const PACK_UNIT_FRAME_SCALE = 0.32;
+export const PACK_UNIT_PADDING_RATIO = 0.16;
 
-export function compactPackNestedUnitShape(
+export function packPlaceFrameRadius(width, placeCount, height = Infinity) {
+  if (!Number.isInteger(placeCount) || placeCount < 1)
+    throw new RangeError("PACK frame layout requires a positive place count");
+  if (!(width > 0)) return 18;
+  const margin = Math.min(58, width * 0.17),
+    heightLimit = Number.isFinite(height) && height > 0
+      ? Math.max(18, height * 0.065)
+      : 28;
+  return Math.max(
+    18,
+    Math.min(
+      28,
+      heightLimit,
+      (width - margin * 2 - Math.max(0, placeCount - 1) * 8) / (2 * placeCount),
+    ),
+  );
+}
+
+export function packUnitFrameRadius(placeFrameRadius) {
+  if (!(placeFrameRadius > 0))
+    throw new RangeError("PACK unit frames require a positive place frame");
+  return placeFrameRadius * PACK_UNIT_FRAME_SCALE;
+}
+
+export function packUnitFrameInnerRadius(unitFrameRadius) {
+  if (!(unitFrameRadius > 0))
+    throw new RangeError("PACK unit content requires a positive unit frame");
+  return unitFrameRadius * (1 - PACK_UNIT_PADDING_RATIO);
+}
+
+// Arrange top-level units using the canonical number shape, then scale only
+// their centers until all equal-sized unit frames sit inside the Place Frame.
+export function packPlaceUnitCenters(count, placeFrameRadius, unitFrameRadius) {
+  if (!Number.isInteger(count) || count < 0 || count > 36)
+    throw new RangeError("PACK place unit count must be 0–36");
+  if (!count) return [];
+  const canonical = shape(count, 54),
+    centerExtent = Math.max(
+      0,
+      ...canonical.dots.map((dot) => Math.hypot(dot.x, dot.y)),
+    ),
+    available = Math.max(
+      0,
+      placeFrameRadius * (1 - PACK_PLACE_PADDING_RATIO) - unitFrameRadius,
+    ),
+    scale = centerExtent ? Math.min(1, available / centerExtent) : 0;
+  return canonical.dots.map((dot) => ({ x: dot.x * scale, y: dot.y * scale }));
+}
+
+function fittedCanonicalPackDots(canonicalDots, parentInnerRadius, preferredRadius, maxOverlap) {
+  const centerExtent = Math.max(
+      0,
+      ...canonicalDots.map((dot) => Math.hypot(dot.x, dot.y)),
+    );
+  let nearestCenterDistance = Infinity;
+  for (let i = 0; i < canonicalDots.length; i++)
+    for (let j = i + 1; j < canonicalDots.length; j++)
+      nearestCenterDistance = Math.min(
+        nearestCenterDistance,
+        Math.hypot(
+          canonicalDots[i].x - canonicalDots[j].x,
+          canonicalDots[i].y - canonicalDots[j].y,
+        ),
+      );
+
+  const overlapFactor = 2 * (1 - maxOverlap);
+  let spacingScale = 0,
+    dotRadius = Math.min(preferredRadius, parentInnerRadius);
+  if (canonicalDots.length > 1 && centerExtent > 0 && nearestCenterDistance > 0) {
+    const scaleAtPreferredRadius = Math.min(
+        1,
+        Math.max(0, (parentInnerRadius - preferredRadius) / centerExtent),
+      ),
+      minimumScaleAtPreferredRadius =
+        (overlapFactor * preferredRadius) / nearestCenterDistance;
+    if (minimumScaleAtPreferredRadius <= scaleAtPreferredRadius) {
+      spacingScale = scaleAtPreferredRadius;
+      dotRadius = preferredRadius;
+    } else {
+      spacingScale = Math.min(
+        1,
+        parentInnerRadius /
+          (centerExtent + nearestCenterDistance / overlapFactor),
+      );
+      dotRadius = Math.min(
+        preferredRadius,
+        parentInnerRadius - spacingScale * centerExtent,
+        (spacingScale * nearestCenterDistance) / overlapFactor,
+      );
+    }
+  }
+  const dots = canonicalDots.map((dot, index) => ({
+    x: dot.x * spacingScale,
+    y: dot.y * spacingScale,
+    radius: Math.max(0, dotRadius),
+    index,
+  }));
+  return {
+    dots,
+    spacingScale,
+    dotRadius: Math.max(0, dotRadius),
+    radius: Math.max(
+      0,
+      ...dots.map((dot) => Math.hypot(dot.x, dot.y) + dot.radius),
+    ),
+    nearestCenterDistance: Number.isFinite(nearestCenterDistance)
+      ? nearestCenterDistance * spacingScale
+      : Infinity,
+    maxOverlap: maxOverlap,
+  };
+}
+
+export function packNestedUnitShape(
   base,
   levels,
-  maxRadius = 18,
-  rawRadius = PACK_RAW_DOT_WORLD_RADIUS,
+  parentInnerRadius = 18,
+  preferredDotRadius = PACK_RAW_DOT_WORLD_RADIUS,
+  maxOverlap = PACK_MAX_SIBLING_OVERLAP,
 ) {
   if (!Number.isInteger(base) || base < 2 || base > 10)
     throw new RangeError("PACK compact radix must be 2–10");
   if (!Number.isInteger(levels) || levels < 0)
     throw new RangeError("PACK compact depth must be non-negative");
-  if (!(rawRadius > 0) || !(maxRadius >= rawRadius))
-    throw new RangeError("PACK compact radii must be positive and ordered");
+  if (!(preferredDotRadius > 0) || !(parentInnerRadius > 0))
+    throw new RangeError("PACK dot and parent radii must be positive");
+  if (!(maxOverlap >= 0 && maxOverlap < 1))
+    throw new RangeError("PACK sibling overlap must be in [0, 1)");
   const quantity = base ** levels;
-  if (quantity > 36)
-    throw new RangeError("PACK compact units support at most 36 raw dots");
-  if (levels === 0)
-    return {
-      base,
-      levels,
-      quantity: 1,
-      radius: rawRadius,
-      rawRadius,
-      maxRadius,
-      spacingScale: 0,
-      dots: [{ x: 0, y: 0, radius: rawRadius, index: 0 }],
-      groups: [],
-    };
+  if (!Number.isSafeInteger(quantity) || quantity > PACK_MAX_NESTED_RAW_DOTS)
+    throw new RangeError(
+      `PACK nested units support at most ${PACK_MAX_NESTED_RAW_DOTS} raw dots`,
+    );
 
-  const centerRadius = Math.max(0, maxRadius - rawRadius),
-    canonical = shape(quantity, 54);
-  let minimumGap = Infinity;
-  for (let i = 0; i < canonical.dots.length; i++)
-    for (let j = i + 1; j < canonical.dots.length; j++)
-      minimumGap = Math.min(
-        minimumGap,
-        Math.hypot(
-          canonical.dots[i].x - canonical.dots[j].x,
-          canonical.dots[i].y - canonical.dots[j].y,
-        ),
-      );
-  const readableSpacingScale = (rawRadius * 1.3) / minimumGap,
-    spacingScale = Math.max(centerRadius / canonical.radius, readableSpacingScale),
-    dots = canonical.dots.map(({ x, y }, index) => ({
-      x: x * spacingScale,
-      y: y * spacingScale,
-      radius: rawRadius,
-      index,
+  const canonical = geometry(quantity, PACK_MAX_NESTED_RAW_DOTS, false),
+    canonicalScale = 54 / canonical.radius,
+    canonicalDots = canonical.dots.map(({ x, y }) => ({
+      x: x * canonicalScale,
+      y: y * canonicalScale,
     })),
+    fitted = fittedCanonicalPackDots(
+      canonicalDots,
+      parentInnerRadius,
+      preferredDotRadius,
+      maxOverlap,
+    ),
     groups = [];
   for (let groupLevel = 1; groupLevel <= levels; groupLevel++) {
     const groupSize = base ** groupLevel;
     for (let start = 0; start < quantity; start += groupSize) {
-      const members = dots.slice(start, start + groupSize),
+      const members = fitted.dots.slice(start, start + groupSize),
         x = members.reduce((sum, dot) => sum + dot.x, 0) / members.length,
         y = members.reduce((sum, dot) => sum + dot.y, 0) / members.length,
-        radius = Math.max(
-          rawRadius + 1,
-          ...members.map(
-            (dot) => Math.hypot(dot.x - x, dot.y - y) + rawRadius + 1,
+        radius = Math.min(
+          parentInnerRadius,
+          Math.max(
+            fitted.dotRadius * 0.8,
+            ...members.map(
+              (dot) =>
+                Math.hypot(dot.x - x, dot.y - y) + fitted.dotRadius * 0.24,
+            ),
           ),
         );
       groups.push({ groupLevel, start, count: members.length, x, y, radius });
@@ -331,11 +437,25 @@ export function compactPackNestedUnitShape(
     base,
     levels,
     quantity,
-    radius: Math.max(...dots.map((dot) => Math.hypot(dot.x, dot.y) + dot.radius)),
-    rawRadius,
-    maxRadius,
-    spacingScale,
-    dots,
+    radius: fitted.radius,
+    parentInnerRadius,
+    preferredDotRadius,
+    rawRadius: fitted.dotRadius,
+    dotRadius: fitted.dotRadius,
+    spacingScale: fitted.spacingScale,
+    nearestCenterDistance: fitted.nearestCenterDistance,
+    maxOverlap,
+    dots: fitted.dots,
     groups,
   };
+}
+
+export function compactPackNestedUnitShape(
+  base,
+  levels,
+  maxRadius = 18,
+  rawRadius = PACK_RAW_DOT_WORLD_RADIUS,
+  maxOverlap = PACK_MAX_SIBLING_OVERLAP,
+) {
+  return packNestedUnitShape(base, levels, maxRadius, rawRadius, maxOverlap);
 }

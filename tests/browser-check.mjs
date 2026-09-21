@@ -65,6 +65,41 @@ async function captureCanvasTrace() {
     return window.__canvasTrace;
   });
 }
+function assertPackGeometry(state) {
+  const pack = state.pack,
+    radii = pack.slots.map((slot) => slot.frameRadius),
+    dots = new Map(pack.renderedDots.map((dot) => [dot.id, dot]));
+  assert.ok(radii.every((radius) => radius === radii[0]));
+  assert.equal(pack.targetGhost.radius, radii[0]);
+  assert.equal(pack.targetGhost.unitFrameRadius, pack.unitFrameRadius);
+  assert.ok(pack.targetGhost.places.every((place) =>
+    place.unitFrameRadius === pack.unitFrameRadius &&
+    !("rawQuantity" in place),
+  ));
+  assert.ok(pack.targetGhost.places.every((ghost) =>
+    pack.slots.every((slot) =>
+      ghost.y + ghost.frameRadius + 8 <= slot.y - slot.frameRadius,
+    ),
+  ), "Target Ghost and player places remain vertically separated");
+  assert.ok(pack.items.every((item) => item.unitFrameRadius === pack.unitFrameRadius));
+  for (const item of pack.items) {
+    const slot = pack.slots.find((candidate) => candidate.level === item.level),
+      content = item.rawIds.map((id) => dots.get(id));
+    assert.ok(slot, `item ${item.id} has a visible place`);
+    assert.ok(content.every(Boolean), `item ${item.id} retains each raw identity`);
+    for (const dot of content)
+      assert.ok(
+        Math.hypot(dot.x - item.x, dot.y - item.y) + dot.radius <=
+          pack.unitFrameRadius * 0.84 + 0.8,
+        `raw dot ${dot.id} stays inside its Unit Frame`,
+      );
+    assert.ok(
+      Math.hypot(item.x - slot.x, item.y - slot.y) + item.unitFrameRadius <=
+        slot.frameRadius * 0.88 + 0.8,
+      `unit ${item.id} stays inside its Place Frame`,
+    );
+  }
+}
 try {
   await page.goto(base);
   await page.locator("[data-rule]").first().waitFor();
@@ -237,6 +272,7 @@ try {
   assert.equal(packState.pack.base, 3);
   assert.equal(packState.pack.control.current, 3);
   assert.equal(packState.pack.targetGhost.places.length, 2);
+  assert.equal(packState.pack.targetGhost.unitFrameRadius, packState.pack.unitFrameRadius);
   assert.equal(packState.pack.targetActivated, false);
   assert.equal("camera" in packState.pack, false);
   assert.equal("ghosts" in packState.pack, false);
@@ -303,9 +339,41 @@ try {
   await packWholeMass();
   packState = await settled();
   assert.deepEqual(packState.pack.digits, [1, 2, 2]);
+  assert.deepEqual(packState.pack.places.map((place) => place.rawQuantity), [9, 6, 2]);
   assert.equal(packState.pack.numberMass.quantity, 0);
   assert.equal(packState.pack.targetActivated, false);
   assert.deepEqual(packState.pack.directInputLevels, []);
+  assertPackGeometry(packState);
+  const mobileViewports = [
+    [320, 720, "pack-320-portrait"],
+    [390, 844, "pack-390-portrait"],
+    [412, 915, "pack-412-portrait"],
+    [812, 375, "pack-narrow-landscape"],
+  ];
+  for (const [width, height, name] of mobileViewports) {
+    await page.setViewportSize({ width, height });
+    await page.waitForTimeout(90);
+    packState = await settled();
+    assert.equal(await page.evaluate(() => window.innerWidth), width);
+    assertPackGeometry(packState);
+    assert.ok(packState.pack.slots.every((slot) =>
+      slot.x - slot.frameRadius >= 0 &&
+      slot.x + slot.frameRadius <= packState.width,
+    ));
+    await capture(`artifacts/${name}.png`);
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(90);
+  packState = await settled();
+  const readoutTrace = await captureCanvasTrace();
+  for (const place of packState.pack.places) {
+    const y = place.slot.y + place.slot.frameRadius + 23;
+    assert.ok(readoutTrace.labels.some((label) =>
+      label.text === String(place.rawQuantity) &&
+      Math.abs(label.x - place.slot.x) < 0.1 &&
+      Math.abs(label.y - y) < 0.1,
+    ), `visible decimal raw-quantity readout ${place.rawQuantity}`);
+  }
   await page.waitForTimeout(450);
   assert.equal((await read()).status, "play", "a mismatching structure has no penalty or attack");
 
@@ -399,6 +467,13 @@ try {
   packState = await settled();
   assert.equal(packState.pack.complete, true);
   assert.deepEqual(packState.pack.digits, [1, 0, 1]);
+  assert.deepEqual(
+    packState.pack.places
+      .map(({ level, rawQuantity }) => [level, rawQuantity])
+      .sort((a, b) => a[0] - b[0]),
+    [[0, 1], [1, 0], [2, 16]],
+  );
+  assertPackGeometry(packState);
   assert.deepEqual(
     packState.pack.places.map(({ level, digit }) => [level, digit]).sort((a, b) => a[0] - b[0]),
     [[0, 1], [1, 0], [2, 1]],
@@ -720,7 +795,10 @@ try {
     assert.ok(mass.y - mass.radius >= 0 && mass.y + mass.radius <= s.height);
     assert.ok(l0.x - l0.frameRadius >= 0 && l0.x + l0.frameRadius <= s.width);
     assert.ok(l0.y - l0.frameRadius >= 0 && l0.y + l0.frameRadius + 35 < s.height);
-    assert.ok(Math.hypot(mass.x - l0.x, mass.y - l0.y) > mass.radius + l0.frameRadius + 12);
+    assert.ok(
+      Math.hypot(mass.x - l0.x, mass.y - l0.y) > mass.radius + l0.frameRadius + 12,
+      JSON.stringify({ mass, l0, threshold: mass.radius + l0.frameRadius + 12 }),
+    );
     assert.ok(control.x1 >= 0 && control.x2 <= s.width && control.y < s.height);
     for (const place of s.pack.targetGhost.places) {
       assert.ok(place.y - place.frameRadius >= 0 && place.y + place.frameRadius <= s.height);
@@ -731,7 +809,8 @@ try {
     await audit();
   }
 
-  // Upper radix-10 units keep their ten raw dots legible inside one flat place.
+  // A dense radix-10 unit keeps every raw identity inside its shared frame;
+  // the dots may become small as the same recursive geometry repeats.
   await page.setViewportSize({ width: 320, height: 568 });
   s = await route("pack", () => true, 5);
   await packBase(10);
@@ -743,17 +822,35 @@ try {
   const upperTen = s.pack.items.find((item) => item.level === 1);
   assert.ok(upperTen, "base 10 creates a visible upper unit");
   assert.equal(upperTen.rawIds.length, 10);
+  assert.equal(upperTen.unitFrameRadius, s.pack.unitFrameRadius);
   const upperDots = s.pack.renderedDots.filter((dot) => dot.rootItemId === upperTen.id);
   assert.equal(upperDots.length, 10);
-  assert.ok(upperDots.every((dot) => dot.radius >= 4.2));
-  const upperSlot = s.pack.slots.find((slot) => slot.level === 1);
+  assert.ok(upperDots.every((dot) => dot.radius > 0 && dot.radius <= 4.2));
   assert.ok(upperDots.every((dot) =>
-    Math.abs(dot.x - upperSlot.x) <= upperSlot.frameRadius + 1 &&
-    Math.abs(dot.y - upperSlot.y) <= upperSlot.frameRadius + 1,
+    Math.hypot(dot.x - upperTen.x, dot.y - upperTen.y) + dot.radius <=
+      upperTen.unitFrameRadius * 0.84 + 1,
   ));
-  assert.ok(upperDots.some((dot, index) => upperDots.slice(index + 1).some((other) =>
-    Math.hypot(dot.x - other.x, dot.y - other.y) < dot.radius + other.radius + 1,
-  )), "spacing compression may allow slight overlap without merging the dots");
+  const upperSlot = s.pack.slots.find((slot) => slot.level === 1);
+  assert.ok(
+    Math.hypot(upperTen.x - upperSlot.x, upperTen.y - upperSlot.y) +
+      upperTen.unitFrameRadius <= upperSlot.frameRadius * 0.88 + 1,
+  );
+  let maximumOverlap = 0;
+  for (let i = 0; i < upperDots.length; i++)
+    for (let j = i + 1; j < upperDots.length; j++) {
+      const distance = Math.hypot(
+        upperDots[i].x - upperDots[j].x,
+        upperDots[i].y - upperDots[j].y,
+      );
+      maximumOverlap = Math.max(
+        maximumOverlap,
+        Math.max(
+          0,
+          1 - distance / (upperDots[i].radius + upperDots[j].radius),
+        ),
+      );
+    }
+  assert.ok(maximumOverlap <= 0.3 + 1e-3);
 
   // Native touch stream on the smallest portrait layout, then verify all
   // discovered place readouts still fit after L1 and L2 appear.

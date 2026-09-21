@@ -118,6 +118,27 @@ function packNodeRawIds(pack, itemId, visiting = new Set()) {
   return children;
 }
 
+// Readouts follow the active child hierarchy, so a displayed quantity cannot
+// drift from the raw identities represented by the units in that place.
+export function packRawQuantityForLevel(run, level, activeIds = null) {
+  const pack = requirePack(run);
+  if (!Number.isInteger(level) || level < 0)
+    throw new RangeError("PACK raw quantity requires a non-negative level");
+  const roots = activeIds ?? pack.active;
+  if (!Array.isArray(roots))
+    throw new RangeError("PACK active hierarchy must be an array");
+  let total = 0;
+  for (const itemId of roots) {
+    const item = pack.nodes[itemId];
+    if (!item) throw new RangeError(`Unknown PACK item: ${itemId}`);
+    if (item.level !== level) continue;
+    const rawIds = packNodeRawIds(pack, itemId);
+    if (!rawIds) throw new RangeError(`Invalid PACK raw hierarchy: ${itemId}`);
+    total += rawIds.length;
+  }
+  return total;
+}
+
 function packStateSnapshot(pack) {
   const active = [...pack.active],
     discoveredLevels = [...pack.discoveredLevels],
