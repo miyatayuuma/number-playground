@@ -997,23 +997,16 @@ export class PackWorld extends FlowWorld {
       mainAlpha = 0.76;
     c.save();
     c.textBaseline = "middle";
+    c.textAlign = "left";
     c.fillStyle = this.color + "d8";
     c.font = `600 ${mainSize}px ui-rounded,system-ui,sans-serif`;
-    c.textAlign = "left";
     const digitWidth = c.measureText(notation.digits).width;
+    c.font = `600 ${subscriptSize}px ui-rounded,system-ui,sans-serif`;
+    const radixWidth = c.measureText(notation.radix).width,
+      digitStart = notation.x - (digitWidth + 1 + radixWidth) / 2;
     c.globalAlpha = mainAlpha;
-    c.fillText(notation.digits, notation.x - (digitWidth + 1 + (() => {
-      c.font = `600 ${subscriptSize}px ui-rounded,system-ui,sans-serif`;
-      const width = c.measureText(notation.radix).width;
-      c.font = `600 ${mainSize}px ui-rounded,system-ui,sans-serif`;
-      return width;
-    })()) / 2, notation.y);
-    const digitStart = notation.x - (digitWidth + 1 + (() => {
-      c.font = `600 ${subscriptSize}px ui-rounded,system-ui,sans-serif`;
-      const width = c.measureText(notation.radix).width;
-      c.font = `600 ${mainSize}px ui-rounded,system-ui,sans-serif`;
-      return width;
-    })()) / 2;
+    c.font = `600 ${mainSize}px ui-rounded,system-ui,sans-serif`;
+    c.fillText(notation.digits, digitStart, notation.y);
     c.font = `600 ${subscriptSize}px ui-rounded,system-ui,sans-serif`;
     c.fillText(notation.radix, digitStart + digitWidth + 1, notation.y + 5);
     if (notation.prefixAlpha > 0) {
