@@ -1,6 +1,7 @@
 import { World } from "./view.mjs";
 import { shape, arrayShape } from "./shapes.mjs";
 import { activeTargets } from "./model.mjs";
+import { drawNumberReadout, drawSelectorDots } from "./number-selector.mjs";
 export class FlowWorld extends World {
   setRun(run) {
     this.sparkTransitionTargetIndex = null;
@@ -83,7 +84,8 @@ export class FlowWorld extends World {
       (this.run.stage.area === "gear" && p !== this.run.pieces[0])
     )
       return null;
-    const c = this.positions.get(p.id);
+    const c = this.positions.get(p.id) ||
+      this.homePoint(this.run.pieces.indexOf(p), this.run.pieces.length);
     return {
       x: this.run.stage.area === "gear" ? this.w / 2 : c.x,
       y: Math.min(this.h - 27, c.y + this.baseRadius + 52),
@@ -359,7 +361,12 @@ export class FlowWorld extends World {
         c.roundRect(h.x - 28, h.y - 13, 56, 26, 13);
         c.fill();
         c.stroke();
-        this.label(p.width || "◌", h.x, h.y, this.color, 12);
+        drawSelectorDots(this, p.width, h.x, h.y, this.color, {
+          radius: 8,
+          dotScale: 0.62,
+          minimumDotRadius: 1.15,
+        });
+        drawNumberReadout(this, p.width, h.x, h.y - 23, this.color, 12);
         this.label("‹", h.x - 19, h.y, this.color, 17);
         this.label("›", h.x + 19, h.y, this.color, 17);
         c.restore();

@@ -42,6 +42,11 @@ import {
   PACK_CHILD_GAP_RATIO,
 } from "../src/shapes.mjs";
 import {
+  canonicalSelectorShape,
+  drawNumberReadout,
+  drawSelectorDots,
+} from "../src/number-selector.mjs";
+import {
   packCameraForFocus,
   packCameraForInspection,
   packFocusProgress,
@@ -62,6 +67,17 @@ function audit(run) {
   );
   assert.ok(run.pieces.every((p) => p.ids.length > 0 && p.ids.length <= 36));
   if (run.stage.area === "pack") assert.ok(isCanonicalPack(run));
+}
+function pourUntilMassEmpty(run, level = 0) {
+  const results = [];
+  while (run.pack.numberMassRawIds.length) {
+    const previous = run.pack.numberMassRawIds.length,
+      result = pourPackMass(run, level);
+    assert.ok(result.ok, "available Number Mass feeds at least one complete unit");
+    assert.ok(run.pack.numberMassRawIds.length < previous, "each gesture consumes mass");
+    results.push(result);
+  }
+  return results;
 }
 function shoot(run, p, i, cell) {
   const result = fire(run, p.id, [...p.ids], i, cell);
@@ -108,8 +124,7 @@ export function solve(problem) {
     assert.equal(result.outcome, "win");
   } else if (problem.area === "pack") {
     assert.ok(setPackBase(run, 4));
-    const result = pourPackMass(run, 0);
-    assert.ok(result.ok);
+    pourUntilMassEmpty(run, 0);
     assert.deepEqual(packDigits(run), [1, 0, 1]);
     assert.equal(run.pack.numberMassRawIds.length, 0);
     assert.equal(run.status, "play");
@@ -321,8 +336,8 @@ test("PACK defense matching waits for the full settled canonical structure", () 
   assert.equal(matchPackDefense(run).ok, false, "carry presentation has not settled");
   assert.equal(run.pack.defenseLocks[0].activated, false);
   assert.ok(settlePackTransition(run));
-  assert.deepEqual(packDigits(run), [1, 0, 1]);
-  assert.equal(matchPackDefense(run).reason, "no-match", "the wrong radix stays exploratory");
+  assert.deepEqual(packDigits(run), [1, 0]);
+  assert.equal(matchPackDefense(run).reason, "not-settled", "remaining mass prevents matching");
   assert.equal(run.pack.defenseLocks[0].activated, false);
 });
 
@@ -333,8 +348,7 @@ test("PACK multi-ghost locks activate independently in either order and persist 
     assert.equal(buildPackAttackPlan(run).ok, false);
     for (const [index, radix] of order.entries()) {
       if (run.pack.base !== radix) assert.ok(setPackBase(run, radix));
-      const result = pourPackMass(run, 0);
-      assert.ok(result.ok);
+      pourUntilMassEmpty(run, 0);
       beginPackTransition(run);
       assert.equal(matchPackDefense(run).ok, false);
       settlePackTransition(run);
@@ -386,7 +400,7 @@ test("PACK refuses duplicate activation and attack input, then resolves one fina
   const run = createRun(generateProblem("pack", 1, "attack")),
     original = run.dots.map((dot) => dot.id);
   assert.ok(setPackBase(run, 5));
-  assert.ok(pourPackMass(run, 0).ok);
+  pourUntilMassEmpty(run, 0);
   settlePackTransition(run);
   const match = matchPackDefense(run);
   assert.equal(match.ok, true);
@@ -408,23 +422,23 @@ test("PACK refuses duplicate activation and attack input, then resolves one fina
   assert.deepEqual([...accountedIds(run)].sort((a, b) => a - b), original);
 });
 
-test("PACK streams all L0 input and automatically carries recursively", () => {
+test("PACK base 4 / 17 feeds one carry at a time and keeps carry automatic", () => {
   const run = createRun(structuredClone(PROBLEM_BANK.pack[0])),
     original = run.dots.map((dot) => dot.id);
   assert.equal(setPackBase(run, 4), true);
-  const result = pourPackMass(run, 0);
-  assert.ok(result.ok);
-  assert.equal(result.consumedRawIds.length, 17);
-  assert.equal(result.steps.filter((step) => step.type === "input").length, 17);
-  assert.deepEqual(
-    result.steps
-      .filter((step) => step.type === "carry")
-      .map(({ fromLevel, toLevel }) => [fromLevel, toLevel]),
-    [[0, 1], [0, 1], [0, 1], [0, 1], [1, 2]],
-  );
-  assert.equal(run.pack.numberMassRawIds.length, 0);
+  const first = pourPackMass(run, 0);
+  assert.equal(first.consumedRawIds.length, 4);
+  assert.equal(first.carryReached, true);
+  assert.equal(run.pack.numberMassRawIds.length, 13);
+  assert.deepEqual(run.pack.discoveredLevels, [0, 1]);
+  assert.deepEqual(packDigits(run), [1, 0]);
+
+  const second = pourPackMass(run, 1);
+  assert.equal(second.consumedRawIds.length, 12);
+  assert.equal(second.feedUnits, 3);
+  assert.equal(run.pack.numberMassRawIds.length, 1);
   assert.deepEqual(run.pack.discoveredLevels, [0, 1, 2]);
-  assert.deepEqual(packDigits(run), [1, 0, 1]);
+  assert.deepEqual(packDigits(run), [1, 0, 0]);
   assert.equal(activePackItems(run).filter((item) => item.level === 1).length, 0);
   const top = activePackItems(run).find((item) => item.level === 2);
   assert.ok(top);
@@ -436,6 +450,11 @@ test("PACK streams all L0 input and automatically carries recursively", () => {
       return child.level === 1 && child.children.length === 4;
     }),
   );
+  assert.equal(run.status, "play", "one gesture does not finish the structure");
+  const third = pourPackMass(run, 0);
+  assert.equal(third.consumedRawIds.length, 1);
+  assert.deepEqual(packDigits(run), [1, 0, 1]);
+  assert.equal(run.pack.numberMassRawIds.length, 0);
   assert.equal(run.status, "play", "canonical completion holds without attack");
   assert.deepEqual(
     [...run.pack.numberMassRawIds, ...activePackItems(run).flatMap((item) => item.ids)].sort((a, b) => a - b),
@@ -443,6 +462,116 @@ test("PACK streams all L0 input and automatically carries recursively", () => {
   );
   assert.equal(isCanonicalPack(run), true);
   audit(run);
+});
+
+test("PACK base 5 / 17 permits only complete L1 units when mass is short", () => {
+  const run = createRun(structuredClone(PROBLEM_BANK.pack[0]));
+  assert.ok(setPackBase(run, 5));
+  const first = pourPackMass(run, 0);
+  assert.equal(first.consumedRawIds.length, 5);
+  assert.equal(run.pack.numberMassRawIds.length, 12);
+  assert.deepEqual(packDigits(run), [1, 0]);
+
+  const second = pourPackMass(run, 1);
+  assert.equal(second.unitSize, 5);
+  assert.equal(second.neededUnits, 4);
+  assert.equal(second.availableUnits, 2);
+  assert.equal(second.feedUnits, 2);
+  assert.equal(second.consumedRawIds.length, 10);
+  assert.equal(run.pack.numberMassRawIds.length, 2);
+  assert.deepEqual(packDigits(run), [3, 0]);
+
+  const third = pourPackMass(run, 0);
+  assert.equal(third.consumedRawIds.length, 2);
+  assert.deepEqual(packDigits(run), [3, 2]);
+  assert.equal(run.pack.numberMassRawIds.length, 0);
+  assert.equal(isCanonicalPack(run), true);
+  audit(run);
+});
+
+test("PACK stops after carry and preserves unique raw IDs on direct input", () => {
+  const run = createRun({
+      ...structuredClone(PROBLEM_BANK.pack[0]),
+      ammo: [32],
+      quantity: 32,
+    }),
+    original = run.dots.map((dot) => dot.id);
+  assert.ok(setPackBase(run, 4));
+  const first = pourPackMass(run, 0);
+  assert.equal(first.consumedRawIds.length, 4);
+  assert.equal(run.pack.numberMassRawIds.length, 28);
+
+  assert.ok(pourPackMass(run, 0).ok);
+  assert.ok(pourPackMass(run, 0).ok);
+  const discovered = pourPackMass(run, 0);
+  assert.equal(discovered.consumedRawIds.length, 4);
+  assert.deepEqual(run.pack.discoveredLevels, [0, 1, 2]);
+  assert.equal(run.pack.numberMassRawIds.length, 16);
+
+  const direct = pourPackMass(run, 2);
+  assert.equal(direct.consumedRawIds.length, 16);
+  assert.equal(direct.consumedRawIds.length, 4 ** 2 * direct.feedUnits);
+  assert.equal(run.pack.numberMassRawIds.length, 0);
+  assert.equal(new Set(accountedIds(run)).size, original.length);
+  assert.deepEqual([...accountedIds(run)].sort((a, b) => a - b), original);
+  assert.equal(isCanonicalPack(run), true);
+});
+
+test("PACK radix 2 and 10 carry safely, conserve mass, and reset to raw IDs", () => {
+  const run = createRun(structuredClone(PROBLEM_BANK.pack[0])),
+    original = run.dots.map((dot) => dot.id);
+  assert.equal(run.stage.radices[0], 2);
+  assert.equal(run.stage.radices.at(-1), 10);
+  assert.ok(setPackBase(run, 2));
+  const binaryFirst = pourPackMass(run, 0);
+  assert.equal(binaryFirst.consumedRawIds.length, 2);
+  assert.equal(run.pack.numberMassRawIds.length, 15);
+  assert.deepEqual(run.pack.discoveredLevels, [0, 1]);
+  pourUntilMassEmpty(run, 0);
+  assert.ok(packDigits(run).every((digit) => digit < 2));
+  assert.equal(isCanonicalPack(run), true);
+  assert.deepEqual([...accountedIds(run)].sort((a, b) => a - b), original);
+
+  assert.ok(setPackBase(run, 10));
+  const decimalFirst = pourPackMass(run, 0);
+  assert.equal(decimalFirst.consumedRawIds.length, 10);
+  assert.equal(run.pack.numberMassRawIds.length, 7);
+  assert.deepEqual(packDigits(run), [1, 0]);
+  assert.ok(pourPackMass(run, 0).ok);
+  assert.deepEqual(packDigits(run), [1, 7]);
+  assert.equal(run.pack.numberMassRawIds.length, 0);
+  assert.ok(packDigits(run).every((digit) => digit < 10));
+  assert.equal(isCanonicalPack(run), true);
+  assert.deepEqual([...accountedIds(run)].sort((a, b) => a - b), original);
+  assert.ok(setPackBase(run, 9));
+  assert.deepEqual(run.pack.numberMassRawIds, original);
+  assert.deepEqual(run.pack.discoveredLevels, [0]);
+  assert.deepEqual(packDigits(run), [0]);
+});
+
+test("number selector shapes reuse canonical factorization geometry and zero is empty", () => {
+  for (const value of [2, 3, 4, 5, 8, 9, 10]) {
+    const mini = canonicalSelectorShape(value, 8),
+      canonical = shape(value, 8);
+    assert.deepEqual(mini.dots, canonical.dots);
+    assert.equal(mini.dots.length, value);
+    assert.deepEqual(
+      canonicalSelectorShape(value, 16).dots.map((dot) => [dot.x / 2, dot.y / 2]),
+      mini.dots.map((dot) => [dot.x, dot.y]),
+      `value ${value} only scales uniformly`,
+    );
+  }
+  assert.deepEqual(canonicalSelectorShape(0, 12).dots, []);
+  const labels = [];
+  drawNumberReadout(
+    { label: (...args) => labels.push(args) },
+    0,
+    12,
+    18,
+    "#fff",
+  );
+  assert.equal(labels[0][0], "0", "the empty selector keeps its Arabic readout");
+  assert.deepEqual(drawSelectorDots({ ctx: {} }, 0, 0, 0, "#fff").dots, []);
 });
 
 test("PACK direct input consumes the raw identities for one discovered upper unit", () => {
@@ -480,7 +609,7 @@ test("PACK direct input consumes the raw identities for one discovered upper uni
     }),
     l2Ids = l2Run.dots.map((dot) => dot.id);
   setPackBase(l2Run, 4);
-  assert.ok(pourPackMass(l2Run, 0, 16).ok);
+  for (let i = 0; i < 4; i++) assert.ok(pourPackMass(l2Run, 0).ok);
   assert.deepEqual(l2Run.pack.discoveredLevels, [0, 1, 2]);
   assert.deepEqual(l2Run.pack.numberMassRawIds, l2Ids.slice(16));
   const directL2 = pourPackMass(l2Run, 2);
@@ -714,8 +843,8 @@ test("PACK radix reset removes old grouping while preserving all raw identities"
     rawIds = run.dots.map((dot) => dot.id);
   assert.ok(setPackBase(run, 4));
   assert.ok(pourPackMass(run, 0).ok);
-  assert.deepEqual(packDigits(run), [1, 0, 1]);
-  assert.deepEqual(run.pack.discoveredLevels, [0, 1, 2]);
+  assert.deepEqual(packDigits(run), [1, 0]);
+  assert.deepEqual(run.pack.discoveredLevels, [0, 1]);
   assert.ok(setPackBase(run, 5));
   assert.equal(run.pack.base, 5);
   assert.equal(run.pack.phase, "pack");
@@ -727,12 +856,12 @@ test("PACK radix reset removes old grouping while preserving all raw identities"
   audit(run);
 });
 
-test("PACK full stream reaches canonical base-4 structure without attacking", () => {
+test("PACK repeated L0 gestures reach canonical base-4 structure without attacking", () => {
   const run = createRun(structuredClone(PROBLEM_BANK.pack[0])),
     original = run.dots.map((dot) => dot.id);
   setPackBase(run, 4);
-  const streamed = pourPackMass(run, 0);
-  assert.ok(streamed.ok);
+  const gestures = pourUntilMassEmpty(run, 0);
+  assert.ok(gestures.length > 1);
   assert.deepEqual(packDigits(run), [1, 0, 1]);
   assert.equal(isCanonicalPack(run), true);
   assert.equal(run.pack.numberMassRawIds.length, 0);

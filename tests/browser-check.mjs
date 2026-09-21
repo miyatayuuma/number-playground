@@ -37,12 +37,16 @@ const base = `http://127.0.0.1:${server.address().port}`;
 const browser = await chromium.launch();
 const context = await browser.newContext({
   viewport: { width: 390, height: 844 },
-  reducedMotion: "reduce",
+  reducedMotion: "no-preference",
   hasTouch: true,
 });
 await instrument(context);
 const page = await context.newPage(),
   errors = [];
+async function capture(path) {
+  if (process.env.CAPTURE_BROWSER_ARTIFACTS === "0") return;
+  await page.screenshot({ path: resolve(root, path), timeout: 30000 });
+}
 page.on("pageerror", (e) => errors.push(e.stack));
 page.on("response", (r) => {
   if (r.status() >= 400) errors.push(`${r.status()} ${r.url()}`);
@@ -65,7 +69,7 @@ async function inspectScaleMouse(deltas, direction = "left", screenshotPath = nu
     await page.mouse.move(startX + delta, y, { steps: 8 });
     states.push(await read());
     if (screenshotPath && index === deltas.length - 1)
-      await page.screenshot({ path: resolve(root, screenshotPath) });
+      await capture(screenshotPath);
   }
   await page.mouse.up();
   const released = await read(),
@@ -99,7 +103,7 @@ async function inspectScaleTouch(deltas, direction = "left", screenshotPath = nu
     await page.waitForTimeout(16);
     states.push(await read());
     if (screenshotPath && index === deltas.length - 1)
-      await page.screenshot({ path: resolve(root, screenshotPath) });
+      await capture(screenshotPath);
   }
   await cdp.send("Input.dispatchTouchEvent", {
     type: "touchEnd",
@@ -112,6 +116,16 @@ async function inspectScaleTouch(deltas, direction = "left", screenshotPath = nu
   return { jitter, states, released, home };
 }
 const focusStep = (width) => Math.min(56, Math.max(40, width * 0.145));
+async function captureCanvasTrace() {
+  await page.evaluate(() => {
+    window.__canvasTrace = { enabled: true, labels: [], curves: 0 };
+  });
+  await page.waitForTimeout(160);
+  return page.evaluate(() => {
+    window.__canvasTrace.enabled = false;
+    return window.__canvasTrace;
+  });
+}
 try {
   await page.goto(base);
   await page.locator("[data-rule]").first().waitFor();
@@ -244,6 +258,8 @@ try {
     peelThree,
     { x: sparkState.width * 0.78, y: sparkState.height * 0.8 },
     3,
+    true,
+    1,
   );
   sparkState = await settled();
   assert.deepEqual(
@@ -275,7 +291,7 @@ try {
   // radices until the same Number Mass forms that structure.
   let packState = await route("pack", () => true, 1);
   await mkdir(resolve(root, "artifacts"), { recursive: true });
-  await page.screenshot({ path: resolve(root, "artifacts/pack-mass-initial.png") });
+  await capture("artifacts/pack-mass-initial.png");
   assert.equal(packState.total, 17);
   assert.equal(packState.progress.pack.difficulty, 1);
   assert.equal(packState.status, "play");
@@ -314,19 +330,56 @@ try {
   assert.equal(streamMotion.pack.renderedDots.length, 17);
   assert.equal(new Set(streamMotion.pack.renderedDots.map((dot) => dot.id)).size, 17);
   assert.deepEqual([...streamMotion.pack.rawIds].sort((a, b) => a - b), originalPackIds);
-  await page.screenshot({ path: resolve(root, "artifacts/pack-stream-motion.png") });
+  await capture("artifacts/pack-stream-motion.png");
+  packState = await settled();
+  assert.deepEqual(packState.pack.digits, [1, 0]);
+  assert.equal(packState.pack.numberMass.quantity, 14);
+  assert.deepEqual(packState.pack.revealedLevels, [0, 1]);
+  assert.equal(packState.pack.complete, false, "one gesture stops at its first carry");
+  assert.equal(packState.pack.places.find((place) => place.level === 1).digit, 1);
+  await packWholeMass();
   packState = await settled();
   assert.deepEqual(packState.pack.digits, [1, 2, 2]);
   assert.equal(packState.pack.numberMass.quantity, 0);
-  assert.deepEqual(packState.pack.revealedLevels, [0, 1, 2]);
-  assert.deepEqual(
-    packState.pack.places.map(({ level, digit }) => [level, digit]).sort((a, b) => a[0] - b[0]),
-    [[0, 2], [1, 2], [2, 1]],
-  );
   assert.equal(packState.pack.ghosts.every((ghost) => !ghost.active), true);
   assert.deepEqual(packState.pack.directInputLevels, []);
   await page.waitForTimeout(450);
   assert.equal((await read()).status, "play", "a mismatching structure has no penalty or attack");
+
+  assert.deepEqual(packState.pack.allowedRadices, [2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  await packBase(2);
+  packState = await settled();
+  assert.equal(packState.pack.base, 2);
+  await drag(
+    packState.pack.numberMass,
+    packState.pack.slots.find((slot) => slot.level === 0),
+    17,
+  );
+  packState = await settled();
+  assert.equal(packState.pack.numberMass.quantity, 15);
+  assert.deepEqual(packState.pack.digits, [1, 0]);
+  assert.deepEqual(packState.pack.revealedLevels, [0, 1]);
+
+  await packBase(10);
+  packState = await settled();
+  assert.equal(packState.pack.base, 10);
+  await drag(
+    packState.pack.numberMass,
+    packState.pack.slots.find((slot) => slot.level === 0),
+    17,
+  );
+  packState = await settled();
+  assert.equal(packState.pack.numberMass.quantity, 7);
+  assert.deepEqual(packState.pack.digits, [1, 0]);
+  await drag(
+    packState.pack.numberMass,
+    packState.pack.slots.find((slot) => slot.level === 0),
+    7,
+  );
+  packState = await settled();
+  assert.equal(packState.pack.numberMass.quantity, 0);
+  assert.deepEqual(packState.pack.digits, [1, 7]);
+  assert.equal(packState.pack.digits.every((digit) => digit < 10), true);
 
   // A radix reset restores the same raw identities, then base 4 displays its
   // real intermediate zero without activating the base 5 defense ghost.
@@ -342,33 +395,68 @@ try {
   assert.deepEqual(packState.pack.places.map(({ level, n }) => [level, n]), [[0, 0]]);
   assert.deepEqual(packState.pack.digits, [0]);
   assert.deepEqual(packState.pack.directInputLevels, [0]);
-  await page.screenshot({ path: resolve(root, "artifacts/pack-radix-reset.png") });
+  await capture("artifacts/pack-radix-reset.png");
 
   const base4Mass = packState.pack.numberMass,
     base4L0 = packState.pack.slots.find((slot) => slot.level === 0);
   await drag(base4Mass, base4L0, 17, false);
+  await page.waitForFunction(
+    () => window.__readFlow?.().pack?.numberMass?.quantity === 13,
+  );
   const recursiveMotion = await read();
   assert.equal(recursiveMotion.busy, true);
   assert.equal(recursiveMotion.status, "play");
+  assert.equal(recursiveMotion.pack.numberMass.quantity, 13);
   assert.deepEqual([...recursiveMotion.pack.rawIds].sort((a, b) => a - b), originalPackIds);
-  await page.screenshot({ path: resolve(root, "artifacts/pack-recursive-carry-motion.png") });
+  await capture("artifacts/pack-incremental-carry-motion.png");
+  packState = await settled();
+  assert.equal(packState.pack.complete, false);
+  assert.equal(packState.pack.canonical, true);
+  assert.deepEqual(packState.pack.digits, [1, 0]);
+  assert.deepEqual(packState.pack.revealedLevels, [0, 1]);
+  assert.deepEqual(packState.pack.viewports.map((view) => view.level).sort((a, b) => a - b), [0, 1]);
+  assert.equal(packState.pack.numberMass.quantity, 13);
+
+  await drag(
+    packState.pack.numberMass,
+    packState.pack.slots.find((slot) => slot.level === 1),
+    13,
+  );
+  packState = await settled();
+  assert.equal(packState.pack.numberMass.quantity, 1);
+  assert.deepEqual(packState.pack.digits, [1, 0, 0]);
+  assert.deepEqual(packState.pack.revealedLevels, [0, 1, 2]);
+  assert.equal(packState.pack.places.some((place) => place.level === 1 && place.digit === 0), true);
+
+  await drag(
+    packState.pack.numberMass,
+    packState.pack.slots.find((slot) => slot.level === 0),
+    1,
+  );
   packState = await settled();
   assert.equal(packState.pack.complete, true);
-  assert.equal(packState.pack.canonical, true);
   assert.deepEqual(packState.pack.digits, [1, 0, 1]);
   assert.deepEqual(
     packState.pack.places.map(({ level, digit }) => [level, digit]).sort((a, b) => a[0] - b[0]),
     [[0, 1], [1, 0], [2, 1]],
   );
-  assert.deepEqual(packState.pack.revealedLevels, [0, 1, 2]);
   assert.deepEqual(packState.pack.viewports.map((view) => view.level).sort((a, b) => a - b), [0, 1, 2]);
-  assert.equal(packState.pack.places.some((place) => place.level === 1 && place.digit === 0), true);
   assert.equal(packState.pack.numberMass.quantity, 0);
   assert.deepEqual([...packState.pack.rawIds].sort((a, b) => a - b), originalPackIds);
   assert.equal(packState.pack.renderedDots.length, 17);
   assert.equal(new Set(packState.pack.renderedDots.map((dot) => dot.id)).size, 17);
   assert.equal(packState.status, "play");
-  await page.screenshot({ path: resolve(root, "artifacts/pack-base4-canonical.png") });
+  const packCanvasTrace = await captureCanvasTrace(),
+    packControl = packState.pack.control;
+  assert.equal(packCanvasTrace.curves, 0, "PACK carries use unit motion without an arrow curve");
+  assert.equal(
+    packCanvasTrace.labels.some(({ text }) => /^L\d+$/.test(text)),
+    false,
+    "place identity has no visible implementation label",
+  );
+  assert.equal(packControl.preview, packControl.current);
+  assert.equal(packControl.options.length, 9, "PACK exposes radix 2 through 10");
+  await capture("artifacts/pack-base4-canonical.png");
   assert.equal(packState.pack.ghosts.every((ghost) => !ghost.active), true);
 
   // Correct structure activates the lock, removes the defense, sends the same
@@ -380,7 +468,24 @@ try {
   const finalMass = packState.pack.numberMass,
     finalL0 = packState.pack.slots.find((slot) => slot.level === 0),
     beforeFinalRun = packState.runToken;
-  await drag(finalMass, finalL0, 17, false);
+  await drag(finalMass, finalL0, 17);
+  let finalProgress = await settled();
+  assert.equal(finalProgress.pack.numberMass.quantity, 12);
+  assert.deepEqual(finalProgress.pack.digits, [1, 0]);
+  await drag(
+    finalProgress.pack.numberMass,
+    finalProgress.pack.slots.find((slot) => slot.level === 1),
+    12,
+  );
+  finalProgress = await settled();
+  assert.equal(finalProgress.pack.numberMass.quantity, 2);
+  assert.deepEqual(finalProgress.pack.digits, [3, 0]);
+  await drag(
+    finalProgress.pack.numberMass,
+    finalProgress.pack.slots.find((slot) => slot.level === 0),
+    2,
+    false,
+  );
   await page.evaluate(async () => {
     window.__readFlow = (await import("./src/game.mjs")).inspect;
   });
@@ -401,9 +506,9 @@ try {
   finalPhase = await read();
   assert.equal(finalPhase.pack.base, attackBase, "the radix control is locked during attack");
   assert.equal(finalPhase.dragIds.length, 0, "Number Mass input is locked during attack");
-  await page.screenshot({ path: resolve(root, "artifacts/pack-attack.png") });
+  await capture("artifacts/pack-attack.png");
   await page.waitForFunction((token) => window.__readFlow().status === "break" || window.__readFlow().runToken !== token, beforeFinalRun);
-  await page.screenshot({ path: resolve(root, "artifacts/pack-break.png") });
+  await capture("artifacts/pack-break.png");
   const afterBreak = await settled();
   assert.ok(afterBreak.runToken > beforeFinalRun, "BREAK advances to the next problem");
   assert.equal(afterBreak.progress.pack.wins, 1);
@@ -411,11 +516,14 @@ try {
 
   // The base 4 target retains an empty middle place. Both lock orders complete.
   async function packWholeMass() {
-    const s = await settled(),
-      mass = s.pack.numberMass,
-      l0 = s.pack.slots.find((slot) => slot.level === 0);
-    await drag(mass, l0, 17, false);
-    return settled();
+    for (let gesture = 0; gesture < 36; gesture++) {
+      const s = await settled();
+      if (s.rule !== "pack" || s.status !== "play" || s.pack.complete) return s;
+      const mass = s.pack.numberMass,
+        l0 = s.pack.slots.find((slot) => slot.level === 0);
+      await drag(mass, l0, mass.quantity);
+    }
+    throw new Error("PACK Number Mass did not empty through incremental gestures");
   }
   packState = await route("pack", () => true, 3);
   assert.equal(packState.pack.ghosts.length, 2);
@@ -446,6 +554,8 @@ try {
   console.log("PACK two defense locks activate in either order; the base 4 ghost preserves its empty middle place.");
   await route("link", (p) => p.ammo[0] === 14 && p.gates[0] === 3);
   let s = await read();
+  const linkHandle = s.pieces[0].handle;
+  assert.equal(linkHandle.value, 0);
   const id = s.stage;
   for (let i = 0; i < 5; i++) await drag(s.pieces[0], s.targets[0]);
   assert.equal((await read()).stage, id);
@@ -463,6 +573,8 @@ try {
   // Real CDP touch input on the common-width handle.
   await route("gear", (p) => p.ammo[0] === 12 && p.ammo[1] === 20);
   s = await read();
+  const gearHandle = s.pieces[0].handle;
+  assert.equal(gearHandle.value, 0);
   const h = s.pieces[0].handle,
     b = await page.locator("#world").boundingBox(),
     cdp = await context.newCDPSession(page);
@@ -486,6 +598,8 @@ try {
   );
   // Keep the fun coarse selection, but distinguish deliberate fast peels.
   await route("spark", (p) => p.ammo[0] === 4 && p.ammo[1] === 5);
+  const sparkSelectorState = await read();
+  assert.ok(sparkSelectorState.pieces.every((piece) => piece.n > 0));
   let small = (await read()).pieces.find((p) => p.n === 4);
   const slow = await touchPeel(context, page, small, 32, 0, { fast: false });
   assert.equal(slow.initial.length, 4);
@@ -635,6 +749,8 @@ try {
       }
     }
     assert.equal(await page.locator('#keyboard-controls input[data-pack-radix]').count(), 1);
+    assert.equal(await page.locator('#keyboard-controls input[data-pack-radix]').getAttribute("min"), "2");
+    assert.equal(await page.locator('#keyboard-controls input[data-pack-radix]').getAttribute("max"), "10");
     await audit();
   }
 
@@ -643,32 +759,48 @@ try {
   await page.setViewportSize({ width: 320, height: 568 });
   s = await route("pack");
   await packBase(4);
-  s = await settled();
-  const touchFrom = s.pack.numberMass,
-    touchTo = s.pack.slots.find((slot) => slot.level === 0),
-    touchBox = await page.locator("#world").boundingBox(),
-    packTouch = await context.newCDPSession(page);
-  await packTouch.send("Input.dispatchTouchEvent", {
-    type: "touchStart",
-    touchPoints: [{ x: touchBox.x + touchFrom.x, y: touchBox.y + touchFrom.y }],
-  });
-  assert.equal((await read()).dragIds.length, 17, "touch selects the entire Number Mass");
-  for (let i = 1; i <= 12; i++)
+  async function touchPackFeed(level) {
+    const current = await settled(),
+      touchFrom = current.pack.numberMass,
+      touchTo = current.pack.slots.find((slot) => slot.level === level),
+      touchBox = await page.locator("#world").boundingBox(),
+      packTouch = await context.newCDPSession(page);
+    assert.ok(touchTo, `discovered touch target ${level}`);
     await packTouch.send("Input.dispatchTouchEvent", {
-      type: "touchMove",
+      type: "touchStart",
       touchPoints: [
-        {
-          x: touchBox.x + touchFrom.x + ((touchTo.x - touchFrom.x) * i) / 12,
-          y: touchBox.y + touchFrom.y + ((touchTo.y - touchFrom.y) * i) / 12,
-        },
+        { x: touchBox.x + touchFrom.x, y: touchBox.y + touchFrom.y },
       ],
     });
-  await packTouch.send("Input.dispatchTouchEvent", {
-    type: "touchEnd",
-    touchPoints: [],
-  });
-  await packTouch.detach();
-  s = await settled();
+    assert.equal(
+      (await read()).dragIds.length,
+      touchFrom.quantity,
+      "touch selects the entire Number Mass",
+    );
+    for (let i = 1; i <= 12; i++)
+      await packTouch.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: [
+          {
+            x: touchBox.x + touchFrom.x + ((touchTo.x - touchFrom.x) * i) / 12,
+            y: touchBox.y + touchFrom.y + ((touchTo.y - touchFrom.y) * i) / 12,
+          },
+        ],
+      });
+    await packTouch.send("Input.dispatchTouchEvent", {
+      type: "touchEnd",
+      touchPoints: [],
+    });
+    await packTouch.detach();
+    return settled();
+  }
+  s = await touchPackFeed(0);
+  assert.deepEqual(s.pack.digits, [1, 0]);
+  assert.equal(s.pack.numberMass.quantity, 13);
+  s = await touchPackFeed(1);
+  assert.deepEqual(s.pack.digits, [1, 0, 0]);
+  assert.equal(s.pack.numberMass.quantity, 1);
+  s = await touchPackFeed(0);
   assert.deepEqual(s.pack.digits, [1, 0, 1]);
   assert.deepEqual(s.pack.revealedLevels, [0, 1, 2]);
   for (const place of s.pack.places) {
@@ -679,7 +811,7 @@ try {
   }
   assert.equal(s.pack.numberMass.quantity, 0);
   await audit();
-  await page.screenshot({ path: resolve(root, "artifacts/pack-touch-320.png") });
+  await capture("artifacts/pack-touch-320.png");
   for (const rule of ["link", "gear"]) {
     s = await route(
       rule,
@@ -688,9 +820,7 @@ try {
         : (p) => p.ammo[0] === 14 && p.gates[0] === 3,
     );
     await width(s.pieces[0].id, rule === "gear" ? 4 : 3);
-    await page.screenshot({
-      path: resolve(root, `artifacts/flow-${rule}.png`),
-    });
+    await capture(`artifacts/flow-${rule}.png`);
   }
   await page.goto(`${base}/classic.html`);
   await page.locator("#modes").waitFor();
@@ -714,7 +844,7 @@ try {
   await bp.locator('[data-rule="gear"]').click();
   await bp.waitForTimeout(150);
   assert.match(await bp.locator("#stage-name").textContent(), /ギア/);
-  await blocked.close();
+  await blocked.close().catch(() => {});
   assert.deepEqual(errors, []);
   console.log(
     "Touch, cancellation, retry adaptation, persistence, pause/navigation, responsive layouts, classic and disabled storage passed.",
@@ -723,7 +853,8 @@ try {
   await mkdir(resolve(root, "artifacts"), { recursive: true });
   await page.screenshot({
     path: resolve(root, "artifacts/browser-failure.png"),
-  });
+    timeout: 5000,
+  }).catch(() => {});
   console.error(await read().catch(() => null));
   console.error(errors);
   throw error;

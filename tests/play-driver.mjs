@@ -2,6 +2,19 @@ import assert from "node:assert/strict";
 import { generateProblem, PROBLEM_BANK } from "../src/stages.mjs";
 export async function instrument(context) {
   await context.addInitScript(() => {
+    window.__canvasTrace = { enabled: false, labels: [], curves: 0 };
+    const fillText = CanvasRenderingContext2D.prototype.fillText,
+      bezierCurveTo = CanvasRenderingContext2D.prototype.bezierCurveTo;
+    CanvasRenderingContext2D.prototype.fillText = function (text, x, y, ...rest) {
+      if (this.canvas?.id === "world" && window.__canvasTrace.enabled)
+        window.__canvasTrace.labels.push({ text: String(text), x, y });
+      return fillText.call(this, text, x, y, ...rest);
+    };
+    CanvasRenderingContext2D.prototype.bezierCurveTo = function (...args) {
+      if (this.canvas?.id === "world" && window.__canvasTrace.enabled)
+        window.__canvasTrace.curves++;
+      return bezierCurveTo.apply(this, args);
+    };
     const q = new URLSearchParams(location.search);
     if (q.has("fixtureSeed")) {
       Date.now = () => Number(q.get("fixtureSeed"));
@@ -26,15 +39,19 @@ export function driver(page, base) {
     await page.evaluate(async () => {
       window.__readFlow = (await import("./src/game.mjs")).inspect;
     });
-    await page.waitForFunction(() => {
-      const s = window.__readFlow();
-      return (
-        !s.busy &&
-        !s.moving &&
-        s.width > 0 &&
-        (s.status === "play" || (s.rule === "pack" && s.status === "won"))
-      );
-    });
+    await page.waitForFunction(
+      () => {
+        const s = window.__readFlow();
+        return (
+          !s.busy &&
+          !s.moving &&
+          s.width > 0 &&
+          (s.status === "play" || (s.rule === "pack" && s.status === "won"))
+        );
+      },
+      null,
+      { polling: 100, timeout: 60000 },
+    );
     return read();
   }
   async function route(rule, predicate = () => true, difficulty) {
@@ -76,7 +93,7 @@ export function driver(page, base) {
       );
     return s;
   }
-  async function drag(from, to, n = from.n, wait = true) {
+  async function drag(from, to, n = from.n, wait = true, steps = 12) {
     const b = await page.locator("#world").boundingBox(),
       s = await read(),
       start = from.grip || from,
@@ -95,7 +112,7 @@ export function driver(page, base) {
     await page.mouse.down();
     if (n !== undefined)
       assert.equal((await read()).dragIds.length, n, `selected ${n}`);
-    await page.mouse.move(b.x + end.x, b.y + end.y, { steps: 12 });
+    await page.mouse.move(b.x + end.x, b.y + end.y, { steps });
     await page.mouse.up();
     if (wait) {
       await settled();
