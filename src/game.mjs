@@ -12,6 +12,7 @@ import {
   setPackBase,
   beginPackTransition,
   settlePackTransition,
+  packCompletionNotation,
   matchPackTarget,
   beginPackAttack,
   resolvePackAttackPayload,
@@ -352,7 +353,13 @@ async function transferPackMass(level) {
   if (token !== epoch) return false;
   settlePackTransition(run);
   selected = null;
-  announce("");
+  const notation = packCompletionNotation(run);
+  if (notation) {
+    world.showPackCompletionNotation(notation);
+    announce(`${notation.quantity} は ${notation.radix}進数で ${notation.digits}`);
+  } else {
+    announce("");
+  }
   const match = matchPackTarget(run);
   if (match.ok) {
     const activating = world.playPackTargetActivation();
