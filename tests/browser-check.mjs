@@ -426,6 +426,13 @@ try {
   assert.deepEqual(packState.pack.places.map(({ level, n }) => [level, n]), [[0, 0]]);
   assert.deepEqual(packState.pack.digits, [0]);
   assert.deepEqual(packState.pack.directInputLevels, [0]);
+  assert.equal(packState.pack.notation, null);
+  const resetTrace = await captureCanvasTrace();
+  assert.equal(
+    resetTrace.labels.some(({ text }) => text.toLowerCase() === "number mass"),
+    false,
+    "PACK source dots need no Number Mass explanation label",
+  );
   await capture("artifacts/pack-radix-reset.png");
 
   const base4Mass = packState.pack.numberMass,
@@ -447,6 +454,7 @@ try {
   assert.deepEqual(packState.pack.revealedLevels, [0, 1]);
   assert.deepEqual(packState.pack.viewports.map((view) => view.level).sort((a, b) => a - b), [0, 1]);
   assert.equal(packState.pack.numberMass.quantity, 13);
+  assert.equal(packState.pack.notation, null, "partial packing has no radix notation");
 
   await drag(
     packState.pack.numberMass,
@@ -458,6 +466,7 @@ try {
   assert.deepEqual(packState.pack.digits, [1, 0, 0]);
   assert.deepEqual(packState.pack.revealedLevels, [0, 1, 2]);
   assert.equal(packState.pack.places.some((place) => place.level === 1 && place.digit === 0), true);
+  assert.equal(packState.pack.notation, null, "unfinished recursive structure stays blank");
 
   await drag(
     packState.pack.numberMass,
@@ -484,6 +493,15 @@ try {
   assert.equal(packState.pack.renderedDots.length, 17);
   assert.equal(new Set(packState.pack.renderedDots.map((dot) => dot.id)).size, 17);
   assert.equal(packState.status, "play");
+  assert.equal(packState.pack.notation?.phase, "equality");
+  assert.deepEqual(
+    {
+      quantity: packState.pack.notation?.quantity,
+      digits: packState.pack.notation?.digits,
+      radix: packState.pack.notation?.radix,
+    },
+    { quantity: 17, digits: "101", radix: "4" },
+  );
   const packCanvasTrace = await captureCanvasTrace(),
     packControl = packState.pack.control;
   assert.equal(packCanvasTrace.curves, 0, "PACK carries use unit motion without an arrow curve");
@@ -492,6 +510,44 @@ try {
     false,
     "place identity has no visible implementation label",
   );
+  assert.equal(
+    packCanvasTrace.labels.some(({ text }) => text === "17 ="),
+    true,
+    "completed wrong radix shows equality feedback",
+  );
+  assert.equal(
+    packCanvasTrace.labels.some(({ text }) => text === "101"),
+    true,
+    "middle zero is rendered in the completed notation",
+  );
+  await page.waitForTimeout(1350);
+  packState = await read();
+  assert.equal(packState.pack.notation?.phase, "compact");
+  const compactTrace = await captureCanvasTrace();
+  assert.equal(compactTrace.labels.some(({ text }) => text === "17 ="), false);
+  assert.equal(compactTrace.labels.some(({ text }) => text === "101"), true);
+
+  for (const [w, h] of [[320, 568], [390, 844], [412, 915], [844, 390]]) {
+    await page.setViewportSize({ width: w, height: h });
+    await page.waitForTimeout(80);
+    const responsivePack = await read(),
+      notation = responsivePack.pack.notation,
+      readoutBottom = Math.max(
+        ...responsivePack.pack.slots.map(
+          (slot) => slot.y + slot.frameRadius + 23 + 9,
+        ),
+      );
+    assert.equal(notation?.phase, "compact");
+    assert.ok(notation.left >= 0 && notation.right <= responsivePack.width);
+    assert.ok(notation.top > readoutBottom, "notation stays below place readouts");
+    assert.ok(
+      !responsivePack.pack.control || notation.bottom < responsivePack.pack.control.y - 20,
+      "notation stays clear of the radix selector",
+    );
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(80);
+  packState = await read();
   assert.equal(packControl.preview, packControl.current);
   assert.equal(packControl.options.length, 9, "PACK exposes radix 2 through 10");
   await capture("artifacts/pack-base4-canonical.png");
@@ -501,6 +557,7 @@ try {
   // through the identity-preserving attack before BREAK advances the run.
   await packBase(5);
   packState = await settled();
+  assert.equal(packState.pack.notation, null, "radix change clears the old notation");
   assert.equal(packState.pack.numberMass.quantity, 17);
   assert.deepEqual([...packState.pack.rawIds].sort((a, b) => a - b), originalPackIds);
   const finalMass = packState.pack.numberMass,
@@ -533,6 +590,8 @@ try {
   );
   let finalPhase = await read();
   assert.equal(finalPhase.pack.targetActivated, true);
+  assert.equal(finalPhase.pack.notation?.digits, "32");
+  assert.equal(finalPhase.pack.notation?.radix, "5");
   assert.equal(await page.locator('#keyboard-controls input[data-pack-radix]').count(), 0);
   assert.equal(finalPhase.pack.control, null);
   const attackBase = finalPhase.pack.base,
@@ -549,6 +608,7 @@ try {
   await capture("artifacts/pack-break.png");
   const afterBreak = await settled();
   assert.ok(afterBreak.runToken > beforeFinalRun, "BREAK advances to the next problem");
+  assert.equal(afterBreak.pack.notation, null, "next problem clears prior notation");
   assert.equal(afterBreak.progress.pack.wins, 1);
   console.log("PACK single target, wrong-radix exploration, radix reset, activation, attack, BREAK, and adaptive progression verified.");
 
@@ -590,6 +650,12 @@ try {
   assert.equal(packState.pack.places.find((place) => place.level === 1).digit, 0);
 
   await page.emulateMedia({ reducedMotion: "reduce" });
+  packState = await route("pack", () => true, 3);
+  await packBase(4);
+  packState = await packWholeMass();
+  assert.equal(packState.pack.notation?.digits, "101");
+  await page.waitForTimeout(240);
+  assert.equal((await read()).pack.notation?.phase, "compact");
   packState = await route("pack", () => true, 3);
   await packBase(5);
   const reducedMotionRun = packState.runToken;

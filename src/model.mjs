@@ -53,6 +53,22 @@ export function packCanonicalDigits(quantity, radix) {
   return canonicalDigitsForQuantity(quantity, radix);
 }
 
+export function formatPackRadixDigits(digits, radix) {
+  if (
+    !Array.isArray(digits) ||
+    !digits.length ||
+    !Number.isInteger(radix) ||
+    radix < 2 ||
+    digits.some(
+      (digit) => !Number.isInteger(digit) || digit < 0 || digit >= radix,
+    )
+  )
+    throw new RangeError("PACK notation requires canonical digits and a valid radix");
+  const first = digits.findIndex((digit) => digit !== 0),
+    normalized = first === -1 ? [0] : digits.slice(first);
+  return { digits: normalized.join(""), radix: String(radix) };
+}
+
 function createPackTarget(stage) {
   const quantity = stage.quantity || stage.ammo.reduce((sum, n) => sum + n, 0),
     radix = stage.targetRadix;
@@ -210,6 +226,25 @@ export function packDigits(run) {
   return Array.from({ length: max + 1 }, (_, level) =>
     counts.get(level) || 0,
   ).reverse();
+}
+
+export function packCompletionNotation(run) {
+  if (
+    run?.stage?.area !== "pack" ||
+    run.status !== "play" ||
+    run.pack.phase !== "pack" ||
+    run.pack.numberMassRawIds.length !== 0 ||
+    run.pack.settled !== true ||
+    !isCanonicalPack(run)
+  )
+    return null;
+  const formatted = formatPackRadixDigits(packDigits(run), run.pack.base);
+  return {
+    quantity: Number.isInteger(run.stage.quantity)
+      ? run.stage.quantity
+      : run.dots.length,
+    ...formatted,
+  };
 }
 
 export function matchPackTarget(run) {

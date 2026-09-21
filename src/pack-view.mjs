@@ -33,6 +33,7 @@ export class PackWorld extends FlowWorld {
     this.packImpacts = [];
     this.activePackProjectileId = null;
     this.packControlX = null;
+    this.packNotation = null;
   }
 
   setRun(run) {
@@ -47,6 +48,7 @@ export class PackWorld extends FlowWorld {
     this.packImpacts = [];
     this.activePackProjectileId = null;
     this.packControlX = null;
+    this.packNotation = null;
     super.setRun(run);
     if (run?.stage.area === "pack")
       this.revealedLevels = new Set(run.pack.discoveredLevels);
@@ -246,6 +248,7 @@ export class PackWorld extends FlowWorld {
 
   async radixChanged(from, to) {
     if (from === to || this.run?.stage.area !== "pack") return false;
+    this.clearPackNotation();
     this.radixTransition = this.motion
       ? { from, to, started: this.clock, duration: 220 }
       : null;
@@ -278,6 +281,73 @@ export class PackWorld extends FlowWorld {
       from: transition.from,
       to: transition.to,
       progress: clamp((this.clock - transition.started) / transition.duration, 0, 1),
+    };
+  }
+
+  showPackCompletionNotation(notation) {
+    if (!notation || this.run?.stage.area !== "pack") return false;
+    const key = `${notation.quantity}:${notation.digits}:${notation.radix}`;
+    if (this.packNotation?.key === key) return false;
+    this.packNotation = {
+      ...notation,
+      key,
+      started: this.clock,
+    };
+    return true;
+  }
+
+  clearPackNotation() {
+    const hadNotation = !!this.packNotation;
+    this.packNotation = null;
+    return hadNotation;
+  }
+
+  packNotationPresentation(layout) {
+    const notation = this.packNotation;
+    if (!notation) return null;
+    const elapsed = Math.max(0, this.clock - notation.started),
+      equalityHold = this.motion ? 1050 : 120,
+      fadeDuration = this.motion ? 180 : 40,
+      prefixAlpha = elapsed <= equalityHold
+        ? 1
+        : clamp(1 - (elapsed - equalityHold) / fadeDuration, 0, 1),
+      phase = elapsed < equalityHold + fadeDuration ? "equality" : "compact",
+      mainSize = 17,
+      subscriptSize = 11,
+      prefix = `${notation.quantity} =`,
+      c = this.ctx;
+    c.save();
+    c.font = `600 ${mainSize}px ui-rounded,system-ui,sans-serif`;
+    const digitWidth = c.measureText(notation.digits).width,
+      prefixWidth = c.measureText(prefix).width;
+    c.font = `600 ${subscriptSize}px ui-rounded,system-ui,sans-serif`;
+    const radixWidth = c.measureText(notation.radix).width;
+    c.restore();
+    const notationWidth = digitWidth + 1 + radixWidth,
+      notationStart = this.w / 2 - notationWidth / 2,
+      prefixGap = 6,
+      placeBottom = Math.max(
+        0,
+        ...layout.slots.map((slot) => slot.y + slot.frameRadius),
+      ),
+      control = this.packControl(),
+      y = Math.min(placeBottom + 50, (control?.y ?? this.h - 24) - 38),
+      left = phase === "compact"
+        ? notationStart
+        : notationStart - prefixGap - prefixWidth,
+      right = notationStart + notationWidth;
+    return {
+      quantity: notation.quantity,
+      digits: notation.digits,
+      radix: notation.radix,
+      phase,
+      prefixAlpha,
+      x: this.w / 2,
+      y,
+      left,
+      right,
+      top: y - mainSize * 0.6,
+      bottom: y + Math.max(mainSize * 0.55, 5 + subscriptSize * 0.5),
     };
   }
 
@@ -629,7 +699,8 @@ export class PackWorld extends FlowWorld {
         ? [...(this.previewPackState.lowToHighDigits || [0])].reverse()
         : packDigits(this.run),
       control = this.packControl(),
-      target = this.packTargetLayout();
+      target = this.packTargetLayout(),
+      notation = this.packNotationPresentation(layout);
     return {
       width: this.w,
       height: this.h,
@@ -712,6 +783,7 @@ export class PackWorld extends FlowWorld {
         ),
         canonical: isCanonicalPack(this.run),
         complete: layout.mass.quantity === 0,
+        notation,
         places,
         control,
       },
@@ -872,6 +944,7 @@ export class PackWorld extends FlowWorld {
     this.drawPackUnitFrames(layout, "stroke");
     this.drawNumberMass(layout.mass);
     this.drawPackDigitReadouts(layout);
+    this.drawPackNotation(layout);
     this.drawPackControl();
     c.restore();
   }
@@ -891,7 +964,6 @@ export class PackWorld extends FlowWorld {
     c.stroke();
     c.setLineDash([]);
     drawNumberReadout(this, mass.quantity, mass.x, mass.y - radius - 14, this.color, 16);
-    this.label("Number Mass", mass.x, mass.y + mass.radius + 25, this.color + "b8", 11);
     c.restore();
   }
 
@@ -914,6 +986,36 @@ export class PackWorld extends FlowWorld {
       );
       c.restore();
     }
+  }
+
+  drawPackNotation(layout) {
+    const notation = this.packNotationPresentation(layout);
+    if (!notation) return;
+    const c = this.ctx,
+      mainSize = 17,
+      subscriptSize = 11,
+      mainAlpha = 0.76;
+    c.save();
+    c.textBaseline = "middle";
+    c.textAlign = "left";
+    c.fillStyle = this.color + "d8";
+    c.font = `600 ${mainSize}px ui-rounded,system-ui,sans-serif`;
+    const digitWidth = c.measureText(notation.digits).width;
+    c.font = `600 ${subscriptSize}px ui-rounded,system-ui,sans-serif`;
+    const radixWidth = c.measureText(notation.radix).width,
+      digitStart = notation.x - (digitWidth + 1 + radixWidth) / 2;
+    c.globalAlpha = mainAlpha;
+    c.font = `600 ${mainSize}px ui-rounded,system-ui,sans-serif`;
+    c.fillText(notation.digits, digitStart, notation.y);
+    c.font = `600 ${subscriptSize}px ui-rounded,system-ui,sans-serif`;
+    c.fillText(notation.radix, digitStart + digitWidth + 1, notation.y + 5);
+    if (notation.prefixAlpha > 0) {
+      c.globalAlpha = mainAlpha * notation.prefixAlpha;
+      c.font = `600 ${mainSize}px ui-rounded,system-ui,sans-serif`;
+      c.textAlign = "right";
+      c.fillText(`${notation.quantity} =`, digitStart - 6, notation.y);
+    }
+    c.restore();
   }
 
   drawPackUnitFrames(layout, mode) {

@@ -16,6 +16,8 @@ import {
   setPackBase,
   isCanonicalPack,
   packCanonicalDigits,
+  formatPackRadixDigits,
+  packCompletionNotation,
   packRawQuantityForLevel,
   matchPackTarget,
   beginPackTransition,
@@ -318,6 +320,57 @@ test("PACK problems define exactly one hidden target and preserve its radix-neut
   }
 });
 
+test("PACK radix notation preserves zeros and only appears for settled completion", () => {
+  const expected = new Map([
+    [2, { digits: "10001", radix: "2" }],
+    [3, { digits: "122", radix: "3" }],
+    [4, { digits: "101", radix: "4" }],
+    [5, { digits: "32", radix: "5" }],
+    [10, { digits: "17", radix: "10" }],
+  ]);
+  for (const [radix, notation] of expected)
+    assert.deepEqual(
+      formatPackRadixDigits(packCanonicalDigits(17, radix), radix),
+      notation,
+    );
+  assert.deepEqual(
+    formatPackRadixDigits([0, 0, 1, 0, 1], 4),
+    { digits: "101", radix: "4" },
+    "leading zeros are omitted while the middle zero remains",
+  );
+
+  const run = createRun(generateProblem("pack", 3, "notation-gating"));
+  assert.equal(packCompletionNotation(run), null, "unpacked Number Mass stays blank");
+  assert.ok(setPackBase(run, 4));
+  assert.ok(pourPackMass(run, 0).ok);
+  assert.equal(packCompletionNotation(run), null, "partial packing stays blank");
+  assert.ok(pourPackMass(run, 1).ok);
+  assert.equal(packCompletionNotation(run), null, "recursive carry with mass left stays blank");
+  assert.ok(pourPackMass(run, 0).ok);
+  assert.equal(run.pack.numberMassRawIds.length, 0);
+  assert.ok(beginPackTransition(run));
+  assert.equal(packCompletionNotation(run), null, "carry presentation must settle first");
+  assert.ok(settlePackTransition(run));
+  assert.deepEqual(packCompletionNotation(run), {
+    quantity: 17,
+    digits: "101",
+    radix: "4",
+  });
+  assert.equal(matchPackTarget(run).ok, false, "wrong radix remains mathematically valid");
+
+  run.pack.active.push("missing-node");
+  assert.equal(packCompletionNotation(run), null, "unstable hierarchy stays blank");
+  run.pack.active.pop();
+  assert.ok(setPackBase(run, 3));
+  assert.equal(packCompletionNotation(run), null, "radix reset clears completion");
+  pourUntilMassEmpty(run, 0);
+  assert.deepEqual(packCompletionNotation(run), {
+    quantity: 17,
+    digits: "122",
+    radix: "3",
+  });
+});
+
 test("PACK target matching requires a complete settled canonical structure", () => {
   const run = createRun({ ...generateProblem("pack", 3, "settle"), targetRadix: 4 });
   assert.equal(matchPackTarget(run).ok, false, "Number Mass is not yet packed");
@@ -360,6 +413,11 @@ test("PACK target activation is single-shot and attack resolves the original ide
   assert.ok(setPackBase(run, 5));
   pourUntilMassEmpty(run, 0);
   settlePackTransition(run);
+  assert.deepEqual(packCompletionNotation(run), {
+    quantity: 17,
+    digits: "32",
+    radix: "5",
+  });
   assert.equal(matchPackTarget(run).ok, true);
   assert.equal(matchPackTarget(run).ok, false, "rebuilding the target adds no progress");
   assert.equal(buildPackAttackPlan(run).ok, true);
