@@ -303,11 +303,18 @@ try {
   await page.emulateMedia({ reducedMotion: "no-preference" });
   // One ghost shows only a defense silhouette; the player experiments with
   // radices until the same Number Mass forms that structure.
-  let packState = await route("pack", () => true, 1);
+  let packState = await route(
+    "pack",
+    (problem) =>
+      problem.quantity === 17 &&
+      problem.targetRadix === 5 &&
+      problem.startRadix === 3,
+    3,
+  );
   await mkdir(resolve(root, "artifacts"), { recursive: true });
   await capture("artifacts/pack-mass-initial.png");
   assert.equal(packState.total, 17);
-  assert.equal(packState.progress.pack.difficulty, 1);
+  assert.equal(packState.progress.pack.difficulty, 3);
   assert.equal(packState.status, "play");
   assert.equal(packState.pack.base, 3);
   assert.equal(packState.pack.control.current, 3);
@@ -354,6 +361,35 @@ try {
     [[0, 0.25]],
     "zero raw quantity remains visible at the subdued baseline opacity",
   );
+  const retryStage = packState.stage,
+    retryRunToken = packState.runToken,
+    retryTargetShape = packState.pack.targetGhost.places.map(({ unitCount, empty }) => [unitCount, empty]),
+    retryProgress = structuredClone(packState.progress.pack),
+    retryRecent = [...retryProgress.recent];
+  await packBase(4);
+  packState = await read();
+  await drag(
+    packState.pack.numberMass,
+    packState.pack.slots.find((slot) => slot.level === 0),
+    17,
+  );
+  assert.notEqual((await read()).pack.numberMass.quantity, 17, "retry fixture has a partially changed run");
+  await page.locator("#pause").click();
+  await page.locator('[data-menu="retry"]').click();
+  packState = await settled();
+  assert.notEqual(packState.runToken, retryRunToken);
+  assert.equal(packState.stage, retryStage);
+  assert.equal(packState.total, 17);
+  assert.equal(packState.pack.base, 3);
+  assert.equal(packState.pack.numberMass.quantity, 17);
+  assert.deepEqual(
+    packState.pack.targetGhost.places.map(({ unitCount, empty }) => [unitCount, empty]),
+    retryTargetShape,
+  );
+  assert.equal(packState.progress.pack.difficulty, retryProgress.difficulty);
+  assert.equal(packState.progress.pack.wins, retryProgress.wins);
+  assert.equal(packState.progress.pack.retries, retryProgress.retries);
+  assert.deepEqual(packState.progress.pack.recent, retryRecent);
   const originalPackIds = [...packState.pack.originalRawIds],
     firstMass = packState.pack.numberMass,
     firstL0 = packState.pack.slots.find((slot) => slot.level === 0);
@@ -715,7 +751,25 @@ try {
   assert.equal(afterBreak.pack.notation, null, "next problem clears prior notation");
   assert.ok(afterBreak.pack.places.every((place) => place.readoutOpacity === 0.25), "next problem clears prior raw-quantity emphasis");
   assert.equal(afterBreak.progress.pack.wins, 1);
-  console.log("PACK single target, wrong-radix exploration, radix reset, activation, attack, BREAK, and adaptive progression verified.");
+  assert.equal(afterBreak.progress.pack.difficulty, 3);
+  assert.notEqual(afterBreak.total, 17, "the next generated round changes quantity");
+  assert.notEqual(afterBreak.stage, retryStage, "the next round uses a different quantity/radix pair");
+  const secondQuantity = afterBreak.total,
+    secondId = afterBreak.stage,
+    afterSecondBreak = await solveCurrent();
+  assert.ok(afterSecondBreak.runToken > afterBreak.runToken);
+  assert.notEqual(afterSecondBreak.total, secondQuantity);
+  assert.notEqual(afterSecondBreak.stage, secondId);
+  assert.equal(afterSecondBreak.progress.pack.wins, 2);
+  assert.equal(afterSecondBreak.progress.pack.difficulty, 3);
+  const thirdQuantity = afterSecondBreak.total,
+    afterThirdBreak = await solveCurrent();
+  assert.ok(afterThirdBreak.runToken > afterSecondBreak.runToken);
+  assert.notEqual(afterThirdBreak.total, thirdQuantity);
+  assert.equal(afterThirdBreak.progress.pack.wins, 0);
+  assert.equal(afterThirdBreak.progress.pack.difficulty, 4);
+  assert.equal(new Set([17, secondQuantity, thirdQuantity]).size, 3);
+  console.log("PACK generated problem, retry, wrong-radix exploration, reset, attack, BREAK, and next-round progression verified.");
 
   // A single radix-4 target retains its empty middle place, then activates once.
   async function packWholeMass() {
@@ -739,7 +793,11 @@ try {
     }
     throw new Error("PACK Number Mass did not empty through incremental gestures");
   }
-  packState = await route("pack", () => true, 3);
+  packState = await route(
+    "pack",
+    (problem) => problem.quantity === 17 && problem.targetRadix === 5,
+    3,
+  );
   assert.equal(packState.pack.targetGhost.places.length, 2);
   assert.deepEqual(
     packState.pack.targetGhost.places.map((place) => place.unitCount),
@@ -755,7 +813,11 @@ try {
   assert.equal(packState.pack.places.find((place) => place.level === 1).digit, 0);
 
   await page.emulateMedia({ reducedMotion: "reduce" });
-  packState = await route("pack", () => true, 3);
+  packState = await route(
+    "pack",
+    (problem) => problem.quantity === 17 && problem.targetRadix === 5,
+    3,
+  );
   assert.ok(packState.pack.places.every((place) => place.readoutOpacity === 0.25));
   await packBase(4);
   packState = await packWholeMass();
@@ -765,7 +827,11 @@ try {
   assert.ok((await read()).pack.places.every((place) => place.readoutOpacity === 0.25));
   await page.waitForTimeout(240);
   assert.equal((await read()).pack.notation?.phase, "compact");
-  packState = await route("pack", () => true, 3);
+  packState = await route(
+    "pack",
+    (problem) => problem.quantity === 17 && problem.targetRadix === 5,
+    3,
+  );
   await packBase(5);
   const reducedMotionRun = packState.runToken;
   packState = await packWholeMass();
@@ -942,7 +1008,7 @@ try {
   for (const [w, h] of [[320, 568], [390, 844], [412, 915], [844, 390]]) {
     await page.setViewportSize({ width: w, height: h });
     s = await route("pack", () => true, 5);
-    assert.equal(s.pack.targetGhost.places.length, 2);
+    assert.ok(s.pack.targetGhost.places.length >= 2 && s.pack.targetGhost.places.length <= 5);
     assert.equal("camera" in s.pack, false);
     assert.equal("ghosts" in s.pack, false);
     assert.equal("locks" in s.pack, false);
@@ -987,12 +1053,37 @@ try {
   // A dense radix-10 unit keeps every raw identity inside its shared frame;
   // the dots may become small as the same recursive geometry repeats.
   await page.setViewportSize({ width: 320, height: 568 });
+  s = await route("pack", (problem) => problem.quantity === 31 && problem.targetRadix === 10, 5);
+  await packBase(2);
+  s = await packWholeMass();
+  assert.deepEqual(s.pack.digits, [1, 1, 1, 1, 1]);
+  assert.equal(s.pack.places.length, 5);
+  assert.equal(s.pack.numberMass.quantity, 0);
+  assert.deepEqual(
+    { quantity: s.pack.notation?.quantity, digits: s.pack.notation?.digits, radix: s.pack.notation?.radix },
+    { quantity: 31, digits: "11111", radix: "2" },
+  );
+  assert.equal(s.pack.rawIds.length, 31);
+  assert.equal(new Set(s.pack.rawIds).size, 31);
+  await audit();
+  for (const [w, h] of [[320, 568], [390, 844], [412, 915], [844, 390]]) {
+    await page.setViewportSize({ width: w, height: h });
+    const widePack = await settled();
+    assert.equal(widePack.pack.places.length, 5);
+    assert.ok(widePack.pack.slots.every((slot) =>
+      slot.x - slot.frameRadius >= 0 &&
+      slot.x + slot.frameRadius <= widePack.width &&
+      slot.y - slot.frameRadius >= 0 &&
+      slot.y + slot.frameRadius + 35 < widePack.height,
+    ));
+  }
+
   s = await route("pack", () => true, 5);
   await packBase(10);
   s = await settled();
   const base10Mass = s.pack.numberMass,
     base10Slot = s.pack.slots.find((slot) => slot.level === 0);
-  await drag(base10Mass, base10Slot, 17);
+  await drag(base10Mass, base10Slot, base10Mass.quantity);
   s = await settled();
   const upperTen = s.pack.items.find((item) => item.level === 1);
   assert.ok(upperTen, "base 10 creates a visible upper unit");
@@ -1030,7 +1121,11 @@ try {
   // Native touch stream on the smallest portrait layout, then verify all
   // discovered place readouts still fit after L1 and L2 appear.
   await page.setViewportSize({ width: 320, height: 568 });
-  s = await route("pack");
+  s = await route(
+    "pack",
+    (problem) => problem.quantity === 17 && problem.targetRadix === 5,
+    3,
+  );
   await packBase(4);
   async function touchPackFeed(level) {
     const current = await settled(),
