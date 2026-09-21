@@ -360,6 +360,7 @@ try {
     0.25,
     "the raw quantity text itself is not a touch target",
   );
+  assert.equal((await read()).dragIds.length, 0, "the overlapping Number Mass hit area ignores the readout text");
   await touchEnd();
   const originalPackIds = [...packState.pack.originalRawIds],
     firstMass = packState.pack.numberMass,

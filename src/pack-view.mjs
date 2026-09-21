@@ -334,6 +334,22 @@ export class PackWorld extends FlowWorld {
       .sort((a, b) => a.distance - b.distance)[0]?.level ?? null;
   }
 
+  isPackReadoutTextAt(x, y) {
+    if (this.run?.stage.area !== "pack") return false;
+    const c = this.ctx;
+    c.save();
+    c.font = "600 17px ui-rounded,system-ui,sans-serif";
+    const hit = this.packLayout().levels.some(({ slot, rawQuantity }) => {
+      const width = c.measureText(String(rawQuantity)).width;
+      return (
+        Math.abs(x - slot.x) <= width / 2 + 4 &&
+        Math.abs(y - (slot.y + slot.frameRadius + 23)) <= 12
+      );
+    });
+    c.restore();
+    return hit;
+  }
+
   beginPackReadoutPointer(x, y) {
     if (this.run?.stage.area !== "pack") return false;
     this.packReadoutPointerActive = true;
@@ -932,6 +948,7 @@ export class PackWorld extends FlowWorld {
 
   hit(x, y) {
     if (this.run?.stage.area !== "pack") return super.hit(x, y);
+    if (this.isPackReadoutTextAt(x, y)) return null;
     const mass = this.packLayout().mass;
     if (mass.quantity && Math.hypot(x - mass.x, y - mass.y) <= Math.max(36, mass.radius + 13))
       return {
