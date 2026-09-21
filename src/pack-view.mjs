@@ -28,10 +28,8 @@ export class PackWorld extends FlowWorld {
     this.boundaryVisuals = new Map();
     this.boundaryClock = 0;
     this.previewPackState = null;
-    this.carryReadoutHighlights = new Map();
-    this.packReadoutPointerActive = false;
-    this.activePackReadoutLevel = null;
-    this.packReadoutRelease = null;
+    this.previousReadoutQuantities = new Map();
+    this.recentReadoutChanges = new Map();
     this.massAnchorOverride = null;
     this.packImpacts = [];
     this.activePackProjectileId = null;
@@ -307,99 +305,47 @@ export class PackWorld extends FlowWorld {
   }
 
   clearPackReadoutPresentation() {
-    this.carryReadoutHighlights.clear();
-    this.packReadoutPointerActive = false;
-    this.activePackReadoutLevel = null;
-    this.packReadoutRelease = null;
-  }
-
-  packPlaceAt(x, y) {
-    if (this.run?.stage.area !== "pack") return null;
-    const cornerRadius = 9;
-    return this.packLayout().slots
-      .map((slot) => {
-        const dx = Math.abs(x - slot.x),
-          dy = Math.abs(y - slot.y),
-          radius = slot.frameRadius + 3,
-          corner = Math.min(cornerRadius, radius),
-          inside =
-            dx <= radius &&
-            dy <= radius &&
-            (dx <= radius - corner ||
-              dy <= radius - corner ||
-              Math.hypot(dx - (radius - corner), dy - (radius - corner)) <= corner);
-        return inside ? { level: slot.level, distance: Math.hypot(dx, dy) } : null;
-      })
-      .filter(Boolean)
-      .sort((a, b) => a.distance - b.distance)[0]?.level ?? null;
-  }
-
-  isPackReadoutTextAt(x, y) {
-    if (this.run?.stage.area !== "pack") return false;
-    const c = this.ctx;
-    c.save();
-    c.font = "600 17px ui-rounded,system-ui,sans-serif";
-    const hit = this.packLayout().levels.some(({ slot, rawQuantity }) => {
-      const width = c.measureText(String(rawQuantity)).width;
-      return (
-        Math.abs(x - slot.x) <= width / 2 + 4 &&
-        Math.abs(y - (slot.y + slot.frameRadius + 23)) <= 12
-      );
-    });
-    c.restore();
-    return hit;
-  }
-
-  beginPackReadoutPointer(x, y) {
-    if (this.run?.stage.area !== "pack") return false;
-    this.packReadoutPointerActive = true;
-    return this.movePackReadoutPointer(x, y);
-  }
-
-  movePackReadoutPointer(x, y) {
-    if (!this.packReadoutPointerActive) return false;
-    this.activePackReadoutLevel = this.packPlaceAt(x, y);
-    if (this.activePackReadoutLevel !== null) this.packReadoutRelease = null;
-    return this.activePackReadoutLevel !== null;
-  }
-
-  endPackReadoutPointer() {
-    if (!this.packReadoutPointerActive) return false;
-    const level = this.activePackReadoutLevel;
-    this.packReadoutPointerActive = false;
-    this.activePackReadoutLevel = null;
-    this.packReadoutRelease = level === null ? null : { level, started: this.clock };
-    return level !== null;
-  }
-
-  cancelPackReadoutPointer() {
-    this.packReadoutPointerActive = false;
-    this.activePackReadoutLevel = null;
-    this.packReadoutRelease = null;
+    this.previousReadoutQuantities.clear();
+    this.recentReadoutChanges.clear();
   }
 
   packReadoutOpacity(level) {
     const normal = 0.25;
-    if (this.packReadoutPointerActive && this.activePackReadoutLevel === level)
-      return 0.70;
-    const carry = this.carryReadoutHighlights.get(level);
-    if (carry) {
-      const elapsed = Math.max(0, this.clock - carry.started),
-        hold = this.motion ? 500 : 350,
-        fade = this.motion ? 300 : 100;
-      if (elapsed <= hold) return 0.75;
-      if (elapsed < hold + fade)
-        return 0.25 + 0.5 * (1 - (elapsed - hold) / fade);
-      this.carryReadoutHighlights.delete(level);
-    }
-    const released = this.packReadoutRelease;
-    if (released?.level === level) {
-      const elapsed = Math.max(0, this.clock - released.started),
-        fade = this.motion ? 160 : 90;
-      if (elapsed < fade) return 0.25 + 0.45 * (1 - elapsed / fade);
-      this.packReadoutRelease = null;
-    }
+    if (
+      this.drag?.kind === "pack-mass" &&
+      this.hover?.kind === "pack-input" &&
+      this.hover.level === level
+    ) return 0.74;
+    const recent = this.recentReadoutChanges.get(level);
+    if (!recent) return normal;
+    const elapsed = Math.max(0, this.clock - recent.started),
+      hold = this.motion ? 520 : 320,
+      fade = this.motion ? 180 : 80;
+    if (elapsed <= hold) return 0.68;
+    if (elapsed < hold + fade)
+      return normal + (0.68 - normal) * (1 - (elapsed - hold) / fade);
+    this.recentReadoutChanges.delete(level);
     return normal;
+  }
+
+  observePackReadoutQuantities(layout) {
+    const visibleLevels = new Set();
+    for (const { level, rawQuantity } of layout.levels) {
+      visibleLevels.add(level);
+      if (!this.previousReadoutQuantities.has(level)) {
+        if (rawQuantity !== 0)
+          this.recentReadoutChanges.set(level, { started: this.clock });
+      } else if (this.previousReadoutQuantities.get(level) !== rawQuantity) {
+        this.recentReadoutChanges.set(level, { started: this.clock });
+      }
+      this.previousReadoutQuantities.set(level, rawQuantity);
+    }
+    for (const level of this.previousReadoutQuantities.keys()) {
+      if (!visibleLevels.has(level)) {
+        this.previousReadoutQuantities.delete(level);
+        this.recentReadoutChanges.delete(level);
+      }
+    }
   }
 
   packNotationPresentation(layout) {
@@ -948,7 +894,6 @@ export class PackWorld extends FlowWorld {
 
   hit(x, y) {
     if (this.run?.stage.area !== "pack") return super.hit(x, y);
-    if (this.isPackReadoutTextAt(x, y)) return null;
     const mass = this.packLayout().mass;
     if (mass.quantity && Math.hypot(x - mass.x, y - mass.y) <= Math.max(36, mass.radius + 13))
       return {
@@ -1071,6 +1016,7 @@ export class PackWorld extends FlowWorld {
 
   drawPackDigitReadouts(layout) {
     const c = this.ctx;
+    this.observePackReadoutQuantities(layout);
     for (const levelLayout of layout.levels) {
       const slot = levelLayout.slot,
         rawQuantity = levelLayout.rawQuantity;
@@ -1290,24 +1236,12 @@ export class PackWorld extends FlowWorld {
       dot.vy = 0;
     }
     this.previewPackState = result.initialState;
+    this.observePackReadoutQuantities(this.packLayout());
     this.sync();
-    let previousState = result.initialState;
     for (const step of result.steps) {
       if (token !== this.token) return;
       this.previewPackState = step.state;
-      if (step.type === "carry") {
-        const levels = new Set([
-            ...previousState.discoveredLevels,
-            ...step.state.discoveredLevels,
-          ]),
-          changed = [...levels].filter(
-            (level) =>
-              packRawQuantityForLevel(this.run, level, previousState.active) !==
-              packRawQuantityForLevel(this.run, level, step.state.active),
-          );
-        for (const level of changed)
-          this.carryReadoutHighlights.set(level, { started: this.clock });
-      }
+      this.observePackReadoutQuantities(this.packLayout());
       this.sync();
       const moving = [...this.units.values()].filter(
           (dot) => dot.visible && Math.hypot(dot.wx - dot.twx, dot.wy - dot.twy) > 0.1,
@@ -1324,7 +1258,6 @@ export class PackWorld extends FlowWorld {
       } else {
         await this.tweenPackWorld([], [], this.motion ? 30 : 18, token, true);
       }
-      previousState = step.state;
     }
     this.previewPackState = null;
     this.massAnchorOverride = null;
