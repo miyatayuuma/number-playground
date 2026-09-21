@@ -157,7 +157,7 @@ function assertWidthSelectorVisual(trace, { handle, value, active, area, viewpor
     ),
     restingDots = new Set(
       trace.arcs
-        .filter((arc) => nearHandle(arc))
+        .filter((arc) => nearHandle(arc) && arc.radius > 0.8)
         .map((arc) => `${arc.x.toFixed(2)},${arc.y.toFixed(2)}`),
     );
   if (!active) {
@@ -179,6 +179,7 @@ function assertWidthSelectorVisual(trace, { handle, value, active, area, viewpor
       Math.abs(label.x - center.x) < 0.1 && Math.abs(label.y - center.y) < 0.1,
     ),
     frameDots = trace.arcs.filter((arc) =>
+      arc.radius > 0.8 &&
       Math.abs(arc.x - center.x) < frame.width / 2 &&
       Math.abs(arc.y - center.y) < frame.height / 2,
     );
