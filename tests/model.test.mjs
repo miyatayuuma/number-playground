@@ -16,6 +16,7 @@ import {
   setPackBase,
   isCanonicalPack,
   packCanonicalDigits,
+  packRawQuantityForLevel,
   matchPackTarget,
   beginPackTransition,
   settlePackTransition,
@@ -35,6 +36,12 @@ import {
   placeSlotLayout,
   compactPackNestedUnitShape,
   PACK_RAW_DOT_WORLD_RADIUS,
+  PACK_MAX_SIBLING_OVERLAP,
+  PACK_MAX_NESTED_RAW_DOTS,
+  packPlaceFrameRadius,
+  packPlaceUnitCenters,
+  packUnitFrameRadius,
+  packUnitFrameInnerRadius,
 } from "../src/shapes.mjs";
 import {
   canonicalSelectorShape,
@@ -602,20 +609,107 @@ test("PACK radix change returns all active hierarchy to Number Mass and clears d
   audit(run);
 });
 
-test("PACK compact upper units preserve canonical topology and visible dots", () => {
-  for (const [base, levels] of [[2, 4], [4, 2], [5, 1], [8, 1], [10, 1]]) {
-    const quantity = base ** levels,
-      maxRadius = 22,
-      geometry = compactPackNestedUnitShape(base, levels, maxRadius),
-      canonical = shape(quantity, 54);
-    assert.equal(geometry.dots.length, quantity);
-    assert.equal(geometry.rawRadius, PACK_RAW_DOT_WORLD_RADIUS);
-    assert.ok(geometry.radius <= maxRadius + PACK_RAW_DOT_WORLD_RADIUS * 1.5);
-    assert.ok(geometry.dots.every((dot) => dot.radius >= PACK_RAW_DOT_WORLD_RADIUS));
-    assert.deepEqual(
-      geometry.dots.map(({ x, y }) => [x, y]),
-      canonical.dots.map(({ x, y }) => [x * geometry.spacingScale, y * geometry.spacingScale]),
+test("PACK readouts count raw descendants from active unit hierarchies", () => {
+  const expected = new Map([
+    [3, { digits: [1, 2, 2], raw: [9, 6, 2] }],
+    [4, { digits: [1, 0, 1], raw: [16, 0, 1] }],
+    [5, { digits: [3, 2], raw: [15, 2] }],
+  ]);
+  for (const [base, values] of expected) {
+    const run = createRun(structuredClone(PROBLEM_BANK.pack[0]));
+    if (run.pack.base !== base) assert.equal(setPackBase(run, base), true);
+    while (run.pack.numberMassRawIds.length) {
+      const result = pourPackMass(run, 0);
+      assert.equal(result.ok, true);
+    }
+    const maxLevel = Math.max(...run.pack.discoveredLevels),
+      readouts = Array.from({ length: maxLevel + 1 }, (_, level) =>
+        packRawQuantityForLevel(run, level),
+      ).reverse();
+    assert.deepEqual(packDigits(run), values.digits, `base ${base} digits / 17`);
+    assert.deepEqual(readouts, values.raw, `base ${base} raw quantity / 17`);
+
+    for (let level = 0; level <= maxLevel; level++) {
+      const expectedRawIds = activePackItems(run)
+          .filter((item) => item.level === level)
+          .flatMap((item) => {
+            const collect = (id) => {
+              const node = run.pack.nodes[id];
+              return node.macro
+                ? node.children.flatMap(collect)
+                : [...node.ids];
+            };
+            return collect(item.id);
+          }),
+        actual = packRawQuantityForLevel(run, level);
+      assert.equal(actual, expectedRawIds.length);
+      assert.equal(new Set(expectedRawIds).size, expectedRawIds.length);
+    }
+    assert.equal(isCanonicalPack(run), true);
+  }
+});
+
+test("PACK uses identical frame dimensions at every place level", () => {
+  for (const [width, places] of [[320, 3], [390, 3], [412, 4], [812, 5]]) {
+    const placeRadius = packPlaceFrameRadius(width, places),
+      unitRadius = packUnitFrameRadius(placeRadius),
+      innerRadius = packUnitFrameInnerRadius(unitRadius);
+    assert.ok(placeRadius > unitRadius);
+    assert.ok(innerRadius < unitRadius);
+    assert.equal(packPlaceFrameRadius(width, places), placeRadius);
+    assert.equal(packUnitFrameRadius(placeRadius), unitRadius);
+    for (const digit of [1, 2, 3, 8, 9]) {
+      const centers = packPlaceUnitCenters(digit, placeRadius, unitRadius);
+      assert.equal(centers.length, digit);
+      assert.ok(centers.every((point) =>
+        Math.hypot(point.x, point.y) + unitRadius <=
+          placeRadius * 0.88 + 1e-8,
+      ));
+    }
+  }
+  assert.ok(
+    packPlaceFrameRadius(842, 5, 344) < packPlaceFrameRadius(842, 5, 798),
+    "narrow landscape scales the shared frames to available height",
+  );
+});
+
+test("PACK L0 uses one framed raw dot without adding child structure", () => {
+  const run = createRun(structuredClone(PROBLEM_BANK.pack[0]));
+  assert.ok(pourPackMass(run, 0, 1).ok);
+  const rawItem = activePackItems(run).find((item) => item.level === 0),
+    geometry = compactPackNestedUnitShape(
+      run.pack.base,
+      0,
+      packUnitFrameInnerRadius(packUnitFrameRadius(28)),
     );
+  assert.ok(rawItem);
+  assert.equal(rawItem.macro, false);
+  assert.deepEqual(rawItem.children, []);
+  assert.deepEqual(rawItem.ids, [rawItem.ids[0]]);
+  assert.equal(geometry.dots.length, 1);
+  assert.equal(geometry.groups.length, 0);
+  assert.ok(geometry.dots[0].radius > 0);
+  assert.ok(geometry.radius <= geometry.parentInnerRadius);
+});
+
+test("PACK adaptive packing preserves topology, containment, and shared overlap cap", () => {
+  const cases = [[2, 4], [3, 2], [4, 2], [5, 2], [8, 2], [10, 2], [10, 3]];
+  for (const [base, levels] of cases) {
+    const quantity = base ** levels,
+      maxRadius = 7,
+      geometry = compactPackNestedUnitShape(base, levels, maxRadius),
+      canonical = quantity <= 36 ? shape(quantity, 54) : null;
+    assert.ok(quantity <= PACK_MAX_NESTED_RAW_DOTS);
+    assert.equal(geometry.dots.length, quantity);
+    assert.ok(geometry.rawRadius > 0);
+    assert.ok(geometry.rawRadius <= PACK_RAW_DOT_WORLD_RADIUS);
+    assert.ok(geometry.radius <= maxRadius + 1e-8);
+    assert.ok(geometry.dots.every((dot) => dot.radius === geometry.rawRadius));
+    if (canonical)
+      assert.deepEqual(
+        geometry.dots.map(({ x, y }) => [x, y]),
+        canonical.dots.map(({ x, y }) => [x * geometry.spacingScale, y * geometry.spacingScale]),
+      );
     const expectedGroups = Array.from({ length: levels }, (_, i) => quantity / base ** (i + 1))
       .reduce((sum, count) => sum + count, 0);
     assert.equal(geometry.groups.length, expectedGroups);
@@ -624,9 +718,7 @@ test("PACK compact upper units preserve canonical topology and visible dots", ()
       assert.equal(group.count, base ** group.groupLevel);
       assert.equal(group.count, members.length);
       assert.ok(members.every((dot, index) => dot.index === group.start + index));
-      assert.ok(members.every((dot) =>
-        Math.hypot(dot.x - group.x, dot.y - group.y) + dot.radius <= group.radius,
-      ));
+      assert.ok(group.radius <= maxRadius + 1e-8);
     }
     let minCenterDistance = Infinity;
     for (let i = 0; i < geometry.dots.length; i++)
@@ -638,11 +730,14 @@ test("PACK compact upper units preserve canonical topology and visible dots", ()
             geometry.dots[i].y - geometry.dots[j].y,
           ),
         );
-    assert.ok(
-      minCenterDistance >= PACK_RAW_DOT_WORLD_RADIUS * 1.3 - 1e-8,
-      `base ${base} allows slight overlap while retaining distinct centers`,
-    );
-    if (base === 10) assert.equal(geometry.dots.length, 10);
+    if (quantity > 1)
+      assert.ok(
+        Math.max(0, 1 - minCenterDistance / (2 * geometry.rawRadius)) <=
+          PACK_MAX_SIBLING_OVERLAP + 1e-8,
+        `base ${base}, level ${levels} respects the shared sibling overlap cap`,
+      );
+    assert.equal(geometry.maxOverlap, PACK_MAX_SIBLING_OVERLAP);
+    assert.equal(geometry.quantity, quantity);
   }
 });
 

@@ -3,14 +3,20 @@ import {
   shape,
   compactPackNestedUnitShape,
   PACK_RAW_DOT_WORLD_RADIUS,
+  packPlaceFrameRadius,
+  packPlaceUnitCenters,
+  packUnitFrameRadius,
+  packUnitFrameInnerRadius,
 } from "./shapes.mjs";
-import { isCanonicalPack, packDigits } from "./model.mjs";
+import {
+  isCanonicalPack,
+  packDigits,
+  packRawQuantityForLevel,
+} from "./model.mjs";
 import { drawNumberReadout, drawSelectorDots } from "./number-selector.mjs";
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const ease = (value) => 1 - Math.pow(1 - value, 3);
-const placeFrameRadius = (width, count) =>
-  Math.max(18, Math.min(28, (width - 24 - Math.max(0, count - 1) * 8) / (2 * count)));
 
 export class PackWorld extends FlowWorld {
   constructor(canvas) {
@@ -54,7 +60,23 @@ export class PackWorld extends FlowWorld {
   packTargetLayout() {
     const digits = this.run.pack.target.digits,
       count = digits.length,
-      frameRadius = placeFrameRadius(this.w, count),
+      state = this.previewPackState,
+      activeIds = state?.active || this.run.pack.active,
+      activeItems = activeIds.map((id) => this.run.pack.nodes[id]),
+      total = this.run.stage.quantity || this.run.dots.length,
+      reservedPlaceCount = Math.floor(Math.log2(total)) + 1,
+      playerPlaceCount =
+        Math.max(
+          0,
+          ...[...(state?.discoveredLevels || this.run.pack.discoveredLevels),
+            ...activeItems.map((item) => item.level)],
+        ) + 1,
+      frameRadius = packPlaceFrameRadius(
+        this.w,
+        Math.max(count, playerPlaceCount, reservedPlaceCount),
+        this.h,
+      ),
+      unitRadius = packUnitFrameRadius(frameRadius),
       pitch = count > 1
         ? Math.min(2 * frameRadius + 14, (this.w - 2 * frameRadius - 24) / (count - 1))
         : 0,
@@ -65,13 +87,11 @@ export class PackWorld extends FlowWorld {
       x: this.w / 2,
       y,
       frameRadius,
+      unitFrameRadius: unitRadius,
       places: digits.map((digit, index) => {
         const x = x0 + pitch * index,
           level = count - index - 1,
-          unitRadius = Math.min(7, frameRadius * 0.22),
-          centers = digit
-            ? shape(digit, Math.max(0, frameRadius - unitRadius - 4)).dots
-            : [];
+          centers = packPlaceUnitCenters(digit, frameRadius, unitRadius);
         return {
           level,
           digit,
@@ -279,7 +299,20 @@ export class PackWorld extends FlowWorld {
       massRawIds = state?.numberMassRawIds || pack.numberMassRawIds,
       discoveredMax = Math.max(0, ...discoveredLevels, ...activeItems.map((item) => item.level)),
       placeCount = discoveredMax + 1,
-      frameRadius = placeFrameRadius(this.w, placeCount),
+      frameRadius = packPlaceFrameRadius(
+        this.w,
+        Math.max(
+          placeCount,
+          pack.target.digits.length,
+          Math.floor(Math.log2(total)) + 1,
+        ),
+        this.h,
+      ),
+      unitFrameRadius = packUnitFrameRadius(frameRadius),
+      unitInnerRadius = packUnitFrameInnerRadius(unitFrameRadius),
+      enemy = this.enemyPoint(),
+      targetY = enemy.y + enemy.radius + frameRadius + 8,
+      placeY = Math.max(this.h * 0.42, targetY + frameRadius * 2 + 12),
       pitch = placeCount > 1
         ? Math.min(2 * frameRadius + 14, (this.w - 2 * frameRadius - 24) / (placeCount - 1))
         : 0,
@@ -289,7 +322,7 @@ export class PackWorld extends FlowWorld {
         return {
           level,
           x: x0 + pitch * index,
-          y: this.h * 0.42,
+          y: placeY,
           radius: frameRadius,
           frameRadius,
           visible: true,
@@ -336,71 +369,69 @@ export class PackWorld extends FlowWorld {
       const levelItems = activeItems
           .filter((item) => item.level === slot.level)
           .sort((a, b) => a.order - b.order),
-        centerRadius = levelItems.length > 1 ? slot.frameRadius * 0.42 : 0,
         arrangement = levelItems.length
-          ? shape(levelItems.length, centerRadius)
+          ? shape(levelItems.length, 54)
           : { dots: [], nodes: [], radius: 0, dotRadius: 0 },
-        centerExtent = Math.max(0, ...arrangement.dots.map((point) => Math.hypot(point.x, point.y))),
-        unitMaxRadius = Math.max(
-          PACK_RAW_DOT_WORLD_RADIUS + 1,
-          slot.frameRadius - centerExtent - 2,
+        centers = packPlaceUnitCenters(
+          levelItems.length,
+          slot.frameRadius,
+          unitFrameRadius,
         ),
+        rawQuantity = packRawQuantityForLevel(this.run, slot.level, activeIds),
         visuals = levelItems.map((item, index) => {
-          const center = arrangement.dots[index] || { x: 0, y: 0 },
+          const center = centers[index] || { x: 0, y: 0 },
             x = slot.x + center.x,
             y = slot.y + center.y,
-            geometry = item.macro
-              ? compactPackNestedUnitShape(base, item.level, unitMaxRadius, PACK_RAW_DOT_WORLD_RADIUS)
-              : null,
+            geometry = compactPackNestedUnitShape(
+              base,
+              item.level,
+              unitInnerRadius,
+              PACK_RAW_DOT_WORLD_RADIUS,
+            ),
             visual = {
               item,
               level: slot.level,
               x,
               y,
-              radius: geometry?.radius ?? massDotRadius,
+              radius: unitFrameRadius,
+              unitFrameRadius,
               visible: true,
               representative: item.ids[0],
             };
           items.push(visual);
-          if (item.macro) {
-            for (const dot of geometry.dots)
-              leaves.push({
-                id: item.ids[dot.index],
-                x: x + dot.x,
-                y: y + dot.y,
-                r: dot.radius,
-                rootItemId: item.id,
-                level: slot.level,
-                container: "place",
-              });
-            for (const group of geometry.groups) {
-              const ids = item.ids.slice(group.start, group.start + group.count),
-                outer = group.groupLevel === item.level;
-              boundaries.push({
-                id: `${item.id}:g${group.groupLevel}:${group.start}`,
-                item: { id: item.id, ids },
-                x: x + group.x,
-                y: y + group.y,
-                radius: group.radius,
-                rootItemId: item.id,
-                level: slot.level,
-                outer,
-              });
-            }
-          } else {
+          for (const dot of geometry.dots)
             leaves.push({
-              id: item.ids[0],
-              x,
-              y,
-              r: massDotRadius,
+              id: item.ids[dot.index],
+              x: x + dot.x,
+              y: y + dot.y,
+              r: dot.radius,
               rootItemId: item.id,
               level: slot.level,
               container: "place",
             });
+          for (const group of geometry.groups) {
+            const ids = item.ids.slice(group.start, group.start + group.count),
+              outer = group.groupLevel === item.level;
+            boundaries.push({
+              id: `${item.id}:g${group.groupLevel}:${group.start}`,
+              item: { id: item.id, ids },
+              x: x + group.x,
+              y: y + group.y,
+              radius: group.radius,
+              rootItemId: item.id,
+              level: slot.level,
+              outer,
+            });
           }
           return visual;
         });
-      levels.push({ level: slot.level, slot, items: visuals, shape: arrangement });
+      levels.push({
+        level: slot.level,
+        slot,
+        items: visuals,
+        shape: arrangement,
+        rawQuantity,
+      });
     }
     return {
       total,
@@ -412,6 +443,7 @@ export class PackWorld extends FlowWorld {
       boundaries,
       mass,
       frameRadius,
+      unitFrameRadius,
       discoveredMax,
       discoveredLevels: [...discoveredLevels],
     };
@@ -571,6 +603,7 @@ export class PackWorld extends FlowWorld {
           y,
           radius: visual.radius,
           frameRadius: layout.frameRadius,
+          unitFrameRadius: visual.unitFrameRadius,
           visible: visual.visible,
           children: [...visual.item.children],
           tree: this.packTree(visual.item.id),
@@ -585,6 +618,7 @@ export class PackWorld extends FlowWorld {
           rawIds: [...place.rawIds],
           n: place.itemIds.length,
           digit: place.itemIds.length,
+          rawQuantity: levelLayout.rawQuantity,
           x: place.anchor.x,
           y: place.anchor.y,
           radius: place.radius,
@@ -633,6 +667,7 @@ export class PackWorld extends FlowWorld {
           x: target.x,
           y: target.y,
           radius: target.frameRadius,
+          unitFrameRadius: target.unitFrameRadius,
           places: target.places.map((place) => ({
             level: place.level,
             unitCount: place.units.length,
@@ -640,6 +675,7 @@ export class PackWorld extends FlowWorld {
             x: place.x,
             y: place.y,
             frameRadius: place.frameRadius,
+            unitFrameRadius: target.unitFrameRadius,
           })),
         },
         slots: layout.slots.map((slot) => ({ ...slot })),
@@ -648,6 +684,7 @@ export class PackWorld extends FlowWorld {
         revealCount: Math.max(0, ...layout.discoveredLevels),
         transition: this.activeTransition(),
         items,
+        unitFrameRadius: layout.unitFrameRadius,
         renderedDots: layout.leaves.map((leaf) => {
           const dot = this.units.get(leaf.id);
           return {
@@ -830,7 +867,9 @@ export class PackWorld extends FlowWorld {
       layout = this.packLayout();
     c.save();
     this.drawPackViewports(layout);
+    this.drawPackUnitFrames(layout, "fill");
     this.drawNestedUnits(layout);
+    this.drawPackUnitFrames(layout, "stroke");
     this.drawNumberMass(layout.mass);
     this.drawPackDigitReadouts(layout);
     this.drawPackControl();
@@ -860,12 +899,47 @@ export class PackWorld extends FlowWorld {
     const c = this.ctx;
     for (const levelLayout of layout.levels) {
       const slot = levelLayout.slot,
-        digit = levelLayout.items.length,
+        rawQuantity = levelLayout.rawQuantity,
         hot = this.carryPulse &&
           (this.carryPulse.fromLevel === slot.level || this.carryPulse.toLevel === slot.level);
       c.save();
       c.globalAlpha = hot ? 1 : 0.88;
-      drawNumberReadout(this, digit, slot.x, slot.y + slot.frameRadius + 23, this.color, 17);
+      drawNumberReadout(
+        this,
+        rawQuantity,
+        slot.x,
+        slot.y + slot.frameRadius + 23,
+        this.color,
+        17,
+      );
+      c.restore();
+    }
+  }
+
+  drawPackUnitFrames(layout, mode) {
+    const c = this.ctx;
+    for (const visual of layout.items) {
+      const dots = visual.item.ids
+          .map((id) => this.units.get(id))
+          .filter((dot) => dot && Number.isFinite(dot.wx)),
+        x = dots.length
+          ? dots.reduce((sum, dot) => sum + dot.wx, 0) / dots.length
+          : visual.x,
+        y = dots.length
+          ? dots.reduce((sum, dot) => sum + dot.wy, 0) / dots.length
+          : visual.y;
+      c.save();
+      c.globalAlpha = mode === "fill" ? 1 : 0.9;
+      c.beginPath();
+      c.arc(x, y, visual.unitFrameRadius, 0, Math.PI * 2);
+      if (mode === "fill") {
+        c.fillStyle = this.color + "0a";
+        c.fill();
+      } else {
+        c.strokeStyle = this.color + "82";
+        c.lineWidth = 1.05;
+        c.stroke();
+      }
       c.restore();
     }
   }
