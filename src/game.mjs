@@ -131,8 +131,7 @@ function keyboardUI() {
     }
     const state = world.read().pack;
     const options = state.allowedRadices,
-      index = options.indexOf(state.base),
-      radix = `<label>現在の基数 <input data-pack-radix type="range" min="0" max="${Math.max(0, options.length - 1)}" step="1" value="${Math.max(0, index)}" aria-label="現在の基数"></label>`,
+      radix = `<label>現在の基数 <input data-pack-radix type="range" min="${options[0]}" max="${options.at(-1)}" step="1" value="${state.base}" aria-label="現在の基数"></label>`,
       inputs = state.directInputLevels
         .map(
           (level) =>
@@ -786,8 +785,8 @@ document.querySelector("#keyboard-controls").addEventListener("change", (e) => {
     return;
   const options = [...new Set(run.stage.radices)].sort((a, b) => a - b),
     previous = run.pack.base,
-    next = options[Number(input.value)];
-  if (next !== undefined && setPackBase(run, next)) {
+    next = Number(input.value);
+  if (options.includes(next) && setPackBase(run, next)) {
     tone("merge");
     const token = epoch,
       transition = world.radixChanged?.(previous, next);

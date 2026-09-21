@@ -6,6 +6,10 @@ import {
   PACK_RAW_DOT_WORLD_RADIUS,
 } from "./shapes.mjs";
 import { isCanonicalPack, packDigits } from "./model.mjs";
+import {
+  drawNumberReadout,
+  drawSelectorDots,
+} from "./number-selector.mjs";
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const ease = (value) => 1 - Math.pow(1 - value, 3);
@@ -1439,16 +1443,21 @@ export class PackWorld extends FlowWorld {
       this.busy
     ) return null;
     const y = Math.min(this.h - 37, this.h * 0.9),
-      x1 = this.w * 0.23,
-      x2 = this.w * 0.77,
+      x1 = this.w * 0.08,
+      x2 = this.w * 0.92,
       options = [...new Set(this.run.stage.radices)].sort((a, b) => a - b),
-      index = options.indexOf(this.run.pack.base);
+      index = options.indexOf(this.run.pack.base),
+      position = (this.packControlX ?? x1 + ((x2 - x1) * Math.max(0, index)) / Math.max(1, options.length - 1)) - x1,
+      previewIndex = Math.round(
+        (position / Math.max(1, x2 - x1)) * (options.length - 1),
+      );
     return {
       x1,
       x2,
       y,
       x: this.packControlX ?? x1 + ((x2 - x1) * Math.max(0, index)) / Math.max(1, options.length - 1),
       current: this.run.pack.base,
+      preview: options[clamp(previewIndex, 0, options.length - 1)],
       options,
     };
   }
@@ -1502,7 +1511,6 @@ export class PackWorld extends FlowWorld {
     this.drawNestedUnits(layout);
     this.drawNumberMass(layout.mass);
     this.drawPackDigitReadouts(layout);
-    this.drawCarryPulse(layout);
     this.drawPackControl();
     c.restore();
   }
@@ -1521,7 +1529,14 @@ export class PackWorld extends FlowWorld {
     c.arc(mass.x, mass.y, radius, 0, Math.PI * 2);
     c.stroke();
     c.setLineDash([]);
-    this.label(mass.quantity, mass.x, mass.y - radius - 14, this.color, 16);
+    drawNumberReadout(
+      this,
+      mass.quantity,
+      mass.x,
+      mass.y - radius - 14,
+      this.color,
+      16,
+    );
     this.label(
       "Number Mass",
       mass.x,
@@ -1542,8 +1557,8 @@ export class PackWorld extends FlowWorld {
       if (!slot.visible) continue;
       c.save();
       c.globalAlpha = hot ? 1 : 0.88;
-      this.label(`L${slot.level}`, slot.x, slot.y - slot.frameRadius - 15, this.color, 10);
-      this.label(
+      drawNumberReadout(
+        this,
         digit,
         slot.x,
         slot.y + slot.frameRadius + 23,
@@ -1552,43 +1567,6 @@ export class PackWorld extends FlowWorld {
       );
       c.restore();
     }
-  }
-
-  drawCarryPulse(layout) {
-    const pulse = this.carryPulse;
-    if (!pulse) return;
-    const age = this.clock - pulse.born,
-      duration = this.motion ? 420 : 115;
-    if (age >= duration) {
-      this.carryPulse = null;
-      return;
-    }
-    const from = layout.slots.find((slot) => slot.level === pulse.fromLevel),
-      to = layout.slots.find((slot) => slot.level === pulse.toLevel);
-    if (!from || !to) return;
-    const c = this.ctx,
-      alpha = 1 - age / duration,
-      x1 = from.x,
-      y1 = from.y - Math.max(8, from.frameRadius * 0.35),
-      x2 = to.x,
-      y2 = to.y + Math.max(8, to.frameRadius * 0.35),
-      bend = Math.max(18, Math.abs(y2 - y1) * 0.45);
-    c.save();
-    c.globalAlpha = alpha;
-    c.strokeStyle = this.color;
-    c.fillStyle = this.color;
-    c.lineWidth = 2;
-    c.beginPath();
-    c.moveTo(x1, y1);
-    c.bezierCurveTo(x1, y1 - bend, x2, y2 + bend, x2, y2);
-    c.stroke();
-    c.beginPath();
-    c.moveTo(x2, y2);
-    c.lineTo(x2 - 5, y2 + 9);
-    c.lineTo(x2 + 5, y2 + 9);
-    c.closePath();
-    c.fill();
-    c.restore();
   }
 
   drawNestedUnits(layout) {
@@ -1704,6 +1682,10 @@ export class PackWorld extends FlowWorld {
     const control = this.packControl();
     if (!control) return;
     const c = this.ctx;
+    const selectedX =
+      control.x1 +
+      ((control.x2 - control.x1) * control.options.indexOf(control.preview)) /
+        Math.max(1, control.options.length - 1);
     c.save();
     c.strokeStyle = this.color + "4d";
     c.lineWidth = 2;
@@ -1715,20 +1697,16 @@ export class PackWorld extends FlowWorld {
       const x =
           control.x1 +
           ((control.x2 - control.x1) * index) / Math.max(1, control.options.length - 1),
-        s = shape(n, 11);
-      s.dots.forEach((dot) =>
-        this.circle(
-          x + dot.x,
-          control.y + dot.y,
-          Math.max(1.4, s.dotRadius * 0.55),
-          this.color + (n === control.current ? "c8" : "68"),
-          1,
-        ),
-      );
-      this.label(n, x, control.y + 29, this.color + "b8", 10);
+        selected = n === control.preview;
+      drawSelectorDots(this, n, x, control.y, this.color, {
+        radius: 10,
+        dotScale: 0.62,
+        minimumDotRadius: 1.2,
+        alpha: selected ? 1 : 0.58,
+      });
     });
-    this.circle(control.x, control.y, 17, this.color + "d8", 1.6);
-    this.label(control.current, control.x, control.y - 25, this.color, 17);
+    this.circle(selectedX, control.y, 14, this.color + "dc", 1.6);
+    drawNumberReadout(this, control.preview, selectedX, control.y - 25, this.color, 16);
     c.restore();
   }
 

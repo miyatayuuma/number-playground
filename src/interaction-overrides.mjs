@@ -1,6 +1,7 @@
 import { World } from "./view.mjs";
 import { FlowWorld } from "./flow-view.mjs";
 import { activeTargets, gateFactor } from "./model.mjs";
+import { drawNumberReadout, drawSelectorDots } from "./number-selector.mjs";
 import {
   boundsFromDots,
   circle,
@@ -248,6 +249,10 @@ FlowWorld.prototype.drawPieces = function drawPieces() {
   c.roundRect(x - 25, y - 18, 50, 36, 18);
   c.fill();
   c.stroke();
-  this.label(value || "◌", x, y, this.color, 18);
+  drawSelectorDots(this, value, x, y + 5, this.color, {
+    radius: 10,
+    dotScale: 0.62,
+  });
+  drawNumberReadout(this, value, x, y - 21, this.color, 15);
   c.restore();
 };

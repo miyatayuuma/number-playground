@@ -354,11 +354,14 @@ export function pourPackMass(run, targetLevel = 0, maxRawCount = Infinity) {
       : Number.isInteger(maxRawCount) && maxRawCount > 0
         ? maxRawCount
         : 0,
-    available = Math.min(pack.numberMassRawIds.length, limit),
-    consumedCount =
-      targetLevel === 0
-        ? available
-        : Math.floor(available / unitSize) * unitSize;
+    availableRawCount = Math.min(pack.numberMassRawIds.length, limit),
+    currentDigit = pack.active.filter(
+      (id) => pack.nodes[id].level === targetLevel,
+    ).length,
+    neededUnits = pack.base - currentDigit,
+    availableUnits = Math.floor(availableRawCount / unitSize),
+    feedUnits = Math.min(neededUnits, availableUnits),
+    consumedCount = feedUnits * unitSize;
   if (!consumedCount) return { ok: false, reason: "insufficient-mass" };
 
   const initialState = packStateSnapshot(pack),
@@ -465,6 +468,10 @@ export function pourPackMass(run, targetLevel = 0, maxRawCount = Infinity) {
     remainingRawIds: remaining,
     steps,
     complete: pack.numberMassRawIds.length === 0,
+    feedUnits,
+    neededUnits,
+    availableUnits,
+    carryReached: feedUnits === neededUnits,
     canonical: isCanonicalPack(run),
   };
 }

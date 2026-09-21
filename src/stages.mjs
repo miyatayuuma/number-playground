@@ -287,7 +287,7 @@ bank.pack.push({
   difficulty: 1,
   ammo: [17],
   quantity: 17,
-  radices: [3, 4, 5],
+  radices: [2, 3, 4, 5, 6, 7, 8, 9, 10],
   startRadix: 3,
   targetRadixPool: [5, 4, 3],
   targetRadices: [5],

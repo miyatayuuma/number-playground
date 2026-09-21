@@ -1,6 +1,7 @@
 import { shape, intrinsic, hierarchy } from "./shapes.mjs";
 import { AREAS } from "./stages.mjs";
 import { activeTargets, gateFactor } from "./model.mjs";
+import { drawNumberReadout } from "./number-selector.mjs";
 const TAU = Math.PI * 2;
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 const ease = (t) => 1 - Math.pow(1 - t, 3);
@@ -602,10 +603,11 @@ export class World {
         c.arc(center.x, center.y, 1.3, 0, TAU);
         c.fill();
       }
-      this.label(
+      drawNumberReadout(
+        this,
         p.ids.length,
         center.x,
-        center.y + Math.max(23, s.radius + 12) + 14,
+        center.y - Math.max(23, s.radius + 12) - 14,
         this.color,
         13,
       );
