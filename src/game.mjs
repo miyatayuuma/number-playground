@@ -190,9 +190,13 @@ function closeMenu() {
   if (run?.status === "won" && !world.busy) queueMicrotask(nextProblem);
 }
 function openPanel(html, kind) {
+  if (pointer !== null) cancelPointer();
   pointer = null;
   peel = null;
   widthPointer = null;
+  world.widthAdjustCandidate = null;
+  world.widthAdjusting = false;
+  world.widthAdjustPieceId = null;
   packPointer = false;
   world.cancelPackControl?.();
   selected = null;
@@ -308,6 +312,9 @@ function start(id, changeHash = true, restartProblem = null) {
   pointer = null;
   peel = null;
   widthPointer = null;
+  world.widthAdjustCandidate = null;
+  world.widthAdjusting = false;
+  world.widthAdjustPieceId = null;
   packPointer = false;
   selected = null;
   ruleId = id;
@@ -499,7 +506,14 @@ canvas.addEventListener("pointerdown", (e) => {
     e.preventDefault();
     pointer = e.pointerId;
     canvas.setPointerCapture(pointer);
-    widthPointer = { ...handle, startX: p.x };
+    widthPointer = {
+      ...handle,
+      startX: p.x,
+      startWidth: run.stage.area === "gear" ? run.width : handle.value,
+      candidate: run.stage.area === "gear" ? run.width : handle.value,
+      area: run.stage.area,
+    };
+    world.widthAdjustCandidate = widthPointer.candidate;
     tone("pick");
     return;
   }
@@ -552,11 +566,19 @@ canvas.addEventListener("pointermove", (e) => {
       0,
       Math.min(
         widthPointer.max,
-        widthPointer.value + Math.round((p.x - widthPointer.startX) / 12),
+        widthPointer.startWidth + Math.round((p.x - widthPointer.startX) / 12),
       ),
     );
     const piece = run.pieces.find((p) => p.id === widthPointer.pieceId);
-    if (piece && piece.width !== width) {
+    if (widthPointer.area === "gear") {
+      if (widthPointer.candidate !== width) {
+        widthPointer.candidate = width;
+        world.widthAdjustCandidate = width;
+        world.sync();
+        tone("pick", width);
+      }
+    } else if (piece && piece.width !== width) {
+      widthPointer.candidate = width;
       setWidth(run, piece.id, width);
       world.sync();
       tone("pick", width);
@@ -597,8 +619,17 @@ canvas.addEventListener("pointerup", (e) => {
   }
   pointer = null;
   if (widthPointer) {
+    const adjustment = widthPointer;
     widthPointer = null;
-    world.sync();
+    world.widthAdjustCandidate = null;
+    if (
+      adjustment.area === "gear" &&
+      adjustment.candidate !== adjustment.startWidth
+    ) {
+      setWidth(run, adjustment.pieceId, adjustment.candidate);
+      world.sync();
+      tone("merge", adjustment.candidate);
+    } else if (adjustment.area === "link") world.sync();
     keyboardUI();
     if (canvas.hasPointerCapture(e.pointerId))
       canvas.releasePointerCapture(e.pointerId);
@@ -627,9 +658,14 @@ function cancelPointer() {
       world.cancelPackControl?.();
     }
     if (widthPointer) {
-      setWidth(run, widthPointer.pieceId, widthPointer.value);
+      if (widthPointer.area === "link")
+        setWidth(run, widthPointer.pieceId, widthPointer.startWidth);
       widthPointer = null;
     }
+    world.widthAdjustCandidate = null;
+    world.widthAdjusting = false;
+    world.widthAdjustPieceId = null;
+    world.sync();
     selected = null;
     world.cancel();
     keyboardUI();
@@ -821,9 +857,11 @@ export function inspect() {
     misses: run.misses,
     menu,
     rule: run.stage.area,
+    committedWidth: run.width,
     difficulty: run.stage.difficulty,
     family: run.stage.family,
     progress: structuredClone(progress),
+    widthAdjustCandidate: widthPointer?.candidate ?? null,
     ...world.read(),
     visibleIds: [...world.units.values()]
       .filter((d) => d.visible)
