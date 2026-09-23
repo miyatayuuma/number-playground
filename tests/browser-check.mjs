@@ -815,7 +815,7 @@ try {
   assert.ok(afterBreak.runToken > beforeFinalRun, "BREAK advances to the next problem");
   assert.equal(afterBreak.pack.notation, null, "next problem clears prior notation");
   assert.ok(afterBreak.pack.places.every((place) => place.readoutOpacity === 0.25), "next problem clears prior raw-quantity emphasis");
-  assert.equal(afterBreak.progress.pack.promotionEvidence.length, 1);
+  assert.deepEqual(afterBreak.progress.pack.promotionEvidence, [], "several distinct completed wrong radices make this a normal clear");
   assert.equal(afterBreak.progress.pack.difficulty, 3);
   assert.notEqual(afterBreak.total, 17, "the next generated round changes quantity");
   assert.notEqual(afterBreak.stage, retryStage, "the next round uses a different quantity/radix pair");
@@ -825,14 +825,14 @@ try {
   assert.ok(afterSecondBreak.runToken > afterBreak.runToken);
   assert.notEqual(afterSecondBreak.total, secondQuantity);
   assert.notEqual(afterSecondBreak.stage, secondId);
-  assert.equal(afterSecondBreak.progress.pack.promotionEvidence.length, 2);
+  assert.equal(afterSecondBreak.progress.pack.promotionEvidence.length, 1);
   assert.equal(afterSecondBreak.progress.pack.difficulty, 3);
   const thirdQuantity = afterSecondBreak.total,
     afterThirdBreak = await solveCurrent();
   assert.ok(afterThirdBreak.runToken > afterSecondBreak.runToken);
   assert.notEqual(afterThirdBreak.total, thirdQuantity);
-  assert.deepEqual(afterThirdBreak.progress.pack.promotionEvidence, []);
-  assert.equal(afterThirdBreak.progress.pack.difficulty, 4);
+  assert.equal(afterThirdBreak.progress.pack.promotionEvidence.length, 2);
+  assert.equal(afterThirdBreak.progress.pack.difficulty, 3);
   assert.equal(new Set([17, secondQuantity, thirdQuantity]).size, 3);
   console.log("PACK generated problem, retry, wrong-radix exploration, reset, attack, BREAK, and next-round progression verified.");
 
@@ -858,6 +858,19 @@ try {
     }
     throw new Error("PACK Number Mass did not empty through incremental gestures");
   }
+  packState = await route(
+    "pack",
+    (problem) => problem.quantity === 17 && problem.targetRadix === 5 && problem.startRadix === 3,
+    3,
+  );
+  await packBase(4);
+  packState = await packWholeMass();
+  assert.equal(packState.pack.complete, true);
+  assert.equal(packState.pack.targetActivated, false);
+  await packBase(5);
+  packState = await packWholeMass();
+  assert.equal(packState.progress.pack.promotionEvidence.length, 1, "one distinct wrong completed radix still permits mastery evidence");
+
   packState = await route(
     "pack",
     (problem) => problem.quantity === 17 && problem.targetRadix === 5,
