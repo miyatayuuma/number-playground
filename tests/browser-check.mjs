@@ -869,6 +869,7 @@ try {
   assert.equal(packState.pack.targetActivated, false);
   await packBase(5);
   packState = await packWholeMass();
+  packState = await settled();
   assert.equal(packState.progress.pack.promotionEvidence.length, 1, "one distinct wrong completed radix still permits mastery evidence");
 
   packState = await route(
