@@ -1222,7 +1222,8 @@ try {
     state.sound = false;
     localStorage.setItem(key, JSON.stringify(state));
   });
-  await page.goto(`${base}/#rack`);
+  // Change the query too so this is a document reload, not an in-place hash navigation.
+  await page.goto(`${base}/?resetFixture=1#rack`);
   let resetBefore = await settled();
   const preserved = resetBefore.progress;
   await page.locator("#pause").click();
