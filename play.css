@@ -241,6 +241,36 @@ a {
   border-color: var(--accent);
   box-shadow: 0 0 35px color-mix(in srgb, var(--accent) 12%, transparent);
 }
+.restart-rule,
+.text-action {
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 0;
+  background: transparent;
+  color: #9bb2cb;
+  font: inherit;
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.restart-rule:hover,
+.text-action:hover {
+  color: #fff;
+}
+.reset-confirm p {
+  margin: 0 0 18px;
+  color: #b5c5d8;
+  font-size: 13px;
+}
+.reset-actions {
+  display: flex;
+  justify-content: center;
+  gap: 22px;
+}
+.text-action.primary {
+  color: #f3f7ff;
+  font-weight: 700;
+}
 .victory-emblem {
   height: 160px;
   display: grid;

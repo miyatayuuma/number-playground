@@ -195,6 +195,14 @@ function assertWidthSelectorVisual(trace, { handle, value, active, area, viewpor
   assert.ok(center.y < handle.y - 15, `${area} feedback remains above the touched selector`);
 }
 try {
+  await page.goto(`${base}/#link`);
+  await settled();
+  assert.equal((await read()).rule, "link");
+  assert.equal(new URL(page.url()).hash, "#rack");
+  assert.equal(await page.locator("#stage-name").textContent(), "ラック");
+  await page.locator("#areas").click();
+  assert.equal(await page.locator('[data-rule="link"]').textContent().then((text) => text.trim()), "ラック");
+  await page.locator('[data-menu="close"]').click();
   await page.goto(base);
   await page.locator("[data-rule]").first().waitFor();
   assert.equal(await page.locator("[data-rule]").count(), 4);
@@ -441,8 +449,8 @@ try {
     retryTargetShape,
   );
   assert.equal(packState.progress.pack.difficulty, retryProgress.difficulty);
-  assert.equal(packState.progress.pack.wins, retryProgress.wins);
-  assert.equal(packState.progress.pack.retries, retryProgress.retries);
+  assert.deepEqual(packState.progress.pack.promotionEvidence, retryProgress.promotionEvidence);
+  assert.equal(packState.progress.pack.reissues, retryProgress.reissues + 1);
   assert.deepEqual(packState.progress.pack.recent, retryRecent);
   const originalPackIds = [...packState.pack.originalRawIds],
     firstMass = packState.pack.numberMass,
@@ -807,7 +815,7 @@ try {
   assert.ok(afterBreak.runToken > beforeFinalRun, "BREAK advances to the next problem");
   assert.equal(afterBreak.pack.notation, null, "next problem clears prior notation");
   assert.ok(afterBreak.pack.places.every((place) => place.readoutOpacity === 0.25), "next problem clears prior raw-quantity emphasis");
-  assert.equal(afterBreak.progress.pack.wins, 1);
+  assert.equal(afterBreak.progress.pack.promotionEvidence.length, 1);
   assert.equal(afterBreak.progress.pack.difficulty, 3);
   assert.notEqual(afterBreak.total, 17, "the next generated round changes quantity");
   assert.notEqual(afterBreak.stage, retryStage, "the next round uses a different quantity/radix pair");
@@ -817,13 +825,13 @@ try {
   assert.ok(afterSecondBreak.runToken > afterBreak.runToken);
   assert.notEqual(afterSecondBreak.total, secondQuantity);
   assert.notEqual(afterSecondBreak.stage, secondId);
-  assert.equal(afterSecondBreak.progress.pack.wins, 2);
+  assert.equal(afterSecondBreak.progress.pack.promotionEvidence.length, 2);
   assert.equal(afterSecondBreak.progress.pack.difficulty, 3);
   const thirdQuantity = afterSecondBreak.total,
     afterThirdBreak = await solveCurrent();
   assert.ok(afterThirdBreak.runToken > afterSecondBreak.runToken);
   assert.notEqual(afterThirdBreak.total, thirdQuantity);
-  assert.equal(afterThirdBreak.progress.pack.wins, 0);
+  assert.deepEqual(afterThirdBreak.progress.pack.promotionEvidence, []);
   assert.equal(afterThirdBreak.progress.pack.difficulty, 4);
   assert.equal(new Set([17, secondQuantity, thirdQuantity]).size, 3);
   console.log("PACK generated problem, retry, wrong-radix exploration, reset, attack, BREAK, and next-round progression verified.");
@@ -902,7 +910,7 @@ try {
   const id = s.stage;
   for (let i = 0; i < 5; i++) await drag(s.pieces[0], s.targets[0]);
   assert.equal((await read()).stage, id);
-  assert.equal((await read()).progress.link.retries, 0);
+  assert.equal((await read()).progress.link.reissues, 0);
   // Cancelling a width gesture restores the previous preview.
   const box = await page.locator("#world").boundingBox(),
     handle = s.pieces[0].handle;
@@ -1174,9 +1182,9 @@ try {
   console.log(
     "Native touch: slow 4, fast 4→2→1, fast whole grip, single-dot contact and cancelled peels passed.",
   );
-  // Two deliberate reissues lower difficulty; the persisted state is used after a fresh navigation.
+  // Three deliberate reissues lower difficulty; the persisted state is used after a fresh navigation.
   const level = (await read()).difficulty;
-  for (let i = 0; i < 2; i++) {
+  for (let i = 0; i < 3; i++) {
     await page.locator("#pause").click();
     await page.locator('[data-menu="retry"]').click();
     await settled();
@@ -1186,6 +1194,40 @@ try {
   await page.goto(`${base}/#gear`);
   await settled();
   assert.equal((await read()).difficulty, savedLevel);
+  const savedProgress = (await read()).progress;
+  await page.evaluate(() => {
+    const key = "core-break-flow-v4",
+      state = JSON.parse(localStorage.getItem(key));
+    state.progress.link = {
+      difficulty: 4,
+      promotionEvidence: ["old-evidence"],
+      reissues: 2,
+      recent: ["old-problem"],
+    };
+    state.progress.spark.difficulty = 3;
+    state.sound = false;
+    localStorage.setItem(key, JSON.stringify(state));
+  });
+  await page.goto(`${base}/#rack`);
+  let resetBefore = await settled();
+  const preserved = resetBefore.progress;
+  await page.locator("#pause").click();
+  await page.locator('[data-menu="confirm-reset"]').click();
+  assert.match(await page.locator(".panel-title").textContent(), /ラックを最初から始めますか/);
+  await page.locator('[data-menu="cancel-reset"]').click();
+  assert.equal((await read()).progress.link.difficulty, 4);
+  await page.locator("#pause").click();
+  await page.locator('[data-menu="confirm-reset"]').click();
+  await page.locator('[data-menu="reset-rule"]').click();
+  resetBefore = await settled();
+  assert.equal(resetBefore.rule, "link");
+  assert.equal(resetBefore.difficulty, 1);
+  assert.deepEqual(resetBefore.progress.link.promotionEvidence, []);
+  assert.equal(resetBefore.progress.link.reissues, 0);
+  assert.deepEqual(resetBefore.progress.spark, preserved.spark);
+  assert.deepEqual(resetBefore.progress.gear, preserved.gear);
+  assert.deepEqual(resetBefore.progress.pack, preserved.pack);
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("core-break-flow-v4")).sound), false);
   // Pause during normal animation, then navigate away during another shot.
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await route("link", (p) => p.ammo[0] === 14 && p.gates[0] === 3);

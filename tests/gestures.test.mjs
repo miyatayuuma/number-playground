@@ -144,6 +144,6 @@ test("saved core progress is ignored without resetting the remaining rules", () 
   });
   assert.equal(p.core, undefined);
   assert.equal(p.spark.difficulty, 4);
-  assert.equal(p.spark.wins, 2);
+  assert.deepEqual(p.spark.promotionEvidence, []);
   assert.equal(p.gear.difficulty, 3);
 });
