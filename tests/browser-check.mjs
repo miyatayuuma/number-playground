@@ -68,6 +68,7 @@ async function captureCanvasTrace() {
       labels: [],
       arcs: [],
       roundRects: [],
+      rects: [],
       curves: 0,
     };
   });
@@ -938,6 +939,92 @@ try {
     (await read()).pieces.map((p) => p.width),
     [4, 4],
   );
+  // GEAR previews only the candidate numeral. The paired arrays and ready
+  // state stay at committed width until release.
+  await route("gear", (p) => p.ammo[0] === 12 && p.ammo[1] === 18);
+  s = await read();
+  const gear = s.pieces[0],
+    gearBox = await page.locator("#world").boundingBox(),
+    committedGeometry = s.pieces.map(({ id, width, x, y, ids }) => ({ id, width, x, y, ids }));
+  await page.mouse.move(gearBox.x + gear.handle.x, gearBox.y + gear.handle.y);
+  await page.mouse.down();
+  await page.mouse.move(gearBox.x + gear.handle.x + 72, gearBox.y + gear.handle.y, { steps: 6 });
+  await page.waitForTimeout(50);
+  s = await read();
+  assert.equal(s.widthAdjustCandidate, 6);
+  assert.equal(s.committedWidth, 0, "candidate divisor is not committed during drag");
+  assert.deepEqual(
+    s.pieces.map(({ id, width, x, y, ids }) => ({ id, width, x, y, ids })),
+    committedGeometry,
+    "paired geometry remains at the committed width while dragging",
+  );
+  let gearTrace = await captureCanvasTrace();
+  const gearTarget = s.targets[0];
+  assert.equal(
+    gearTrace.rects.some((frame) =>
+      Math.abs(frame.x - (gearTarget.x - 78)) < 0.1 &&
+      Math.abs(frame.y - (gearTarget.y - 20)) < 0.1 &&
+      frame.width === 156 && frame.height === 40,
+    ),
+    false,
+    "a candidate common divisor does not preview the ready glow",
+  );
+  assertWidthSelectorVisual(gearTrace, {
+    handle: gear.handle,
+    value: 6,
+    active: true,
+    area: "gear",
+    viewport: { width: 390, height: 844 },
+  });
+  await page.mouse.up();
+  s = await settled();
+  assert.equal(s.widthAdjustCandidate, null);
+  assert.equal(s.committedWidth, 6);
+  assert.deepEqual(s.pieces.map((piece) => piece.width), [6, 6]);
+  gearTrace = await captureCanvasTrace();
+  assert.ok(
+    gearTrace.rects.some((frame) =>
+      Math.abs(frame.x - (s.targets[0].x - 78)) < 0.1 &&
+      Math.abs(frame.y - (s.targets[0].y - 20)) < 0.1 &&
+      frame.width === 156 && frame.height === 40,
+    ),
+    "the committed common divisor updates the ready glow after release",
+  );
+
+  // Cancellation drops the temporary candidate and leaves the committed width.
+  const cancelHandle = s.pieces[0].handle;
+  await page.mouse.move(gearBox.x + cancelHandle.x, gearBox.y + cancelHandle.y);
+  await page.mouse.down();
+  await page.mouse.move(gearBox.x + cancelHandle.x - 48, gearBox.y + cancelHandle.y, { steps: 4 });
+  assert.equal((await read()).widthAdjustCandidate, 2);
+  await page.locator("#world").dispatchEvent("pointercancel", { pointerId: 1 });
+  await page.mouse.up();
+  s = await settled();
+  assert.equal(s.committedWidth, 6);
+  assert.deepEqual(s.pieces.map((piece) => piece.width), [6, 6]);
+
+  // lostpointercapture has the same non-commit behavior.
+  const lostHandle = s.pieces[0].handle;
+  await page.mouse.move(gearBox.x + lostHandle.x, gearBox.y + lostHandle.y);
+  await page.mouse.down();
+  await page.mouse.move(gearBox.x + lostHandle.x - 36, gearBox.y + lostHandle.y, { steps: 3 });
+  await page.locator("#world").dispatchEvent("lostpointercapture", { pointerId: 1 });
+  await page.mouse.up();
+  s = await settled();
+  assert.equal(s.committedWidth, 6);
+
+  // Exercise the intended physical hypothesis loop: smaller common widths
+  // remain fireable but repel, preserving the committed shape for another try.
+  for (const commonWidth of [2, 3]) {
+    await width(s.pieces[0].id, commonWidth);
+    s = await read();
+    assert.equal(s.committedWidth, commonWidth);
+    await drag(s.pieces[0], s.targets[0]);
+    s = await settled();
+    assert.equal(s.status, "play");
+    assert.equal(s.committedWidth, commonWidth);
+    assert.deepEqual(s.pieces.map((piece) => piece.width), [commonWidth, commonWidth]);
+  }
   const selectorViewports = [
     [320, 568],
     [390, 844],
@@ -987,8 +1074,8 @@ try {
       s = await read();
       assert.deepEqual(
         s.pieces.map((piece) => piece.width),
-        rule === "gear" ? [4, 4] : [4],
-        `${rule} still applies the active width through its existing gesture`,
+        rule === "gear" ? [3, 3] : [4],
+        `${rule} uses the expected live or deferred width behavior`,
       );
       assertWidthSelectorVisual(trace, {
         handle,
@@ -1003,9 +1090,10 @@ try {
       s = await read();
       assert.deepEqual(
         s.pieces.map((piece) => piece.width),
-        rule === "gear" ? [5, 5] : [5],
-        `${rule} updates the displayed width live`,
+        rule === "gear" ? [3, 3] : [5],
+        `${rule} updates the displayed width live or keeps GEAR committed`,
       );
+      if (rule === "gear") assert.equal(s.widthAdjustCandidate, 5);
       assertWidthSelectorVisual(trace, {
         handle,
         value: 5,
@@ -1016,6 +1104,11 @@ try {
 
       await touchEnd();
       s = await settled();
+      assert.deepEqual(
+        s.pieces.map((piece) => piece.width),
+        rule === "gear" ? [5, 5] : [5],
+        `${rule} has its expected width after release`,
+      );
       trace = await captureCanvasTrace();
       assertWidthSelectorVisual(trace, {
         handle,

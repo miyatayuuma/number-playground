@@ -237,7 +237,10 @@ FlowWorld.prototype.drawPieces = function drawPieces() {
             Math.min(...centers.map((p) => p.y)) - this.baseRadius - 30,
           )
         : Math.max(36, (center?.y ?? this.h * 0.7) - this.baseRadius - 42),
-    value = area === "gear" ? this.run.width : piece?.width,
+    value =
+      area === "gear"
+        ? this.widthAdjustCandidate ?? this.run.width
+        : piece?.width,
     c = this.ctx;
   if (x == null) return;
 

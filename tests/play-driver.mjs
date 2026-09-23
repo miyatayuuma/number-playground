@@ -7,12 +7,14 @@ export async function instrument(context) {
       labels: [],
       arcs: [],
       roundRects: [],
+      rects: [],
       curves: 0,
     };
     const fillText = CanvasRenderingContext2D.prototype.fillText,
       bezierCurveTo = CanvasRenderingContext2D.prototype.bezierCurveTo,
       arc = CanvasRenderingContext2D.prototype.arc,
       roundRect = CanvasRenderingContext2D.prototype.roundRect;
+    const strokeRect = CanvasRenderingContext2D.prototype.strokeRect;
     CanvasRenderingContext2D.prototype.fillText = function (text, x, y, ...rest) {
       if (this.canvas?.id === "world" && window.__canvasTrace.enabled)
         window.__canvasTrace.labels.push({
@@ -37,6 +39,11 @@ export async function instrument(context) {
       if (this.canvas?.id === "world" && window.__canvasTrace.enabled)
         window.__canvasTrace.roundRects.push({ x, y, width, height });
       return roundRect.call(this, x, y, width, height, ...rest);
+    };
+    CanvasRenderingContext2D.prototype.strokeRect = function (x, y, width, height) {
+      if (this.canvas?.id === "world" && window.__canvasTrace.enabled)
+        window.__canvasTrace.rects.push({ x, y, width, height });
+      return strokeRect.call(this, x, y, width, height);
     };
     const q = new URLSearchParams(location.search);
     if (q.has("fixtureSeed")) {
