@@ -60,7 +60,10 @@ import {
 import {
   freshProgress,
   restoreProgress,
-  recordResult,
+  recordClear,
+  recordReissue,
+  resetRule,
+  masteryEligible,
 } from "../src/progress.mjs";
 const packFixture = (overrides = {}) => ({
   id: "pack:test-fixture:q17:b5",
@@ -1000,24 +1003,19 @@ test("PACK factorization geometry does not depend on the active radix", () => {
   assert.deepEqual(factors(17), [17]);
 });
 
-test("PACK single target follows the existing saved difficulty progression", () => {
+test("PACK single target follows requested difficulty and progress migration", () => {
   assert.deepEqual(freshProgress().pack, {
     difficulty: 1,
-    wins: 0,
-    retries: 0,
+    promotionEvidence: [],
+    reissues: 0,
     recent: [],
   });
   assert.deepEqual(
     restoreProgress({ pack: { difficulty: 5, wins: 2, retries: 1 } }).pack,
-    { difficulty: 5, wins: 2, retries: 1, recent: [] },
+    { difficulty: 5, promotionEvidence: [], reissues: 0, recent: [] },
   );
   assert.equal(generateProblem("pack", 5, 999).difficulty, 5);
-  const progress = freshProgress().pack;
-  recordResult(progress, true);
-  recordResult(progress, true);
-  recordResult(progress, true);
-  assert.equal(progress.difficulty, 2);
-  assert.equal(generateProblem("pack", progress.difficulty, "next").difficulty, 2);
+  assert.equal(generateProblem("pack", 2, "next").difficulty, 2);
 });
 
 test("gear only clears on the greatest common divisor", () => {
@@ -1109,24 +1107,64 @@ test("shapes 1–36 do not overlap; paired polygons have radial symmetry", () =>
     }
   }
 });
-test("difficulty adapts only to completed problems or deliberate reissues; restores bounded state", () => {
-  const p = freshProgress().gear;
-  for (let i = 0; i < 3; i++) recordResult(p, true);
-  assert.equal(p.difficulty, 2);
-  recordResult(p, false);
-  assert.equal(p.difficulty, 2);
-  recordResult(p, false);
-  assert.equal(p.difficulty, 1);
-  for (let i = 0; i < 30; i++) recordResult(p, true);
-  assert.equal(p.difficulty, 5);
-  for (let i = 0; i < 30; i++) recordResult(p, false);
-  assert.equal(p.difficulty, 1);
-  assert.equal(
-    restoreProgress({
-      gear: { difficulty: 99, wins: 99, retries: -4, recent: [null, "a"] },
-    }).gear.difficulty,
-    5,
+test("evidence-based progression, deliberate reissues, migration and rule reset", () => {
+  assert.deepEqual(freshProgress().spark, {
+    difficulty: 1,
+    promotionEvidence: [],
+    reissues: 0,
+    recent: [],
+  });
+  assert.deepEqual(
+    restoreProgress({ spark: { difficulty: 4, wins: 2, retries: 1, recent: ["old"] } }).spark,
+    { difficulty: 4, promotionEvidence: [], reissues: 0, recent: ["old"] },
   );
+  const p = freshProgress().gear;
+  recordClear(p, "A", true);
+  recordClear(p, "A", true);
+  assert.deepEqual(p.promotionEvidence, ["A"]);
+  recordClear(p, "B", true);
+  recordClear(p, "C", true);
+  assert.equal(p.difficulty, 2);
+  assert.deepEqual(p.promotionEvidence, []);
+  recordClear(p, "D", true);
+  recordClear(p, "normal", false);
+  recordClear(p, "E", true);
+  recordClear(p, "normal-2", false);
+  recordClear(p, "F", true);
+  assert.equal(p.difficulty, 3);
+  for (let i = 0; i < 2; i++) recordReissue(p);
+  assert.equal(p.difficulty, 3);
+  recordClear(p, "clear", false);
+  assert.equal(p.reissues, 0);
+  for (let i = 0; i < 3; i++) recordReissue(p);
+  assert.equal(p.difficulty, 2);
+  assert.equal(p.reissues, 0);
+  p.difficulty = 1;
+  recordReissue(p); recordReissue(p); recordReissue(p);
+  assert.equal(p.difficulty, 1);
+  p.difficulty = 5;
+  for (let i = 0; i < 30; i++) recordClear(p, `D${i}`, true);
+  assert.equal(p.difficulty, 5);
+  const all = freshProgress();
+  all.link.difficulty = 4;
+  all.link.promotionEvidence = ["a"];
+  all.spark.difficulty = 3;
+  const before = structuredClone(all);
+  resetRule(all, "link");
+  assert.deepEqual(all.link, freshProgress().link);
+  assert.deepEqual(all.spark, before.spark);
+});
+
+test("mastery evidence ignores exploration and accepts exactly one PACK comparison", () => {
+  for (const rule of ["spark", "link", "gear"]) {
+    assert.equal(masteryEligible(rule, { rejectedAttacks: 0 }), true);
+    assert.equal(masteryEligible(rule, { rejectedAttacks: 1 }), false);
+  }
+  assert.equal(masteryEligible("pack", { wrongCompletedRadices: new Set() }), true);
+  assert.equal(masteryEligible("pack", { wrongCompletedRadices: new Set([4]) }), true);
+  assert.equal(masteryEligible("pack", { wrongCompletedRadices: new Set([2, 3]) }), false);
+  // Selector changes and incomplete constructions do not add completed hypotheses.
+  assert.equal(masteryEligible("pack", { wrongCompletedRadices: new Set() }), true);
 });
 
 test("rule-specific objects cannot be merged into an unsolvable paired gun or division", () => {

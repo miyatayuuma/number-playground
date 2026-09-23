@@ -4,7 +4,7 @@ import { packCanonicalDigits } from "./model.mjs";
 
 export const AREAS = [
   { id: "spark", name: "スパーク", color: "#ffc977", glyph: "✦" },
-  { id: "link", name: "リンク", color: "#75ead2", glyph: "⠿" },
+  { id: "link", name: "ラック", color: "#75ead2", glyph: "⠿" },
   { id: "gear", name: "ギア", color: "#8bbcff", glyph: "◈" },
   { id: "pack", name: "パック", color: "#f3a6ff", glyph: "◉" },
 ];

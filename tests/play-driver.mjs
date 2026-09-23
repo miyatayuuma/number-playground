@@ -49,15 +49,15 @@ export async function instrument(context) {
     if (q.has("fixtureSeed")) {
       Date.now = () => Number(q.get("fixtureSeed"));
       const rule = location.hash.slice(1),
-        data = JSON.parse(localStorage.getItem("core-break-flow-v3") || "{}");
+        data = JSON.parse(localStorage.getItem("core-break-flow-v4") || "{}");
       data.progress ||= {};
       data.progress[rule] = {
         difficulty: Number(q.get("difficulty")),
-        wins: 0,
-        retries: 0,
+        promotionEvidence: [],
+        reissues: 0,
         recent: [],
       };
-      localStorage.setItem("core-break-flow-v3", JSON.stringify(data));
+      localStorage.setItem("core-break-flow-v4", JSON.stringify(data));
     }
   });
 }

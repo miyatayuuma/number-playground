@@ -23,9 +23,13 @@ import { PeelGesture, finerSelection } from "./gestures.mjs";
 import { PackWorld as World } from "./pack-view.mjs";
 import {
   SAVE_KEY,
+  LEGACY_SAVE_KEY,
   freshProgress,
   restoreProgress,
-  recordResult,
+  recordClear,
+  recordReissue,
+  resetRule,
+  masteryEligible,
 } from "./progress.mjs";
 const canvas = document.querySelector("#world"),
   overlay = document.querySelector("#overlay");
@@ -44,8 +48,11 @@ let progress = freshProgress(),
   selected = null,
   epoch = 0,
   menu = null;
+let roundEvidence = { rejectedAttacks: 0, wrongCompletedRadices: new Set() };
 try {
-  const data = JSON.parse(localStorage.getItem(KEY) || "{}");
+  const data = JSON.parse(
+    localStorage.getItem(KEY) || localStorage.getItem(LEGACY_SAVE_KEY) || "{}",
+  );
   progress = restoreProgress(data.progress);
   const legacy = JSON.parse(
     localStorage.getItem("core-break-tactile-v2") || "{}",
@@ -118,6 +125,14 @@ function syncHUD() {
       "◆".repeat(run.stage.difficulty) + "◇".repeat(5 - run.stage.difficulty);
     steps.setAttribute("aria-label", `難易度 ${run.stage.difficulty} / 5`);
   }
+}
+function playerRuleName(id = ruleId) {
+  return id === "link" ? "ラック" : AREAS.find((a) => a.id === id)?.name || "";
+}
+function recordCurrentClear(mastery) {
+  recordClear(progress[ruleId], run.stage.id, mastery);
+  save();
+  syncHUD();
 }
 function announce(text) {
   document.querySelector("#announcement").textContent = text;
@@ -302,7 +317,7 @@ function areaMenu() {
 function pauseMenu() {
   if (!ruleId) return;
   openPanel(
-    `<section class="panel"><div class="panel-header"><span class="panel-title">CORE BREAK</span><button class="icon" data-menu="close" aria-label="再開">×</button></div><div class="pause-actions"><button class="large-action primary" data-menu="close" aria-label="再開">${icon("play")}</button><button class="large-action" data-menu="retry" aria-label="${ruleId === "pack" ? "最初からやり直す" : "別の問題にする"}">${icon("replay")}</button><button class="large-action" data-menu="sound" aria-label="${sound ? "音を消す" : "音を出す"}" aria-pressed="${sound}">${icon("sound")}${sound ? "" : "̸"}</button><button class="large-action" data-menu="areas" aria-label="ルールを選ぶ">${icon("map")}</button></div></section>`,
+    `<section class="panel"><div class="panel-header"><span class="panel-title">CORE BREAK</span><button class="icon" data-menu="close" aria-label="再開">×</button></div><div class="pause-actions"><button class="large-action primary" data-menu="close" aria-label="再開">${icon("play")}</button><button class="large-action" data-menu="retry" aria-label="${ruleId === "pack" ? "最初からやり直す" : "別の問題にする"}">${icon("replay")}</button><button class="large-action" data-menu="sound" aria-label="${sound ? "音を消す" : "音を出す"}" aria-pressed="${sound}">${icon("sound")}${sound ? "" : "̸"}</button><button class="large-action" data-menu="areas" aria-label="ルールを選ぶ">${icon("map")}</button></div><button class="restart-rule" data-menu="confirm-reset">このルールを最初から</button></section>`,
     "pause",
   );
 }
@@ -318,6 +333,7 @@ function start(id, changeHash = true, restartProblem = null) {
   packPointer = false;
   selected = null;
   ruleId = id;
+  roundEvidence = { rejectedAttacks: 0, wrongCompletedRadices: new Set() };
   document.body.classList.remove("entrance");
   const p = progress[id],
     problem = restartProblem
@@ -338,11 +354,11 @@ function start(id, changeHash = true, restartProblem = null) {
   closeMenu();
   syncHUD();
   keyboardUI();
-  if (changeHash) history.replaceState(null, "", `#${id}`);
+  if (changeHash) history.replaceState(null, "", `#${id === "link" ? "rack" : id}`);
   announce(
     id === "pack"
       ? AREAS.find((a) => a.id === id).name
-      : `${AREAS.find((a) => a.id === id).name} 難易度 ${problem.difficulty}`,
+      : `${playerRuleName(id)} 難易度 ${problem.difficulty}`,
   );
 }
 function nextProblem() {
@@ -362,14 +378,15 @@ async function transferPackMass(level) {
   if (token !== epoch) return false;
   settlePackTransition(run);
   selected = null;
+  const match = matchPackTarget(run);
   const notation = packCompletionNotation(run);
   if (notation) {
     world.showPackCompletionNotation(notation);
     announce(`${notation.quantity} は ${notation.radix}進数で ${notation.digits}`);
+    if (!match.ok) roundEvidence.wrongCompletedRadices.add(notation.radix);
   } else {
     announce("");
   }
-  const match = matchPackTarget(run);
   if (match.ok) {
     const activating = world.playPackTargetActivation();
     keyboardUI();
@@ -388,9 +405,7 @@ async function transferPackMass(level) {
       return false;
     if (!(await world.animatePackBreak()) || token !== epoch) return false;
     if (!completePackBreak(run)) throw new Error("PACK BREAK failed to settle");
-    recordResult(progress.pack, true);
-    save();
-    syncHUD();
+    recordCurrentClear(masteryEligible("pack", roundEvidence));
     announce("攻撃。BREAK。");
     keyboardUI();
     nextProblem();
@@ -457,12 +472,11 @@ async function drop(destination) {
     destination.kind === "gate"
       ? divide(run, pieceId, ids)
       : fire(run, pieceId, ids, destination.index);
+  if (!result.ok) roundEvidence.rejectedAttacks++;
   result.targetPoint = targetPosition;
   tone(result.ok ? "hit" : "miss");
   if (run.status === "won") {
-    recordResult(progress[ruleId], true);
-    save();
-    syncHUD();
+    recordCurrentClear(masteryEligible(ruleId, roundEvidence));
   }
   await world.animate(result);
   if (token !== epoch) return;
@@ -726,13 +740,23 @@ overlay.addEventListener("click", (e) => {
   }
   const action = button.dataset.menu;
   if (action === "close") closeMenu();
+  if (action === "confirm-reset") {
+    openPanel(
+      `<section class="panel reset-confirm"><div class="panel-header"><span class="panel-title">${playerRuleName()}を最初から始めますか？</span></div><p>このルールの進み具合だけリセットされます。</p><div class="reset-actions"><button class="text-action" data-menu="cancel-reset">戻る</button><button class="text-action primary" data-menu="reset-rule">最初から</button></div></section>`,
+      "reset-confirm",
+    );
+  }
+  if (action === "cancel-reset") pauseMenu();
+  if (action === "reset-rule") {
+    resetRule(progress, ruleId);
+    save();
+    start(ruleId);
+  }
   if (action === "retry") {
+    recordReissue(progress[ruleId]);
+    save();
     if (ruleId === "pack") start(ruleId, true, run.stage);
-    else {
-      recordResult(progress[ruleId], false);
-      save();
-      start(ruleId);
-    }
+    else start(ruleId);
   }
   if (action === "areas") areaMenu();
   if (action === "sound") {
@@ -833,7 +857,12 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("hashchange", route);
 function route() {
-  const id = location.hash.slice(1).split("/")[0];
+  let id = location.hash.slice(1).split("/")[0];
+  if (id === "rack" || id === "link") {
+    id = "link";
+    if (location.hash !== "#rack")
+      history.replaceState(null, "", `${location.pathname}${location.search}#rack`);
+  }
   if (AREAS.some((a) => a.id === id)) start(id, false);
   else {
     if (id === "core")
