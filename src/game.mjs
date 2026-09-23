@@ -378,16 +378,15 @@ async function transferPackMass(level) {
   if (token !== epoch) return false;
   settlePackTransition(run);
   selected = null;
+  const match = matchPackTarget(run);
   const notation = packCompletionNotation(run);
   if (notation) {
     world.showPackCompletionNotation(notation);
     announce(`${notation.quantity} は ${notation.radix}進数で ${notation.digits}`);
-    if (!matchPackTarget(run).ok)
-      roundEvidence.wrongCompletedRadices.add(notation.radix);
+    if (!match.ok) roundEvidence.wrongCompletedRadices.add(notation.radix);
   } else {
     announce("");
   }
-  const match = matchPackTarget(run);
   if (match.ok) {
     const activating = world.playPackTargetActivation();
     keyboardUI();
