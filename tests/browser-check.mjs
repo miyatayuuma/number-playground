@@ -220,7 +220,7 @@ try {
   assert.equal(await page.locator("#pause .update-dot").count(), 0);
   await page.locator("#pause").click();
   assert.equal(await page.locator("[data-app-update]").count(), 0);
-  await page.locator('[data-menu="close"]').click();
+  await page.locator('[data-menu="close"]').first().click();
 
   const [major, minor, patch, build = 0] = deployedVersion.split(".").map(Number);
   const newerVersion = `${major}.${minor}.${patch}.${build + 1}`;
