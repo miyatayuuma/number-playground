@@ -270,6 +270,8 @@ try {
     assert.equal(await page.locator("#steps").textContent(), "◆".repeat(difficulty) + "◇".repeat(5 - difficulty));
     assert.equal(await page.locator("#steps").getAttribute("aria-label"), `難易度 ${difficulty} / 5`);
   }
+  await page.goto(base);
+  await page.locator("[data-rule]").first().waitFor();
   assert.equal(
     await page.locator('[data-rule="pack"] .pack-demo-slot').count(),
     4,
