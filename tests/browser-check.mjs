@@ -215,6 +215,8 @@ try {
   const deployedVersion = JSON.parse(await readFile(resolve(root, "version.json"), "utf8")).version;
   await page.goto(base);
   await page.locator("[data-rule]").first().waitFor();
+  await page.locator('[data-rule="spark"]').click();
+  await settled();
   assert.equal(await page.locator("#pause .update-dot").count(), 0);
   await page.locator("#pause").click();
   assert.equal(await page.locator("[data-app-update]").count(), 0);
