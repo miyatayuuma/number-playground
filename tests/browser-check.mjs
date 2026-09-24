@@ -8,15 +8,27 @@ const repo = resolve(import.meta.dirname, "..");
 const root = resolve(repo, "dist");
 const server = createServer(async (req, res) => {
   try {
-    const pathname = decodeURIComponent(
-        new URL(req.url, "http://localhost").pathname,
-      ),
+    const requestUrl = new URL(req.url, "http://localhost"),
+      pathname = decodeURIComponent(requestUrl.pathname),
       file = resolve(root, `.${pathname === "/" ? "/index.html" : pathname}`);
     if (!file.startsWith(root + "/")) {
       res.writeHead(403).end();
       return;
     }
-    const data = await readFile(file);
+    let data = await readFile(file);
+    const updatedVersion = requestUrl.searchParams.get("update");
+    if (updatedVersion && file.endsWith("index.html")) {
+      data = Buffer.from(data.toString().replace(
+        /src="src\/bootstrap\.mjs(?:\?v=[^"]*)?"/,
+        `src="src/bootstrap.mjs?v=${updatedVersion}"`,
+      ));
+    } else if (extname(file) === ".mjs" && requestUrl.searchParams.has("v")) {
+      const requestedVersion = requestUrl.searchParams.get("v");
+      data = Buffer.from(data.toString().replace(
+        /\.mjs\?v=[^"'`]+/g,
+        `.mjs?v=${requestedVersion}`,
+      ));
+    }
     res.setHeader(
       "Content-Type",
       {
@@ -211,12 +223,10 @@ try {
   const [major, minor, patch, build = 0] = deployedVersion.split(".").map(Number);
   const newerVersion = `${major}.${minor}.${patch}.${build + 1}`;
   await page.route("**/version.json?*", async (route) => {
-    const referer = route.request().headers().referer || "";
-    const settling = new URL(referer || base).searchParams.has("update");
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ version: settling ? deployedVersion : newerVersion }),
+      body: JSON.stringify({ version: newerVersion }),
     });
   });
   await page.reload();
@@ -227,10 +237,13 @@ try {
   const updateBox = await update.boundingBox();
   await page.touchscreen.tap(updateBox.x + updateBox.width / 2, updateBox.y + updateBox.height / 2);
   await page.waitForURL((url) => url.searchParams.get("update") === newerVersion);
+  await page.waitForFunction((version) =>
+    [...document.scripts].some((script) =>
+      script.src.includes(`/src/bootstrap.mjs?v=${version}`),
+    ), newerVersion);
   await page.waitForFunction(() => !document.querySelector("#pause .update-dot"));
   assert.equal(await page.locator('[data-app-update]').count(), 0);
-  assert.ok(importedModuleUrls.length > 0);
-  assert.ok(importedModuleUrls.every((url) => new URL(url).searchParams.get("v") === deployedVersion));
+  assert.ok(importedModuleUrls.some((url) => new URL(url).searchParams.get("v") === newerVersion));
   await page.unroute("**/version.json?*");
 
   await page.goto(`${base}/#link`);
