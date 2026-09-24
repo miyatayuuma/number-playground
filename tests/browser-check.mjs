@@ -4,7 +4,8 @@ import { readFile, mkdir } from "node:fs/promises";
 import { resolve, extname } from "node:path";
 import { chromium } from "playwright";
 import { instrument, driver, touchPeel } from "./play-driver.mjs";
-const root = resolve(import.meta.dirname, "..");
+const repo = resolve(import.meta.dirname, "..");
+const root = resolve(repo, "dist");
 const server = createServer(async (req, res) => {
   try {
     const pathname = decodeURIComponent(
@@ -45,6 +46,7 @@ const context = await browser.newContext({
 await instrument(context);
 const page = await context.newPage(),
   errors = [],
+  importedModuleUrls = [],
   touchSession = await context.newCDPSession(page);
 async function capture(path) {
   if (process.env.CAPTURE_BROWSER_ARTIFACTS === "0") return;
@@ -58,6 +60,9 @@ page.on("console", (message) => {
 });
 page.on("response", (r) => {
   if (r.status() >= 400) errors.push(`${r.status()} ${r.url()}`);
+});
+page.on("request", (request) => {
+  if (/\.mjs\?v=/.test(request.url())) importedModuleUrls.push(request.url());
 });
 const { read, settled, route, audit, drag, width, packBase, solveCurrent } =
   driver(page, base);
@@ -195,6 +200,39 @@ function assertWidthSelectorVisual(trace, { handle, value, active, area, viewpor
   assert.ok(center.y < handle.y - 15, `${area} feedback remains above the touched selector`);
 }
 try {
+  const deployedVersion = JSON.parse(await readFile(resolve(root, "version.json"), "utf8")).version;
+  await page.goto(base);
+  await page.locator("[data-rule]").first().waitFor();
+  assert.equal(await page.locator("#pause .update-dot").count(), 0);
+  await page.locator("#pause").click();
+  assert.equal(await page.locator("[data-app-update]").count(), 0);
+  await page.locator('[data-menu="close"]').click();
+
+  const [major, minor, patch, build = 0] = deployedVersion.split(".").map(Number);
+  const newerVersion = `${major}.${minor}.${patch}.${build + 1}`;
+  await page.route("**/version.json?*", async (route) => {
+    const referer = route.request().headers().referer || "";
+    const settling = new URL(referer || base).searchParams.has("update");
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ version: settling ? deployedVersion : newerVersion }),
+    });
+  });
+  await page.reload();
+  await page.locator("#pause .update-dot").waitFor();
+  await page.locator("#pause").click();
+  const update = page.locator('[data-app-update][aria-label="最新版に更新"]');
+  await update.waitFor();
+  const updateBox = await update.boundingBox();
+  await page.touchscreen.tap(updateBox.x + updateBox.width / 2, updateBox.y + updateBox.height / 2);
+  await page.waitForURL((url) => url.searchParams.get("update") === newerVersion);
+  await page.waitForFunction(() => !document.querySelector("#pause .update-dot"));
+  assert.equal(await page.locator('[data-app-update]').count(), 0);
+  assert.ok(importedModuleUrls.length > 0);
+  assert.ok(importedModuleUrls.every((url) => new URL(url).searchParams.get("v") === deployedVersion));
+  await page.unroute("**/version.json?*");
+
   await page.goto(`${base}/#link`);
   await settled();
   assert.equal((await read()).rule, "link");
@@ -211,6 +249,12 @@ try {
     await page.locator('[data-rule="pack"] .pack-demo-dot').count(),
     13,
   );
+  for (const difficulty of [1, 3, 5]) {
+    await page.goto(`${base}/?fixtureSeed=${difficulty}&difficulty=${difficulty}#pack`);
+    await settled();
+    assert.equal(await page.locator("#steps").textContent(), "◆".repeat(difficulty) + "◇".repeat(5 - difficulty));
+    assert.equal(await page.locator("#steps").getAttribute("aria-label"), `難易度 ${difficulty} / 5`);
+  }
   assert.equal(
     await page.locator('[data-rule="pack"] .pack-demo-slot').count(),
     4,
@@ -787,7 +831,10 @@ try {
     false,
   );
   await page.evaluate(async () => {
-    window.__readFlow = (await import("./src/game.mjs")).inspect;
+    const version = new URL(
+      [...document.scripts].find((script) => script.src.includes("/src/bootstrap.mjs")).src,
+    ).searchParams.get("v");
+    window.__readFlow = (await import(`./src/game.mjs?v=${version}`)).inspect;
   });
   await page.waitForFunction(
     (token) => window.__readFlow().status === "attack" || window.__readFlow().status === "break" || window.__readFlow().runToken !== token,
