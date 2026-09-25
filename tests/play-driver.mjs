@@ -64,10 +64,18 @@ export async function instrument(context) {
 export function driver(page, base) {
   let navigation = 0;
   const read = () =>
-    page.evaluate(async () => (await import("./src/game.mjs")).inspect());
+    page.evaluate(async () => {
+      const version = new URL(
+        [...document.scripts].find((script) => script.src.includes("/src/bootstrap.mjs")).src,
+      ).searchParams.get("v");
+      return (await import(`./src/game.mjs?v=${version}`)).inspect();
+    });
   async function settled() {
     await page.evaluate(async () => {
-      window.__readFlow = (await import("./src/game.mjs")).inspect;
+      const version = new URL(
+        [...document.scripts].find((script) => script.src.includes("/src/bootstrap.mjs")).src,
+      ).searchParams.get("v");
+      window.__readFlow = (await import(`./src/game.mjs?v=${version}`)).inspect;
     });
     await page.waitForFunction(
       () => {
@@ -252,7 +260,12 @@ export async function touchPeel(
     box = await page.locator("#world").boundingBox(),
     steps = fast ? 2 : 8;
   const read = () =>
-    page.evaluate(async () => (await import("./src/game.mjs")).inspect());
+    page.evaluate(async () => {
+      const version = new URL(
+        [...document.scripts].find((script) => script.src.includes("/src/bootstrap.mjs")).src,
+      ).searchParams.get("v");
+      return (await import(`./src/game.mjs?v=${version}`)).inspect();
+    });
   await cdp.send("Input.dispatchTouchEvent", {
     type: "touchStart",
     touchPoints: [{ x: box.x + from.x, y: box.y + from.y }],

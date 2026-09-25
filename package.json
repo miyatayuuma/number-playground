@@ -4,8 +4,9 @@
   "type": "module",
   "scripts": {
     "dev": "python3 -m http.server 4173 --bind 127.0.0.1",
+    "prepare:pages": "node scripts/prepare-pages.mjs",
     "test": "node --test tests/*.test.mjs",
-    "test:browser": "node tests/browser-check.mjs",
+    "test:browser": "npm run prepare:pages && node tests/browser-check.mjs",
     "record": "node scripts/record-play.mjs"
   },
   "devDependencies": {

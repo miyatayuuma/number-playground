@@ -117,14 +117,9 @@ function syncHUD() {
     steps = document.querySelector("#steps");
   document.documentElement.style.setProperty("--accent", a.color);
   document.querySelector("#stage-name").textContent = a.name;
-  if (run.stage.area === "pack") {
-    steps.textContent = "";
-    steps.setAttribute("aria-label", "パック");
-  } else {
-    steps.textContent =
-      "◆".repeat(run.stage.difficulty) + "◇".repeat(5 - run.stage.difficulty);
-    steps.setAttribute("aria-label", `難易度 ${run.stage.difficulty} / 5`);
-  }
+  steps.textContent =
+    "◆".repeat(run.stage.difficulty) + "◇".repeat(5 - run.stage.difficulty);
+  steps.setAttribute("aria-label", `難易度 ${run.stage.difficulty} / 5`);
 }
 function playerRuleName(id = ruleId) {
   return id === "link" ? "ラック" : AREAS.find((a) => a.id === id)?.name || "";
