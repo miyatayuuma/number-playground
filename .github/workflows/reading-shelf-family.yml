@@ -20,12 +20,14 @@ jobs:
         with:
           node-version: '22'
       - name: Pure domain behavior
-        run: node --test reading-shelf-firebase/domain.test.mjs reading-shelf-firebase/pwa.test.mjs
+        run: node --test reading-shelf-firebase/domain.test.mjs reading-shelf-firebase/pwa.test.mjs reading-shelf-firebase/book-lookup.test.mjs
       - name: Browser module syntax
         run: |
           node --check reading-shelf-firebase/app.mjs
           node --check reading-shelf-firebase/book-community.mjs
           node --check reading-shelf-firebase/recommendations.mjs
+          node --check reading-shelf-firebase/book-lookup.mjs
+          node --check reading-shelf-firebase/activity.mjs
           node --check reading-shelf-firebase/sw.js
   firestore-rules:
     runs-on: ubuntu-latest
