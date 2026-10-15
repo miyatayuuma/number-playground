@@ -68,3 +68,22 @@ export function normalizeBook(src){
     pageCount:toNum(src.pageCount),updatedAt:new Date().toISOString()};
 }
 export function newBook(){return {id:crypto.randomUUID(),title:'',titleKana:'',author:'',authorKana:'',status:'unread',publicationYear:null,finishedAt:'',finishedPeriodStart:'',finishedPeriodEnd:'',finishedPeriodLabel:'',isbn:'',seriesId:'',volume:null,edition:'',publisher:'',ageLabel:'',ageSource:'',coverUrl:'',notes:'',readOrder:null,readingMode:'read-aloud'}}
+
+// Patch-only import: never overwrites the book record, status, or family notes.
+export function validatePeriodUpdates(raw){
+  if(!raw||raw.schemaVersion!==1||raw.type!=='reading-period-update'||!Array.isArray(raw.books))throw Error('読了時期の更新ファイル形式が不正です');
+  if(raw.books.length===0||raw.books.length>10000)throw Error('期間の件数が不正です');
+  const ids=new Set();
+  return raw.books.map((b)=>{
+    if(!b||typeof b.id!=='string'||!b.id||b.id.includes('/')||ids.has(b.id))throw Error('期間情報のIDが重複または不正です');
+    ids.add(b.id);
+    if(typeof b.title!=='string'||!b.title.trim())throw Error('書名を指定してください');
+    const start=b.finishedPeriodStart,end=b.finishedPeriodEnd,label=b.finishedPeriodLabel;
+    if(!validMonth(start)||!start||!validMonth(end)||!end||start>end)throw Error('期間の年月が不正です: '+b.title);
+    if(typeof label!=='string'||!label.trim()||label.length>160)throw Error('表示名が不正です: '+b.title);
+    if(!['school_year','school_term','school_holiday','month','month_range','quarter'].includes(b.finishedPeriodPrecision))throw Error('読了時期の精度が不正です: '+b.title);
+    if(typeof b.finishedPeriodBasis!=='string'||b.finishedPeriodBasis.length>120)throw Error('根拠情報が不正です');
+    if(b.finishedPeriodNote!==undefined&&(typeof b.finishedPeriodNote!=='string'||b.finishedPeriodNote.length>1500))throw Error('注記が不正です');
+    return b;
+  });
+}
