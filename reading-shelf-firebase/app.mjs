@@ -112,20 +112,36 @@ function render(){
   if(!data.length){root.innerHTML='<div class="empty">該当する本はまだありません。</div>';return}
   if(view==='shelf'){root.append(bookGrid(data));return}
   if(view==='series'){
+    // A series screen should never collect unrelated stand-alone books.
     const known=new Map(series.map(s=>[s.id,s]));
     const grouped=new Map();
-    for(const book of data){const key=book.seriesId||'none';if(!grouped.has(key))grouped.set(key,[]);grouped.get(key).push(book)}
-    for(const [key,items] of grouped){const section=groupSection(known.get(key)?.name||'シリーズ未登録',known.get(key)?.note||'',items.sort((a,b)=>(a.volume||999)-(b.volume||999)),known.get(key)?.totalVolumes);root.append(section)}
+    for(const book of data){
+      if(!book.seriesId)continue;
+      if(!grouped.has(book.seriesId))grouped.set(book.seriesId,[]);
+      grouped.get(book.seriesId).push(book);
+    }
+    const keys=[...grouped.keys()].sort((a,b)=>(known.get(a)?.name||a).localeCompare(known.get(b)?.name||b,'ja'));
+    for(const key of keys){
+      const items=grouped.get(key).sort((a,b)=>(a.volume||999)-(b.volume||999));
+      const meta=known.get(key);
+      root.append(groupSection(meta?.name||'名称未登録のシリーズ',meta?.note||'',items,meta?.totalVolumes,true));
+    }
+    if(!keys.length)root.innerHTML='<div class="empty">シリーズに登録された本はまだありません。</div>';
     return;
   }
   const groups=new Map();
   for(const b of data.filter(x=>x.status==='read')){const p=readPeriodGrouping(b);if(!groups.has(p))groups.set(p,[]);groups.get(p).push(b)}
   for(const [key,items] of groups)root.append(groupSection(key,'',items));
 }
-function groupSection(title,note,items,total){
+function groupSection(title,note,items,total,isSeries=false){
   const section=document.createElement('section');section.className='group';
   const h=document.createElement('h2');h.textContent=title;section.append(h);
-  const p=document.createElement('p');p.textContent=items.filter(b=>b.status==='read').length+'冊読了'+(total?' / 本編全'+total+'巻':'')+(note?' · '+note:'');section.append(p,bookGrid(items));return section;
+  const p=document.createElement('p');
+  const read=items.filter(b=>b.status==='read').length;
+  p.textContent=isSeries
+    ?'登録'+items.length+'冊・読了'+read+'冊'+(total?' / 全'+total+'巻':'')+(note?' · '+note:'')
+    :read+'冊読了'+(note?' · '+note:'');
+  section.append(p,bookGrid(items));return section;
 }
 function bookGrid(data){
   const div=document.createElement('div');div.className='books';
