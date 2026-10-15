@@ -150,7 +150,7 @@ function groupSection(title,note,items,total){
 function bookGrid(data){
   const div=document.createElement('div');div.className='books';
   for(const b of data){
-    const btn=document.createElement('button');btn.className='book';btn.onclick=()=>openEditor(b);
+    const btn=document.createElement('button');btn.className='book';btn.onclick=()=>openBookInfo(b);
     const cover=document.createElement('div');cover.className='cover';cover.textContent=b.title;
     const url=safeCover(b.coverUrl);
     if(url){const img=document.createElement('img');img.loading='lazy';img.alt=b.title+'の表紙';img.src=url;img.onerror=()=>img.remove();cover.append(img)}
@@ -161,6 +161,62 @@ function bookGrid(data){
     const period=document.createElement('span');period.className='sub';period.textContent=b.status==='read'?readPeriodLabel(b):'';
     btn.append(cover,title,author,meta,period);div.append(btn);
   }return div;
+}
+function openBookInfo(book){
+  $('bookInfoTitle').textContent=book.title;
+  const root=$('bookInfoBody');root.replaceChildren();
+  const summary=document.createElement('div');summary.className='bookSummary';
+  const art=document.createElement('div');art.className='bookDetailCover cover';art.textContent=book.title;
+  const src=safeCover(book.coverUrl);
+  if(src){const img=document.createElement('img');img.alt=book.title+' の表紙';img.src=src;img.onerror=()=>img.remove();art.append(img)}
+  const metadata=document.createElement('div');metadata.className='bibliography';
+  const seriesName=series.find(q=>q.id===book.seriesId)?.name||'';
+  const verified=book.publicationYearBasis==='photo-confirmed-edition';
+  const fields=[
+    ['状態',STATUSES[book.status]||'未登録'],
+    ['読了時期',book.status==='read'?readPeriodLabel(book):''],
+    ['作者',book.author],
+    ['訳',book.translator],
+    ['文・再話',book.adaptedBy],
+    ['挿絵',book.illustrator],
+    ['出版社',book.publisher],
+    ['出版年',book.publicationYear?book.publicationYear+'年':'未登録'],
+    ['出版年月',book.publicationDate],
+    ['書誌の版',verified?'実物の版を確認済み':'参照版の書誌（実物の版は未確認）'],
+    ['ISBN',book.isbn],
+    ['ページ数',book.pageCount?book.pageCount+'ページ':''],
+    ['対象年齢・学年',book.ageLabel],
+    ['シリーズ',seriesName],
+    ['巻番号',book.volume?book.volume+'巻':''],
+    ['版',book.edition],
+    ['作品区分',book.workType]
+  ];
+  for(const [name,value] of fields){
+    if(value===undefined||value===null||value==='')continue;
+    const label=document.createElement('dt');label.textContent=name;
+    const detail=document.createElement('dd');detail.textContent=String(value);
+    metadata.append(label,detail);
+  }
+  summary.append(art,metadata);root.append(summary);
+  for(const [heading,value] of [['版の説明',book.editionNote],['読書・観察メモ',book.notes],['書影の参照元',book.coverReferenceSource]]){
+    if(!value)continue;
+    const p=document.createElement('p');p.className='detailNote';
+    const strong=document.createElement('strong');strong.textContent=heading+'：';
+    p.append(strong,document.createTextNode(value));root.append(p);
+  }
+  const reference=safeCover(book.bibliographicSource);
+  if(reference){
+    const p=document.createElement('p');p.className='detailNote';
+    const a=document.createElement('a');a.href=reference;a.target='_blank';a.rel='noopener noreferrer';
+    a.textContent='出版社・図書館などの書誌出典を確認 ↗';
+    p.append(a);root.append(p);
+  }
+  $('bookInfoEdit').hidden=role==='viewer';
+  $('bookInfoEdit').onclick=()=>{
+    $('bookInfoDialog').close();
+    openEditor(book);
+  };
+  $('bookInfoDialog').showModal();
 }
 function openEditor(book){
   if(role==='viewer'){notice('閲覧専用アカウントです。編集するには管理者へお問い合わせください。');return}
