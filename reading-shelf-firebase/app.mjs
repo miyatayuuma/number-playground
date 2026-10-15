@@ -230,7 +230,7 @@ function renderFamily(){
   const ctr=document.createElement('div');ctr.className='familyActions';ctr.append(input,btn);root.append(ctr);
   btn.onclick=async()=>{
     const email=input.value.trim().toLowerCase();
-    if(!/^[^\\s@/]+@[^\\s@/]+\\.[^\\s@/]+$/.test(email))return notice('有効なメールアドレスを入力してください',true);
+    if(!/^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(email))return notice('有効なメールアドレスを入力してください',true);
     try{
       await setDoc(familyDoc('invites',email),{email,role:'viewer',expiresAt:Timestamp.fromMillis(Date.now()+14*86400000)});
       notice('招待を作成しました。以下のURLを家族に送ってください。');
