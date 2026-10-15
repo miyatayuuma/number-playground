@@ -183,7 +183,7 @@ service cloud.firestore {
         allow list: if member(fid) && (owner(fid) || resource.data.hidden == false);
         allow create: if member(fid)
           && request.resource.data.keys().hasOnly(['authorUid','title','normalizedTitle','reason','url','hidden','createdAt','updatedAt','author','publisher','publishedDate','isbn','coverUrl','metadataSource'])
-          && request.resource.data.keys().hasAll(['authorUid','title','normalizedTitle','reason','url','hidden','createdAt','updatedAt','author','publisher','publishedDate','isbn','coverUrl','metadataSource'])
+          && request.resource.data.keys().hasAll(['authorUid','title','normalizedTitle','reason','url','hidden','createdAt','updatedAt'])
           && request.resource.data.authorUid == request.auth.uid
           && request.resource.data.title is string
           && request.resource.data.title.size() > 0
