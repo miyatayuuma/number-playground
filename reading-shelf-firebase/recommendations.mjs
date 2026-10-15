@@ -1,4 +1,4 @@
-import {collection,doc,query,where,limit,onSnapshot,setDoc,updateDoc,deleteDoc,serverTimestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
+import {collection,doc,query,where,limit,onSnapshot,setDoc,updateDoc,deleteDoc,getDoc,writeBatch,serverTimestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
 import {normalize,STATUSES} from './domain.mjs?build=20261016-high-v7';
 import {searchBookMetadata} from './book-lookup.mjs?build=20261016-high-v7';
 
@@ -13,6 +13,8 @@ const safeURL=v=>!v||(/^https:\/\/[^\s]+$/i.test(v)&&v.length<=1500);
 export function mountRecommendations({db,fid,user,owner,members,books,container,onError}){
   const ref=collection(db,'families',fid,'recommendations');
   const subscriptions=[];
+  const activity=collection(db,'families',fid,'activity');
+  const activityFor=id=>doc(activity,'recommendation-'+id);
   let active=true,visible=[],moderated=[];
   const who=uid=>uid===user.uid?'自分':members().find(m=>m.uid===uid)?.displayName||'家族';
   const root=el('section','recommendationPage');
@@ -119,11 +121,18 @@ export function mountRecommendations({db,fid,user,owner,members,books,container,
           item.append(edit,address,save,cancel);edit.focus();
         });
         action('取り下げる',async()=>{
-          if(confirm('自分のおすすめを取り下げますか？'))await deleteDoc(doc(ref,rec.id));
+          if(!confirm('自分のおすすめを取り下げますか？'))return;
+          const a=activityFor(rec.id),existing=await getDoc(a);
+          const batch=writeBatch(db);batch.delete(doc(ref,rec.id));
+          if(existing.exists())batch.delete(a);
+          await batch.commit();
         });
       }
       if(owner)action(moderationMode?'表示を戻す':'非表示にする',async()=>{
-        await mutate(rec,{hidden:!moderationMode});
+        const a=activityFor(rec.id),existing=await getDoc(a);
+        const batch=writeBatch(db);batch.update(doc(ref,rec.id),{hidden:!moderationMode});
+        if(existing.exists())batch.update(a,{hidden:!moderationMode});
+        await batch.commit();
       });
       item.append(actions);card.append(item);
     }
@@ -171,8 +180,12 @@ export function mountRecommendations({db,fid,user,owner,members,books,container,
         publishedDate:confirmed.publishedDate,isbn:confirmed.isbn,
         coverUrl:confirmed.coverUrl,metadataSource:confirmed.sourceUrl
       }:{};
-      await setDoc(recRef,{authorUid:user.uid,title:book,normalizedTitle:normalize(book),
+      const batch=writeBatch(db);
+      batch.set(recRef,{authorUid:user.uid,title:book,normalizedTitle:normalize(book),
         reason:why,url:web,hidden:false,createdAt:serverTimestamp(),updatedAt:serverTimestamp(),...patch});
+      batch.set(activityFor(recRef.id),{actorUid:user.uid,kind:'recommendation',title:book,
+        bookId:'',sourceId:recRef.id,hidden:false,createdAt:serverTimestamp()});
+      await batch.commit();
       title.value=url.value=reason.value='';resetSelection();
       status.textContent='おすすめを追加しました';
     }catch(e){notify(e)}finally{if(active)submit.disabled=false}
