@@ -2,6 +2,7 @@ import {initializeApp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-
 import {getAuth,GoogleAuthProvider,signInWithPopup,signInWithRedirect,getRedirectResult,setPersistence,browserLocalPersistence,onAuthStateChanged,signOut} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js';
 import {getFirestore,doc,collection,getDoc,setDoc,deleteDoc,onSnapshot,Timestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
 import {firebaseConfig} from './firebase-config.mjs';
+import {mountBookCommunity} from './book-community.mjs';
 import {STATUSES,filteredBooks,readPeriodLabel,readPeriodGrouping} from './domain.mjs';
 
 const $=id=>document.getElementById(id);
@@ -10,6 +11,7 @@ const safeCover=url=>/^(https:\/\/|data:image\/(jpeg|png|webp);base64,)/i.test(S
 const SHOW=['loading','loginPanel','setupPanel','shelfPanel'];
 let auth,db,user=null,fid='',role='',household=null,books=[],series=[],members=[],invites=[];
 let unsubs=[],view='shelf',generation=0,periodMode=false,sortDescending=true;
+let closeCommunity=null;
 const inviteFromUrl=new URLSearchParams(location.search).get('family')||'';
 
 function show(id){SHOW.forEach(x=>$(x).hidden=x!==id)}
@@ -47,13 +49,14 @@ function initUI(){
   $('sortDirection').onclick=()=>{sortDescending=!sortDescending;render()};
   $('timelineToggle').onclick=()=>{periodMode=!periodMode;render()};
   document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>$((b.dataset.close)).close());
+  $('bookInfoDialog').addEventListener('close',()=>{closeCommunity?.();closeCommunity=null});
 }
 function updateShelfHeading(){
   const name=household?.name||'本棚';
   $('shelfName').textContent=name;
   document.title=household?'よんでね | '+name:'よんでね';
 }
-function closeListeners(){unsubs.forEach(u=>u());unsubs=[];fid='';books=[];series=[];members=[];invites=[];household=null;role='';updateShelfHeading()}
+function closeListeners(){closeCommunity?.();closeCommunity=null;unsubs.forEach(u=>u());unsubs=[];fid='';books=[];series=[];members=[];invites=[];household=null;role='';updateShelfHeading()}
 function familyDoc(...a){return doc(db,'families',fid,...a)}
 function familyCollection(...a){return collection(db,'families',fid,...a)}
 async function login(){
@@ -243,6 +246,12 @@ function openBookInfo(book){
     a.textContent='出版社・図書館などの書誌出典を確認 ↗';
     p.append(a);root.append(p);
   }
+  closeCommunity?.();
+  const community=document.createElement('div');community.className='communityRoot';
+  root.append(community);
+  closeCommunity=mountBookCommunity({
+    db,fid,book,user,owner:role==='owner',members:()=>members,container:community,onError:statusError
+  });
   $('bookInfoDialog').showModal();
 }
 function renderRecommendations(){
