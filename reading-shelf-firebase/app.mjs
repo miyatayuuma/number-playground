@@ -369,36 +369,52 @@ function renderFamily(){
     root.append(row);
   }
   if(role!=='owner')return;
-  const inviteTitle=document.createElement('h3');inviteTitle.textContent='家族を招待';root.append(inviteTitle);
-  const p=document.createElement('p');p.className='muted';
-  p.textContent='招待先のGoogleメールアドレスを登録し、招待URLを送ってください。招待は14日間有効です。';
-  root.append(p);
-  const input=document.createElement('input');input.type='email';input.placeholder='family@gmail.com';
-  input.setAttribute('aria-label','招待するGoogleメールアドレス');
-  const btn=document.createElement('button');btn.className='primary';btn.textContent='招待を作成';
-  const ctr=document.createElement('div');ctr.className='familyActions';ctr.append(input,btn);root.append(ctr);
-  btn.onclick=async()=>{
-    const email=input.value.trim().toLowerCase();
-    if(!/^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(email))return notice('有効なメールアドレスを入力してください',true);
+  const inviteTitle=document.createElement('h3');inviteTitle.textContent='家族を招待';
+  root.append(inviteTitle);
+  const infoText=document.createElement('p');infoText.className='muted';
+  infoText.textContent='メールアドレスの登録は不要。URLを開いたGoogleアカウント1人が参加すると自動で受付終了します。';
+  root.append(infoText);
+  const create=document.createElement('button');create.className='primary';
+  create.textContent='1回限りの招待URLを発行';
+  create.onclick=async()=>{
+    create.disabled=true;
     try{
-      await setDoc(familyDoc('invites',email),{email,role:'viewer',expiresAt:Timestamp.fromMillis(Date.now()+14*86400000)});
-      notice('招待を作成しました。以下のURLを家族に送ってください。');
-    }catch(e){statusError(e)}
+      const bytes=new Uint8Array(16);
+      crypto.getRandomValues(bytes);
+      const token=Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
+      await setDoc(familyDoc('openInvites',token),{
+        createdAt:serverTimestamp(),expiresAt:Timestamp.fromMillis(Date.now()+7*86400000),
+        role:'viewer',usedByUid:''
+      });
+      notice('招待URLを発行しました。下の「URLをコピー」から共有できます。');
+    }catch(error){statusError(error)}finally{create.disabled=false}
   };
-  const link=new URL(location.href);link.search='';link.searchParams.set('family',fid);
-  const url=document.createElement('div');url.className='invite';
-  const shareTitle=document.createElement('strong');shareTitle.textContent='招待URL（家族へ共有）';
-  const address=document.createElement('div');address.className='link';address.textContent=link.toString();
-  const copy=document.createElement('button');copy.textContent='URLをコピー';
-  copy.onclick=async()=>{try{await navigator.clipboard.writeText(link.toString());notice('URLをコピーしました')}catch(e){statusError(e)}};
-  url.append(shareTitle,address,copy);root.append(url);
-  for(const invite of invites){
-    const row=document.createElement('div');row.className='person';
-    const tx=document.createElement('span');
-    tx.textContent=invite.email+' · 有効期限 '+invite.expiresAt?.toDate().toLocaleDateString('ja-JP');
-    const cancel=document.createElement('button');cancel.textContent='招待を取り消す';
-    cancel.onclick=async()=>{try{await deleteDoc(familyDoc('invites',invite.email))}catch(e){statusError(e)}};
-    row.append(tx,cancel);root.append(row);
+  root.append(create);
+  const caption=document.createElement('p');caption.className='muted tiny';
+  caption.textContent='有効期限：7日間。共有相手が参加する前なら受付停止できます。URLを知らない人は参加できません。';
+  root.append(caption);
+  const active=openInvites.filter(x=>!x.usedByUid&&x.expiresAt?.toMillis?.()>Date.now())
+    .sort((a,b)=>(b.createdAt?.toMillis?.()||0)-(a.createdAt?.toMillis?.()||0));
+  for(const invitation of active){
+    const link=new URL(location.href);
+    link.search='';link.searchParams.set('family',fid);
+    link.searchParams.set('invite',invitation.token);
+    const panel=document.createElement('div');panel.className='invite';
+    const header=document.createElement('strong');header.textContent='受付中 · 1人限り';
+    const uri=document.createElement('div');uri.className='link';uri.textContent=link.toString();
+    const copy=document.createElement('button');copy.textContent='URLをコピー';
+    copy.onclick=async()=>{
+      try{await navigator.clipboard.writeText(link.toString());notice('招待URLをコピーしました')}
+      catch(error){statusError(error)}
+    };
+    const stop=document.createElement('button');stop.className='danger';stop.textContent='受付停止';
+    stop.onclick=async()=>{try{await deleteDoc(familyDoc('openInvites',invitation.token))}catch(error){statusError(error)}};
+    const actions=document.createElement('div');actions.className='familyActions';actions.append(copy,stop);
+    panel.append(header,uri,actions);root.append(panel);
+  }
+  if(!active.length){
+    const empty=document.createElement('p');empty.className='muted';
+    empty.textContent='現在受付中の招待URLはありません。';root.append(empty);
   }
   const note=document.createElement('p');note.className='muted';
   note.textContent='本の登録・修正・削除は管理者が行います。';
