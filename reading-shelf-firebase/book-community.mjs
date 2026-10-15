@@ -31,7 +31,7 @@ export function mountBookCommunity({db,fid,book,user,owner,members,container,onE
   const reflectionBox=elem('div','communityPanel');
   reflectionBox.append(elem('h4','','子どもの感想'));
   const reflectionItems=elem('div','communityStack');
-  reflectionItems.append(elem('p','muted tiny','まだ記録されていません。子どもの言葉はChatGPTから記録します。'));
+  reflectionItems.append(elem('p','muted tiny','まだ記録されていません。子どもの感想は管理者が記録します。'));
   reflectionBox.append(reflectionItems);
   section.append(reflectionBox);
 
@@ -73,7 +73,7 @@ export function mountBookCommunity({db,fid,book,user,owner,members,container,onE
   };
   subscribe(query(reflections,limit(30)),list=>{
     reflectionItems.replaceChildren();
-    if(!list.length){reflectionItems.append(elem('p','muted tiny','まだ記録されていません。子どもの言葉はChatGPTから記録します。'));return}
+    if(!list.length){reflectionItems.append(elem('p','muted tiny','まだ記録されていません。子どもの感想は管理者が記録します。'));return}
     for(const entry of list.sort(newest)){
       const card=elem('article','reflectionCard');
       card.append(elem('p','reflectionQuote',entry.quote||entry.text||''));
