@@ -79,10 +79,11 @@ test('new family interaction surfaces preserve chat-only formal record editing',
   assert.doesNotMatch(html,/id="bookForm"/);
 });
 
+
 test('no removed DOM ID can silently cause a null property assignment',()=>{
   const html=text('index.html'),app=text('app.mjs');
-  const ids=new Set([...html.matchAll(/\\bid="([^"]+)"/g)].map(m=>m[1]));
-  const references=[...app.matchAll(/\\$\\('([^']+)'\\)/g)].map(m=>m[1]);
+  const ids=new Set([...html.matchAll(/\bid="([^"]+)"/g)].map(m=>m[1]));
+  const references=[...app.matchAll(/\$\('([^']+)'\)/g)].map(m=>m[1]);
   assert.ok(references.length>20);
   for(const id of references)assert.ok(ids.has(id),'app references missing DOM element: '+id);
   assert.ok(!app.includes("$('familyTab')"),'removed family tab cannot be accessed');
@@ -90,11 +91,12 @@ test('no removed DOM ID can silently cause a null property assignment',()=>{
 test('PWA cannot combine stale JS with current HTML after deployment',()=>{
   const html=text('index.html'),sw=text('sw.js');
   const config=JSON.parse(text('firebase.json'));
-  assert.match(html,/app\\.mjs\\?build=20261016-stable-v4/);
-  assert.match(sw,/const ARTWORK_PATHS=new Set\\(ARTWORK\\)/);
-  assert.doesNotMatch(sw,/PUBLIC_ASSETS|\\/app\\.mjs',');
-  assert.ok(!sw.includes("'/index.html'"));
-  assert.ok(!sw.includes("'/domain.mjs'"));
+  assert.match(html,/app\.mjs\?build=20261016-stable-v4/);
+  assert.match(sw,/const ARTWORK_PATHS=new Set\(ARTWORK\)/);
+  assert.ok(!sw.includes('PUBLIC_ASSETS'));
+  for(const path of ['/app.mjs','/index.html','/domain.mjs','/book-community.mjs','/recommendations.mjs']){
+    assert.ok(!sw.includes("'"+path+"'"),path+' must not be service-worker-cached');
+  }
   for(const source of ['/', '**/*.html','**/*.mjs','**/*.css','/sw.js']){
     assert.ok(config.hosting.headers.some(h=>h.source===source&&h.headers.some(k=>k.key==='Cache-Control'&&k.value==='no-store')),source);
   }
