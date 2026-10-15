@@ -181,6 +181,6 @@ test('recommendation enrichment is explicit and optional',()=>{
   assert.match(recs,/書誌を検索/);
   assert.match(recs,/selected=\{\.\.\.candidate,queryTitle:query\}/);
   assert.match(recs,/const confirmed=selected\?\.queryTitle===book\?selected:null/);
-  assert.match(lookup,/www\.googleapis\.com\/books\/v1\/volumes/);
+  assert.match(lookup,/openlibrary\\.org\\/search\\.json/);
   assert.match(rules,/metadataSource/);
 });
