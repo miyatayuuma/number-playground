@@ -97,3 +97,26 @@ test('reactions and reflection requests are owned by the authenticated family me
     await assertSucceeds(deleteDoc(ref));
   }
 });
+
+test('recommendations permit family sharing but prohibit impersonation and catalog writes',async()=>{
+  const relative=user('relative2','relative2@gmail.com');
+  const outsider=user('stranger','stranger@gmail.com');
+  const owner=user('owner1','owner@gmail.com');
+  const pathTo=['families','familyOne','recommendations','recommend1'];
+  const value={authorUid:'relative2',title:'ねこと王さま',normalizedTitle:'ねこと王さま',
+    reason:'絵が気に入った',url:'https://example.com/book',hidden:false,
+    createdAt:serverTimestamp(),updatedAt:serverTimestamp()};
+  await assertFails(setDoc(doc(outsider,...pathTo),value));
+  await assertFails(setDoc(doc(relative,...pathTo),{...value,authorUid:'owner1'}));
+  await assertFails(setDoc(doc(relative,...pathTo),{...value,url:'javascript:alert(1)'}));
+  await assertSucceeds(setDoc(doc(relative,...pathTo),value));
+  await assertSucceeds(getDoc(doc(relative,...pathTo)));
+  await assertFails(updateDoc(doc(owner,...pathTo),{reason:'勝手に改ざん',updatedAt:serverTimestamp()}));
+  await assertFails(updateDoc(doc(relative,...pathTo),{title:'別の本'}));
+  await assertSucceeds(updateDoc(doc(relative,...pathTo),{reason:'一緒に読みたい',updatedAt:serverTimestamp()}));
+  await assertSucceeds(updateDoc(doc(owner,...pathTo),{hidden:true}));
+  const visible=query(collection(relative,'families','familyOne','recommendations'),where('hidden','==',false));
+  await assertSucceeds(getDocs(visible));
+  await assertSucceeds(updateDoc(doc(owner,...pathTo),{hidden:false}));
+  await assertSucceeds(deleteDoc(doc(relative,...pathTo)));
+});
