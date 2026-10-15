@@ -203,3 +203,12 @@ button:focus-visible,input:focus-visible,select:focus-visible,.book:focus-visibl
 .iconButton.active,#timelineToggle.active{background:#ddf3e9;border-color:#acd9bf;color:#246550}
 #sortDirection{white-space:nowrap}
 #timelineToggle{white-space:nowrap}
+
+/* A hidden attribute must win over component display rules (e.g. iconButton). */
+[hidden]{display:none!important}
+@media(max-width:650px){
+  /* Signed-in email remains available in family settings; keep controls usable. */
+  #identity{display:none}
+  .headerActions{flex-shrink:0}
+  .iconButton{width:38px;height:38px}
+}
