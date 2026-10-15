@@ -9,7 +9,7 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const safeCover=url=>/^(https:\/\/|data:image\/(jpeg|png|webp);base64,)/i.test(String(url||''))?String(url):'';
 const SHOW=['loading','loginPanel','setupPanel','shelfPanel'];
 let auth,db,user=null,fid='',role='',household=null,books=[],series=[],members=[],invites=[];
-let unsubs=[],view='shelf',generation=0;
+let unsubs=[],view='shelf',generation=0,periodMode=false,sortDescending=true;
 const inviteFromUrl=new URLSearchParams(location.search).get('family')||'';
 
 function show(id){SHOW.forEach(x=>$(x).hidden=x!==id)}
@@ -39,7 +39,13 @@ function initUI(){
   $('googleLogin').onclick=login;
   $('signOut').onclick=async()=>{closeListeners();await signOut(auth)};
   document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{view=b.dataset.view;render()});
-  ['search','sort','filter'].forEach(x=>$(x).addEventListener(x==='search'?'input':'change',render));
+  $('familySettings').onclick=()=>{view=view==='family'?'shelf':'family';render()};
+  ['search','filter'].forEach(x=>$(x).addEventListener(x==='search'?'input':'change',render));
+  $('sort').addEventListener('change',()=>{
+    sortDescending=['order','year'].includes($('sort').value);render();
+  });
+  $('sortDirection').onclick=()=>{sortDescending=!sortDescending;render()};
+  $('timelineToggle').onclick=()=>{periodMode=!periodMode;render()};
   document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>$((b.dataset.close)).close());
 }
 function updateShelfHeading(){
@@ -61,7 +67,7 @@ async function login(){
 }
 async function signedIn(u){
   const seq=++generation;closeListeners();user=u;notice('');
-  $('identity').textContent=u?.email||'';$('signOut').hidden=!u;
+  $('identity').textContent=u?.email||'';$('signOut').hidden=!u;$('familySettings').hidden=!u;
   if(!u){show('loginPanel');return}
   show('loading');
   try{
@@ -115,7 +121,6 @@ async function enterFamily(id,seq){
   unsubs.push(onSnapshot(familyCollection('series'),snap=>{series=snap.docs.map(d=>d.data());render()},statusError));
   unsubs.push(onSnapshot(familyCollection('members'),snap=>{members=snap.docs.map(d=>d.data());render()},statusError));
   if(role==='owner')unsubs.push(onSnapshot(familyCollection('invites'),snap=>{invites=snap.docs.map(d=>d.data());render()},statusError));
-  $('familyTab').textContent='家族';
   render();
 }
 function render(){
@@ -124,13 +129,24 @@ function render(){
   $('totalCount').textContent=books.length+'冊';
   $('seriesCount').textContent=series.length;
   document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===view));
-  $('bookControls').hidden=view==='family';
+  $('familySettings').classList.toggle('active',view==='family');
+  $('bookControls').hidden=view!=='shelf';
+  $('timelineToggle').setAttribute('aria-pressed',String(periodMode));
+  $('timelineToggle').classList.toggle('active',periodMode);
+  const sort=$('sort').value;
+  $('sortDirection').textContent=['order','year'].includes(sort)
+    ?(sortDescending?'新しい順 ↓':'古い順 ↑')
+    :(sortDescending?'降順 ↓':'昇順 ↑');
   if(view==='family'){renderFamily();return}
-  const opts={search:$('search').value,filter:view==='series'?'all':$('filter').value,sort:$('sort').value};
+  if(view==='recommendations'){renderRecommendations();return}
+  const sortKey=sort==='order'?'order-'+(sortDescending?'new':'old')
+    :sort==='year'?'year-'+(sortDescending?'new':'old')
+    :sort+'-'+(sortDescending?'desc':'asc');
+  const opts={search:$('search').value,filter:view==='series'?'all':$('filter').value,sort:sortKey};
   const data=filteredBooks(books,opts,series);
   const root=$('content');root.className='';root.replaceChildren();
   if(!data.length){root.innerHTML='<div class="empty">該当する本はまだありません。</div>';return}
-  if(view==='shelf'){root.append(bookGrid(data));return}
+  if(view==='shelf'&&!periodMode){root.append(bookGrid(data));return}
   if(view==='series'){
     // A series screen should never collect unrelated stand-alone books.
     const known=new Map(series.map(s=>[s.id,s]));
@@ -159,8 +175,8 @@ function groupSection(title,note,items,total,isSeries=false){
   const p=document.createElement('p');
   const read=items.filter(b=>b.status==='read').length;
   p.textContent=isSeries
-    ?'登録'+items.length+'冊・読了'+read+'冊'+(total?' / 全'+total+'巻':'')+(note?' · '+note:'')
-    :read+'冊読了'+(note?' · '+note:'');
+    ?'登録'+items.length+'冊・読んだ'+read+'冊'+(total?' / 全'+total+'巻':'')+(note?' · '+note:'')
+    :read+'冊読んだ'+(note?' · '+note:'');
   section.append(p,bookGrid(items));return section;
 }
 function bookGrid(data){
@@ -228,6 +244,11 @@ function openBookInfo(book){
     p.append(a);root.append(p);
   }
   $('bookInfoDialog').showModal();
+}
+function renderRecommendations(){
+  const root=$('content');root.className='';root.replaceChildren();
+  const hint=document.createElement('p');hint.className='empty';
+  hint.textContent='家族のおすすめを準備しています。';root.append(hint);
 }
 function renderFamily(){
   const root=$('content');root.replaceChildren();root.className='listPanel';
