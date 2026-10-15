@@ -1,4 +1,8 @@
 export const STATUSES=Object.freeze({read:'読んだ',reading:'読んでいる',paused:'お休み中',unread:'まだ読んでいない'});
+export const READING_MODES=Object.freeze({'read-aloud':'読み聞かせ','independent':'自分で読んだ','mixed':'両方'});
+export function readingModeLabel(book){
+  return Object.hasOwn(READING_MODES,book?.readingMode)?READING_MODES[book.readingMode]:'';
+}
 const collator=new Intl.Collator('ja',{numeric:true,sensitivity:'base'});
 export function normalize(v){return String(v??'').normalize('NFKC').toLowerCase().replace(/[\s\u3000『』（）・\-]/g,'')}
 export function cleanTitle(t){return String(t??'').trim().slice(0,250)}
