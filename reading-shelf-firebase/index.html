@@ -63,5 +63,12 @@
     <div class="dialogActions"><button type="button" id="removeBook" class="danger" hidden>削除</button><button class="primary" type="submit" id="saveBook">保存</button></div>
   </form>
 </dialog>
+<dialog id="bookInfoDialog">
+  <div class="dialogInner">
+    <div class="dialogTop"><h2 id="bookInfoTitle">本の情報</h2><button type="button" class="ghost" data-close="bookInfoDialog" aria-label="閉じる">×</button></div>
+    <div id="bookInfoBody"></div>
+    <div class="dialogActions"><button id="bookInfoEdit" class="primary">この本を編集</button></div>
+  </div>
+</dialog>
 <script type="module" src="./app.mjs"></script>
 </body></html>
