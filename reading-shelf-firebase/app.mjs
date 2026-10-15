@@ -1,6 +1,6 @@
 import {initializeApp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-app.js';
 import {getAuth,GoogleAuthProvider,signInWithPopup,signInWithRedirect,getRedirectResult,setPersistence,browserLocalPersistence,onAuthStateChanged,signOut} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js';
-import {getFirestore,doc,collection,getDoc,setDoc,deleteDoc,onSnapshot,Timestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
+import {getFirestore,doc,collection,getDoc,setDoc,deleteDoc,onSnapshot,Timestamp,runTransaction,serverTimestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
 import {firebaseConfig} from './firebase-config.mjs?build=20261016-high-v7';
 import {mountBookCommunity} from './book-community.mjs?build=20261016-high-v7';
 import {mountRecommendations} from './recommendations.mjs?build=20261016-high-v7';
@@ -12,10 +12,11 @@ const $=id=>{const element=document.getElementById(id);if(!element)throw new Err
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const safeCover=url=>/^(https:\/\/|data:image\/(jpeg|png|webp);base64,)/i.test(String(url||''))?String(url):'';
 const SHOW=['loading','loginPanel','setupPanel','shelfPanel'];
-let auth,db,user=null,fid='',role='',household=null,books=[],series=[],members=[],invites=[];
+let auth,db,user=null,fid='',role='',household=null,books=[],series=[],members=[],invites=[],openInvites=[];
 let unsubs=[],view='shelf',generation=0;
 let closeCommunity=null,closeRecommendations=null,closeActivity=null;
 const inviteFromUrl=new URLSearchParams(location.search).get('family')||'';
+const inviteTokenFromUrl=new URLSearchParams(location.search).get('invite')||'';
 
 function show(id){SHOW.forEach(x=>$(x).hidden=x!==id)}
 function notice(m,error=false){$('message').hidden=!m;$('message').textContent=m||'';$('message').className='notice'+(error?' error':'')}
@@ -83,7 +84,7 @@ async function signedIn(u){
   try{
     const profile=await getDoc(doc(db,'users',u.uid));if(seq!==generation)return;
     if(profile.exists()&&profile.data().familyId){await enterFamily(profile.data().familyId,seq)}
-    else if(inviteFromUrl&&/^[A-Za-z0-9]{8,60}$/.test(inviteFromUrl)){await joinInvite(inviteFromUrl,seq)}
+    else if(inviteFromUrl&&/^[A-Za-z0-9]{8,60}$/.test(inviteFromUrl)&&/^[a-f0-9]{32}$/.test(inviteTokenFromUrl)){await joinInvite(inviteFromUrl,inviteTokenFromUrl,seq)}
     else showFirstSetup();
   }catch(e){if(seq===generation)statusError(e)}
 }
@@ -93,27 +94,54 @@ function showFirstSetup(){
   $('setupDesc').textContent='この本棚は家族専用です。管理者から招待URLを受け取って開いてください。';
   $('setupBody').replaceChildren();
 }
-async function joinInvite(id,seq){
+async function joinInvite(id,token,seq){
   show('setupPanel');$('setupTitle').textContent='家族の本棚に参加';
   $('setupDesc').textContent='招待を確認しています…';$('setupBody').replaceChildren();
   try{
-    if(!user.emailVerified)throw Error('確認済みのGoogleメールアドレスが必要です');
-    const email=user.email.toLowerCase(), ref=doc(db,'families',id,'invites',email);
-    const invitation=await getDoc(ref);if(seq!==generation)return;
-    if(!invitation.exists()||invitation.data().expiresAt.toMillis()<Date.now())throw Error('有効な招待がありません。管理者へ確認してください');
-    const info=invitation.data();
-    $('setupDesc').textContent=email+' 宛に家族の本棚への招待が届いています。';
-    const btn=document.createElement('button');btn.textContent='家族の本棚に参加する';btn.className='primary';
-    btn.onclick=async()=>{btn.disabled=true;try{
-      const membership=doc(db,'families',id,'members',user.uid);
-      try{await setDoc(membership,{uid:user.uid,email:user.email,displayName:user.displayName||'',role:info.role,joinedAt:Timestamp.now()})}
-      catch(error){const existing=await getDoc(membership).catch(()=>null);if(!existing?.exists())throw error}
+    if(!user.emailVerified)throw Error('確認済みのGoogleアカウントが必要です');
+    const membership=doc(db,'families',id,'members',user.uid);
+    // If the profile write failed after a successful claim, permit recovery.
+    const known=await getDoc(membership).catch(()=>null);
+    if(seq!==generation)return;
+    if(known?.exists()){
       await setDoc(doc(db,'users',user.uid),{familyId:id});
       history.replaceState(null,'',location.pathname);
       await enterFamily(id,++generation);
-    }catch(e){btn.disabled=false;statusError(e)}};
+      return;
+    }
+    const ref=doc(db,'families',id,'openInvites',token);
+    const snap=await getDoc(ref);if(seq!==generation)return;
+    const data=snap.data();
+    if(!snap.exists()||data.usedByUid||data.expiresAt?.toMillis?.()<=Date.now()){
+      throw Error('この招待URLは使用済み、または有効期限切れです。管理者に新しいURLを依頼してください。');
+    }
+    $('setupDesc').textContent='このURLは1人が参加すると自動的に受付終了します。';
+    const btn=document.createElement('button');btn.className='primary';
+    btn.textContent='家族の本棚に参加する';
+    btn.onclick=async()=>{
+      btn.disabled=true;
+      try{
+        await runTransaction(db,async transaction=>{
+          const current=await transaction.get(ref);
+          if(!current.exists()||current.data().usedByUid||
+             current.data().expiresAt.toMillis()<=Date.now()){
+            throw Error('招待はすでに使われたか期限が切れています');
+          }
+          const existing=await transaction.get(membership);
+          if(existing.exists())throw Error('このGoogleアカウントは登録済みです');
+          transaction.set(membership,{
+            uid:user.uid,email:user.email,displayName:user.displayName||'',
+            role:'viewer',joinedAt:serverTimestamp(),inviteToken:token
+          });
+          transaction.update(ref,{usedByUid:user.uid,usedAt:serverTimestamp()});
+        });
+        await setDoc(doc(db,'users',user.uid),{familyId:id});
+        history.replaceState(null,'',location.pathname);
+        await enterFamily(id,++generation);
+      }catch(error){btn.disabled=false;statusError(error)}
+    };
     $('setupBody').append(btn);
-  }catch(e){$('setupDesc').textContent='招待を確認できませんでした。';statusError(e)}
+  }catch(error){$('setupDesc').textContent='招待を確認できませんでした。';statusError(error)}
 }
 async function enterFamily(id,seq){
   fid=id;const f=await getDoc(doc(db,'families',id));if(seq!==generation)return;
@@ -130,7 +158,7 @@ async function enterFamily(id,seq){
   unsubs.push(onSnapshot(familyCollection('books'),snap=>{books=snap.docs.map(d=>d.data());render()},statusError));
   unsubs.push(onSnapshot(familyCollection('series'),snap=>{series=snap.docs.map(d=>d.data());render()},statusError));
   unsubs.push(onSnapshot(familyCollection('members'),snap=>{members=snap.docs.map(d=>d.data());render()},statusError));
-  if(role==='owner')unsubs.push(onSnapshot(familyCollection('invites'),snap=>{invites=snap.docs.map(d=>d.data());render()},statusError));
+  if(role==='owner')unsubs.push(onSnapshot(familyCollection('openInvites'),snap=>{openInvites=snap.docs.map(d=>({token:d.id,...d.data()}));if(view==='family')render()},statusError));
   render();
 }
 function render(){
