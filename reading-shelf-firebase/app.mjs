@@ -1,16 +1,15 @@
 import {initializeApp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-app.js';
 import {getAuth,GoogleAuthProvider,signInWithPopup,signInWithRedirect,getRedirectResult,setPersistence,browserLocalPersistence,onAuthStateChanged,signOut} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js';
-import {getFirestore,doc,collection,getDoc,setDoc,updateDoc,deleteDoc,onSnapshot,writeBatch,runTransaction,Timestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
+import {getFirestore,doc,collection,getDoc,setDoc,deleteDoc,onSnapshot,Timestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
 import {firebaseConfig} from './firebase-config.mjs';
-import {STATUSES,sortBooks,filteredBooks,validateBackup,normalizeBook,newBook,readPeriodLabel,readPeriodGrouping,validatePeriodUpdates} from './domain.mjs';
+import {STATUSES,filteredBooks,readPeriodLabel,readPeriodGrouping} from './domain.mjs';
 
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const safeCover=url=>/^(https:\/\/|data:image\/(jpeg|png|webp);base64,)/i.test(String(url||''))?String(url):'';
 const SHOW=['loading','loginPanel','setupPanel','shelfPanel'];
-const MAX_IMPORT_BYTES=15*1024*1024;
-let auth,db,user=null,fid='',role='',household=null,books=[],series=[],members=[],invites=[],currentBook=null;
-let unsubs=[],view='shelf',generation=0,busy=false;
+let auth,db,user=null,fid='',role='',household=null,books=[],series=[],members=[],invites=[];
+let unsubs=[],view='shelf',generation=0;
 const inviteFromUrl=new URLSearchParams(location.search).get('family')||'';
 
 function show(id){SHOW.forEach(x=>$(x).hidden=x!==id)}
@@ -19,18 +18,14 @@ function statusError(e){console.error(e);notice('操作を完了できません:
 function initUI(){
   $('googleLogin').onclick=login;
   $('signOut').onclick=async()=>{closeListeners();await signOut(auth)};
-  $('createFamily').onclick=createFamily;
   document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{view=b.dataset.view;render()});
   ['search','sort','filter'].forEach(x=>$(x).addEventListener(x==='search'?'input':'change',render));
-  $('addBook').onclick=()=>openEditor(null);
-  $('bookForm').onsubmit=saveEditor;
-  $('removeBook').onclick=removeEditor;
   document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>$((b.dataset.close)).close());
 }
 function updateShelfHeading(){
   const name=household?.name||'本棚';
   $('shelfName').textContent=name;
-  document.title=household?name+' | 読書記録':'読書記録';
+  document.title=household?'よんでね | '+name:'よんでね';
 }
 function closeListeners(){unsubs.forEach(u=>u());unsubs=[];fid='';books=[];series=[];members=[];invites=[];household=null;role='';updateShelfHeading()}
 function familyDoc(...a){return doc(db,'families',fid,...a)}
@@ -57,24 +52,10 @@ async function signedIn(u){
   }catch(e){if(seq===generation)statusError(e)}
 }
 function showFirstSetup(){
-  show('setupPanel');$('setupTitle').textContent='家族の本棚を作成';
-  $('setupDesc').textContent='家族に本棚がある場合は、管理者から招待URLを受け取ってください。新規作成すると、あなたが管理者になります。';
+  show('setupPanel');
+  $('setupTitle').textContent='家族の本棚へ参加';
+  $('setupDesc').textContent='この本棚は家族専用です。管理者から招待URLを受け取って開いてください。';
   $('setupBody').replaceChildren();
-  const label=document.createElement('label');label.textContent='本棚の名前';
-  const inp=document.createElement('input');inp.id='familyName';inp.maxLength=80;inp.value='あおのほんだな';label.append(inp);
-  const btn=document.createElement('button');btn.id='createFamily';btn.className='primary';btn.textContent='新しい本棚を作成';btn.onclick=createFamily;
-  $('setupBody').append(label,btn);
-}
-async function createFamily(){
-  if(busy||!user)return;busy=true;try{
-    const name=($('familyName')?.value||'あおのほんだな').trim();
-    if(!name||name.length>80)throw Error('本棚の名前を確認してください');
-    const ref=doc(collection(db,'families'));
-    await setDoc(ref,{ownerUid:user.uid,name,createdAt:Timestamp.now(),schemaVersion:1});
-    await setDoc(doc(db,'families',ref.id,'members',user.uid),{uid:user.uid,email:user.email,displayName:user.displayName||'',role:'owner',joinedAt:Timestamp.now()});
-    await setDoc(doc(db,'users',user.uid),{familyId:ref.id});
-    await enterFamily(ref.id,++generation);
-  }catch(e){statusError(e)}finally{busy=false}
 }
 async function joinInvite(id,seq){
   show('setupPanel');$('setupTitle').textContent='家族の本棚に参加';
@@ -114,15 +95,14 @@ async function enterFamily(id,seq){
   unsubs.push(onSnapshot(familyCollection('series'),snap=>{series=snap.docs.map(d=>d.data());render()},statusError));
   unsubs.push(onSnapshot(familyCollection('members'),snap=>{members=snap.docs.map(d=>d.data());render()},statusError));
   if(role==='owner')unsubs.push(onSnapshot(familyCollection('invites'),snap=>{invites=snap.docs.map(d=>d.data());render()},statusError));
-  $('addBook').hidden=role==='viewer';
-  $('familyTab').textContent=role==='owner'?'家族の管理':'家族';
+  $('familyTab').textContent='家族';
   render();
 }
 function render(){
   if(!fid||!$('shelfPanel')||$('shelfPanel').hidden)return;
   $('readCount').textContent=books.filter(b=>b.status==='read').length+'冊';
   $('totalCount').textContent=books.length+'冊';
-  $('seriesCount').textContent=new Set(books.filter(b=>b.status==='read'&&b.seriesId).map(b=>b.seriesId)).size;
+  $('seriesCount').textContent=series.length;
   document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===view));
   $('bookControls').hidden=view==='family';
   if(view==='family'){renderFamily();return}
@@ -211,160 +191,69 @@ function openBookInfo(book){
     a.textContent='出版社・図書館などの書誌出典を確認 ↗';
     p.append(a);root.append(p);
   }
-  $('bookInfoEdit').hidden=role==='viewer';
-  $('bookInfoEdit').onclick=()=>{
-    $('bookInfoDialog').close();
-    openEditor(book);
-  };
   $('bookInfoDialog').showModal();
-}
-function openEditor(book){
-  if(role==='viewer'){notice('閲覧専用アカウントです。編集するには管理者へお問い合わせください。');return}
-  currentBook=book?structuredClone(book):newBook();
-  const form=$('bookForm');form.reset();
-  const sid=$('seriesPicker');sid.replaceChildren(new Option('なし',''),...series.map(s=>new Option(s.name,s.id)));
-  for(const [k,v] of Object.entries(currentBook)){if(form.elements.namedItem(k)&&typeof v!=='object')form.elements.namedItem(k).value=v??''}
-  $('bookDialogTitle').textContent=book?'読書記録の編集':'本を追加';
-  $('removeBook').hidden=!book;$('bookDialog').showModal();
-}
-async function saveEditor(e){
-  e.preventDefault();if(busy||role==='viewer')return;busy=true;
-  $('saveBook').disabled=true;
-  try{
-    const data=Object.fromEntries(new FormData(e.currentTarget).entries());
-    const updated=normalizeBook({...currentBook,...data});
-    if(updated.status!=='read'){
-      updated.finishedPeriodLabel='';updated.finishedPeriodStart='';updated.finishedPeriodEnd='';
-      updated.finishedPeriodPrecision='';updated.finishedPeriodBasis='';updated.finishedPeriodNote='';
-    }
-    if(!currentBook.createdAt)updated.createdAt=new Date().toISOString();
-    if(updated.status==='read'&&!updated.readOrder)updated.readOrder=1+Math.max(0,...books.map(b=>Number(b.readOrder||0)));
-    await setDoc(familyDoc('books',updated.id),updated);
-    $('bookDialog').close();notice('');
-  }catch(err){statusError(err)}finally{busy=false;$('saveBook').disabled=false}
-}
-async function removeEditor(){
-  if(role==='viewer'||!currentBook||!confirm('この本の読書記録を削除しますか？'))return;
-  try{await deleteDoc(familyDoc('books',currentBook.id));$('bookDialog').close()}catch(e){statusError(e)}
-}
-async function exportData(){
-  const payload=JSON.stringify({version:1,exportedAt:new Date().toISOString(),books,series},null,2);
-  const u=URL.createObjectURL(new Blob([payload],{type:'application/json'}));
-  const a=document.createElement('a');a.href=u;a.download='reading-shelf-'+new Date().toISOString().slice(0,10)+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(u),1500);
-}
-async function importData(ev){
-  const file=ev.target.files?.[0];ev.target.value='';if(!file)return;
-  if(role!=='owner')return;
-  if(file.size>MAX_IMPORT_BYTES)return notice('JSONファイルが大きすぎます',true);
-  try{
-    const {books:imported,series:importSeries}=validateBackup(JSON.parse(await file.text()));
-    if(!confirm(imported.length+'冊・'+importSeries.length+'シリーズを取り込みます。IDが一致する既存データは上書きします。続けますか？'))return;
-    busy=true;let count=0;
-    const tasks=[...importSeries.map(s=>({type:'series',data:s})),...imported.map(b=>({type:'books',data:normalizeBook(b)}))];
-    for(let i=0;i<tasks.length;i+=250){
-      const batch=writeBatch(db);
-      for(const t of tasks.slice(i,i+250))batch.set(familyDoc(t.type,t.data.id),t.data);
-      await batch.commit();count+=Math.min(250,tasks.length-i);
-    }
-    notice('クラウドへの移行完了：'+imported.length+'冊を確認してください。');
-  }catch(e){statusError(e)}finally{busy=false}
-}
-async function importReadingPeriods(ev){
-  const file=ev.target.files?.[0];ev.target.value='';if(!file)return;
-  if(role!=='owner'||busy)return;
-  if(file.size>MAX_IMPORT_BYTES)return notice('ファイルが大きすぎます',true);
-  try{
-    const updates=validatePeriodUpdates(JSON.parse(await file.text()));
-    if(!confirm(updates.length+'冊の読了時期だけを反映します。既存の感想・表紙・読書状況は変更しません。続けますか？'))return;
-    busy=true;
-    const outcome=await runTransaction(db,async tx=>{
-      const refs=updates.map(b=>familyDoc('books',b.id));
-      const snapshots=[];
-      for(const ref of refs)snapshots.push(await tx.get(ref));
-      const edits=[];
-      for(let i=0;i<updates.length;i++){
-        const b=updates[i],snap=snapshots[i];
-        if(!snap.exists())throw Error('移行先に本がありません: '+b.title+'。先に27冊の全件移行を完了してください');
-        const current=snap.data();
-        if(current.title!==b.title)throw Error('書名が一致しません: '+b.title);
-        if(current.status!=='read')throw Error('読了済みではありません: '+b.title);
-        const changes={};
-        for(const key of ['finishedPeriodLabel','finishedPeriodStart','finishedPeriodEnd','finishedPeriodPrecision','finishedPeriodBasis','finishedPeriodNote']){
-          const next=b[key]??'';
-          const old=current[key]??'';
-          if(old&&old!==next)throw Error('既存の時期情報と競合: '+b.title+'。手動変更を保護しました');
-          if(old!==next)changes[key]=next;
-        }
-        if(Object.keys(changes).length)edits.push({ref:refs[i],changes});
-      }
-      for(const e of edits)tx.update(e.ref,e.changes);
-      return edits.length;
-    });
-    notice('期間情報を確認しました。'+outcome+'冊分を更新しました（感想・表紙は保持）。');
-  }catch(e){statusError(e)}finally{busy=false}
 }
 function renderFamily(){
   const root=$('content');root.replaceChildren();root.className='listPanel';
-  const h=document.createElement('h2');h.textContent=household?.name||'本棚';root.append(h);
-  if(role==='owner'){
-    const renameRow=document.createElement('div');renameRow.className='familyActions';
-    const nameInput=document.createElement('input');nameInput.value=household?.name||'';nameInput.maxLength=80;nameInput.setAttribute('aria-label','本棚の名前');
-    const rename=document.createElement('button');rename.textContent='本棚名を変更';
-    rename.onclick=async()=>{
-      const name=nameInput.value.trim();
-      if(!name||name.length>80)return notice('本棚名は1〜80文字で入力してください。',true);
-      if(name===household?.name)return;
-      rename.disabled=true;
-      try{
-        await updateDoc(doc(db,'families',fid),{name});
-        household={...household,name};updateShelfHeading();notice('本棚名を変更しました。');
-        if(view==='family')renderFamily();
-      }catch(e){statusError(e)}finally{rename.disabled=false}
-    };
-    renameRow.append(nameInput,rename);root.append(renameRow);
-  }
-  const info=document.createElement('p');info.className='muted';info.textContent='ログイン中：'+user.email+' / 権限：'+(role==='owner'?'管理者':role==='editor'?'編集可能':'閲覧のみ');root.append(info);
-  const heading=document.createElement('h3');heading.textContent='家族メンバー';root.append(heading);
-  for(const m of members){const row=document.createElement('div');row.className='person';const who=document.createElement('div');
+  const title=document.createElement('h2');title.textContent='家族で共有';root.append(title);
+  const info=document.createElement('p');info.className='muted';
+  info.textContent='ログイン中：'+user.email;
+  root.append(info);
+  const heading=document.createElement('h3');heading.textContent='参加している家族';
+  root.append(heading);
+  for(const m of members){
+    const row=document.createElement('div');row.className='person';
+    const who=document.createElement('div');
     const name=document.createElement('strong');name.textContent=m.displayName||m.email;
-    const detail=document.createElement('div');detail.className='muted tiny';detail.textContent=m.email+' · '+(m.role==='owner'?'管理者':m.role==='editor'?'編集可能':'閲覧のみ');who.append(name,detail);row.append(who);
+    const detail=document.createElement('div');detail.className='muted tiny';
+    detail.textContent=m.email+(m.role==='owner'?' · 管理者':'');
+    who.append(name,detail);row.append(who);
     if(role==='owner'&&m.role!=='owner'){
-      const actions=document.createElement('div');const selector=document.createElement('select');
-      selector.append(new Option('編集可能','editor'),new Option('閲覧のみ','viewer'));selector.value=m.role;
-      selector.onchange=async()=>{try{await setDoc(familyDoc('members',m.uid),{...m,role:selector.value})}catch(e){selector.value=m.role;statusError(e)}};
-      const revoke=document.createElement('button');revoke.className='danger';revoke.textContent='削除';
-      revoke.onclick=async()=>{if(confirm(m.email+' のアクセス権を削除しますか？'))try{await deleteDoc(familyDoc('members',m.uid))}catch(e){statusError(e)}};
-      actions.append(selector,revoke);row.append(actions);
-    }root.append(row);
+      const revoke=document.createElement('button');revoke.className='danger';
+      revoke.textContent='アクセスを解除';
+      revoke.onclick=async()=>{
+        if(!confirm(m.email+' の本棚へのアクセスを解除しますか？'))return;
+        try{await deleteDoc(familyDoc('members',m.uid))}catch(e){statusError(e)}
+      };
+      row.append(revoke);
+    }
+    root.append(row);
   }
-  if(role==='owner'){
-    const inviteTitle=document.createElement('h3');inviteTitle.textContent='家族を招待';root.append(inviteTitle);
-    const p=document.createElement('p');p.className='muted';p.textContent='招待先のGoogleメールアドレスを登録し、専用URLを相手に送ります。有効期限は14日です。';root.append(p);
-    const input=document.createElement('input');input.type='email';input.placeholder='family@gmail.com';input.setAttribute('aria-label','招待するメールアドレス');
-    const select=document.createElement('select');select.append(new Option('編集可能','editor'),new Option('閲覧のみ','viewer'));
-    const btn=document.createElement('button');btn.className='primary';btn.textContent='招待を作成';
-    const ctr=document.createElement('div');ctr.className='familyActions';ctr.append(input,select,btn);root.append(ctr);
-    btn.onclick=async()=>{const email=input.value.trim().toLowerCase();if(!/^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(email))return notice('有効なメールアドレスを入力してください',true);
-      try{await setDoc(familyDoc('invites',email),{email,role:select.value,expiresAt:Timestamp.fromMillis(Date.now()+14*86400000)});notice('招待を登録しました。以下の共有URLをコピーして送ってください。');}catch(e){statusError(e)}
-    };
-    const link=new URL(location.href);link.search='';link.searchParams.set('family',fid);
-    const url=document.createElement('div');url.className='invite';const title=document.createElement('strong');title.textContent='招待URL（家族へ共有）';const a=document.createElement('div');a.className='link';a.textContent=link.toString();
-    const copy=document.createElement('button');copy.textContent='URLをコピー';copy.onclick=async()=>{try{await navigator.clipboard.writeText(link.toString());notice('URLをコピーしました')}catch(e){statusError(e)}};
-    url.append(title,a,copy);root.append(url);
-    for(const inv of invites){const v=document.createElement('div');v.className='person';const tx=document.createElement('span');tx.textContent=inv.email+' · '+(inv.role==='editor'?'編集可能':'閲覧のみ')+' · 期限 '+inv.expiresAt?.toDate().toLocaleDateString('ja-JP');const del=document.createElement('button');del.textContent='招待を取り消す';del.onclick=async()=>{try{await deleteDoc(familyDoc('invites',inv.email))}catch(e){statusError(e)}};v.append(tx,del);root.append(v)}
-    const periods=document.createElement('input');periods.type='file';periods.accept='.json,application/json';periods.hidden=true;periods.onchange=importReadingPeriods;
-    const periodButton=document.createElement('button');periodButton.textContent='読了時期だけを更新';periodButton.onclick=()=>periods.click();
-    const periodRow=document.createElement('div');periodRow.className='familyActions';periodRow.append(periodButton,periods);
-    root.append(periodRow);
-    const backupTitle=document.createElement('h3');backupTitle.textContent='記録の移行とバックアップ';root.append(backupTitle);
-    const backup=document.createElement('button');backup.textContent='全記録をJSONで保存';backup.onclick=exportData;
-    const upload=document.createElement('input');upload.type='file';upload.accept='.json,application/json';upload.hidden=true;upload.onchange=importData;
-    const imp=document.createElement('button');imp.textContent='旧アプリからJSONを取り込む';imp.onclick=()=>upload.click();
-    const actions=document.createElement('div');actions.className='familyActions';actions.append(backup,imp,upload);root.append(actions);
-    const seriesTitle=document.createElement('h3');seriesTitle.textContent='シリーズの追加';root.append(seriesTitle);
-    const si=document.createElement('input');si.placeholder='シリーズ名';si.maxLength=150;
-    const sb=document.createElement('button');sb.textContent='シリーズ追加';sb.onclick=async()=>{const name=si.value.trim();if(!name)return;try{const ref=doc(familyCollection('series'));await setDoc(ref,{id:ref.id,name,totalVolumes:null});si.value=''}catch(e){statusError(e)}};const sr=document.createElement('div');sr.className='familyActions';sr.append(si,sb);root.append(sr);
-  }else{const a=document.createElement('button');a.textContent='全記録をバックアップ';a.onclick=exportData;root.append(a)}
+  if(role!=='owner')return;
+  const inviteTitle=document.createElement('h3');inviteTitle.textContent='家族を招待';root.append(inviteTitle);
+  const p=document.createElement('p');p.className='muted';
+  p.textContent='招待先のGoogleメールアドレスを登録し、招待URLを送ってください。招待は14日間有効です。';
+  root.append(p);
+  const input=document.createElement('input');input.type='email';input.placeholder='family@gmail.com';
+  input.setAttribute('aria-label','招待するGoogleメールアドレス');
+  const btn=document.createElement('button');btn.className='primary';btn.textContent='招待を作成';
+  const ctr=document.createElement('div');ctr.className='familyActions';ctr.append(input,btn);root.append(ctr);
+  btn.onclick=async()=>{
+    const email=input.value.trim().toLowerCase();
+    if(!/^[^\\s@/]+@[^\\s@/]+\\.[^\\s@/]+$/.test(email))return notice('有効なメールアドレスを入力してください',true);
+    try{
+      await setDoc(familyDoc('invites',email),{email,role:'viewer',expiresAt:Timestamp.fromMillis(Date.now()+14*86400000)});
+      notice('招待を作成しました。以下のURLを家族に送ってください。');
+    }catch(e){statusError(e)}
+  };
+  const link=new URL(location.href);link.search='';link.searchParams.set('family',fid);
+  const url=document.createElement('div');url.className='invite';
+  const shareTitle=document.createElement('strong');shareTitle.textContent='招待URL（家族へ共有）';
+  const address=document.createElement('div');address.className='link';address.textContent=link.toString();
+  const copy=document.createElement('button');copy.textContent='URLをコピー';
+  copy.onclick=async()=>{try{await navigator.clipboard.writeText(link.toString());notice('URLをコピーしました')}catch(e){statusError(e)}};
+  url.append(shareTitle,address,copy);root.append(url);
+  for(const invite of invites){
+    const row=document.createElement('div');row.className='person';
+    const tx=document.createElement('span');
+    tx.textContent=invite.email+' · 有効期限 '+invite.expiresAt?.toDate().toLocaleDateString('ja-JP');
+    const cancel=document.createElement('button');cancel.textContent='招待を取り消す';
+    cancel.onclick=async()=>{try{await deleteDoc(familyDoc('invites',invite.email))}catch(e){statusError(e)}};
+    row.append(tx,cancel);root.append(row);
+  }
+  const note=document.createElement('p');note.className='muted';
+  note.textContent='読書記録の追加・修正・削除はChatGPTに伝えてください。';
+  root.append(note);
 }
 async function start(){
   initUI();
