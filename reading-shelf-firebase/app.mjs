@@ -108,7 +108,7 @@ function render(){
   if(view==='family'){renderFamily();return}
   const opts={search:$('search').value,filter:view==='series'?'all':$('filter').value,sort:$('sort').value};
   const data=filteredBooks(books,opts,series);
-  const root=$('content');root.replaceChildren();
+  const root=$('content');root.className='';root.replaceChildren();
   if(!data.length){root.innerHTML='<div class="empty">該当する本はまだありません。</div>';return}
   if(view==='shelf'){root.append(bookGrid(data));return}
   if(view==='series'){
