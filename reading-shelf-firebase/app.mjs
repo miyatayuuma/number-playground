@@ -4,7 +4,7 @@ import {getFirestore,doc,collection,getDoc,setDoc,deleteDoc,onSnapshot,Timestamp
 import {firebaseConfig} from './firebase-config.mjs?build=20261016-ui-v6';
 import {mountBookCommunity} from './book-community.mjs?build=20261016-ui-v6';
 import {mountRecommendations} from './recommendations.mjs?build=20261016-ui-v6';
-import {STATUSES,filteredBooks,readPeriodLabel,readPeriodGrouping} from './domain.mjs?build=20261016-ui-v6';
+import {STATUSES,filteredBooks,readPeriodLabel,readPeriodGrouping,readingModeLabel} from './domain.mjs?build=20261016-ui-v6';
 
 const APP_BUILD='20261016-ui-v6';
 const $=id=>{const element=document.getElementById(id);if(!element)throw new Error('APP_DOM_MISMATCH: missing #'+id);return element};
@@ -197,9 +197,18 @@ function bookGrid(data){
     const tag=document.createElement('span');tag.className='flag '+b.status;tag.textContent=STATUSES[b.status]||'';cover.append(tag);
     const title=document.createElement('strong');title.textContent=b.title+(b.edition?' 〈'+b.edition+'〉':'');
     const author=document.createElement('span');author.className='sub';author.textContent=b.author||'作者未登録';
-    const meta=document.createElement('span');meta.className='sub';meta.textContent=[b.publicationYear?b.publicationYear+'年':'出版年不明',b.ageLabel].filter(Boolean).join(' · ');
-    const period=document.createElement('span');period.className='sub';period.textContent=b.status==='read'?readPeriodLabel(b):'';
-    btn.append(cover,title,author,meta,period);div.append(btn);
+    // Book cards prioritize reading history; bibliographic year and age stay in detail.
+    const trail=document.createElement('span');trail.className='bookReadingTrail';
+    const mode=readingModeLabel(b);
+    if(mode&&['read','reading','paused'].includes(b.status)){
+      const chip=document.createElement('span');chip.className='modeChip';chip.textContent=mode;
+      trail.append(chip);
+    }
+    if(b.status==='read'){
+      const period=document.createElement('span');period.className='readPeriodCompact';
+      period.textContent=readPeriodLabel(b);trail.append(period);
+    }
+    btn.append(cover,title,author,trail);div.append(btn);
   }return div;
 }
 function openBookInfo(book){
@@ -218,6 +227,7 @@ function openBookInfo(book){
   for(const value of [
     book.author,
     book.status==='read'?readPeriodLabel(book):'',
+    ['read','reading','paused'].includes(book.status)?readingModeLabel(book):'',
     series.find(q=>q.id===book.seriesId)?.name,
   ]){
     if(!value)continue;
@@ -243,6 +253,7 @@ function openBookInfo(book){
   const fields=[
     ['状態',STATUSES[book.status]||'未登録'],
     ['読んだ時期',book.status==='read'?readPeriodLabel(book):''],
+    ['読み方',readingModeLabel(book)],
     ['作者',book.author],
     ['訳',book.translator],
     ['文・再話',book.adaptedBy],
