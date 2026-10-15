@@ -24,6 +24,8 @@ jobs:
       - name: Browser module syntax
         run: |
           node --check reading-shelf-firebase/app.mjs
+          node --check reading-shelf-firebase/book-community.mjs
+          node --check reading-shelf-firebase/recommendations.mjs
           node --check reading-shelf-firebase/sw.js
   firestore-rules:
     runs-on: ubuntu-latest
