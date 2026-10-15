@@ -59,7 +59,7 @@ export function mountRecommendations({db,fid,user,owner,members,books,container,
         };
         results.append(pick);
       }
-    }catch(e){if(active&&seq===lookupSeq)status.textContent='書誌検索が使えません。タイトルだけでも投稿できます。'}
+    }catch(e){if(active&&seq===lookupSeq)status.textContent=String(e?.message||'書誌検索が使えません。検索せずに投稿できます。')}
     finally{if(active&&seq===lookupSeq)lookup.disabled=false}
   };
   compose.append(title,lookup,results,chosen,url,reason,submit,status);root.append(compose);
