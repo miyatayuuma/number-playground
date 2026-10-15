@@ -51,3 +51,16 @@ test('browser security rules deny all book and series writes',()=>{
     assert.match(x[1],/allow create, update, delete: if false;/);
   }
 });
+
+test('install button is connected to a real browser install event',()=>{
+  const html=text('index.html'),js=text('app.mjs');
+  assert.match(html,/id="installApp"[^>]*hidden/);
+  assert.match(js,/beforeinstallprompt/);
+  assert.match(js,/appinstalled/);
+  assert.match(js,/await prompt\.prompt\(\)/);
+});
+test('series is not counted solely by completed series',()=>{
+  const js=text('app.mjs');
+  assert.match(js,/\$\('seriesCount'\)\.textContent=series\.length/);
+  assert.match(js,/if\(!book\.seriesId\)continue/);
+});
