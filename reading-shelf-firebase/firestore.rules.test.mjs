@@ -1,7 +1,7 @@
 import {readFileSync} from 'node:fs';
 import test,{after} from 'node:test';
 import {initializeTestEnvironment,assertFails,assertSucceeds} from '@firebase/rules-unit-testing';
-import {doc,getDoc,setDoc,deleteDoc,Timestamp} from 'firebase/firestore';
+import {doc,collection,getDoc,getDocs,setDoc,updateDoc,deleteDoc,Timestamp,serverTimestamp,query,where} from 'firebase/firestore';
 
 const env=await initializeTestEnvironment({
   projectId:'demo-reading-shelf-rules',
@@ -19,6 +19,7 @@ await env.withSecurityRulesDisabled(async context=>{
   await setDoc(doc(db,...path('invites','viewer@gmail.com')),{email:'viewer@gmail.com',role:'viewer',expiresAt:Timestamp.fromMillis(Date.now()+86400000)});
   await setDoc(doc(db,...path('invites','editor@gmail.com')),{email:'editor@gmail.com',role:'editor',expiresAt:Timestamp.fromMillis(Date.now()+86400000)});
   await setDoc(doc(db,...path('books','book1')),{id:'book1',title:'赤毛のアン',status:'read'});
+  await setDoc(doc(db,...path('members','relative2')),{uid:'relative2',email:'relative2@gmail.com',displayName:'Relative 2',role:'viewer',joinedAt:Timestamp.now()});
 });
 
 test('anonymous and uninvited users cannot view a family book',async()=>{
@@ -55,4 +56,44 @@ test('revocation denies subsequent remote reads',async()=>{
   const o=user('owner1','owner@gmail.com');
   await assertSucceeds(deleteDoc(doc(o,...path('members','viewer1'))));
   await assertFails(getDoc(doc(user('viewer1','viewer@gmail.com'),...path('books','book1'))));
+});
+
+test('family members can comment but cannot impersonate other authors',async()=>{
+  const member=user('relative2','relative2@gmail.com');
+  const other=user('stranger','stranger@gmail.com');
+  const ref=doc(member,...path('books','book1','comments','commentA'));
+  const content={authorUid:'relative2',body:'この本、また読んでほしい',hidden:false,
+    createdAt:serverTimestamp(),updatedAt:serverTimestamp()};
+  await assertFails(setDoc(doc(other,...path('books','book1','comments','bad')),content));
+  await assertFails(setDoc(ref,{...content,authorUid:'owner1'}));
+  await assertSucceeds(setDoc(ref,content));
+  await assertSucceeds(getDoc(ref));
+  await assertFails(updateDoc(doc(user('owner1','owner@gmail.com'),...path('books','book1','comments','commentA')),{body:'改ざん',updatedAt:serverTimestamp()}));
+  await assertSucceeds(updateDoc(ref,{body:'もう一度読みたい',updatedAt:serverTimestamp()}));
+  await assertFails(updateDoc(ref,{authorUid:'owner1'}));
+  await assertFails(setDoc(doc(member,...path('books','book1','childReflections','child01')),
+    {quote:'実際には言っていない'}));
+});
+test('owner may moderate but not impersonate family; hidden content is excluded',async()=>{
+  const owner=user('owner1','owner@gmail.com');
+  const member=user('relative2','relative2@gmail.com');
+  const ref=doc(owner,...path('books','book1','comments','commentA'));
+  await assertSucceeds(updateDoc(ref,{hidden:true}));
+  await assertFails(updateDoc(doc(member,...path('books','book1','comments','commentA')),{hidden:false}));
+  await assertFails(getDoc(doc(user('stranger','stranger@gmail.com'),...path('books','book1','comments','commentA'))));
+  const visible=query(collection(member,...path('books','book1','comments')),where('hidden','==',false));
+  await assertSucceeds(getDocs(visible));
+  await assertSucceeds(updateDoc(ref,{hidden:false}));
+  await assertSucceeds(getDocs(visible));
+});
+test('reactions and reflection requests are owned by the authenticated family member',async()=>{
+  const member=user('relative2','relative2@gmail.com');
+  for(const [bucket,kind] of [['reactions','like'],['requests','ask-reflection']]){
+    const ref=doc(member,...path('books','book1',bucket,'relative2'));
+    await assertSucceeds(setDoc(ref,{uid:'relative2',kind,createdAt:serverTimestamp()}));
+    await assertFails(setDoc(doc(user('owner1','owner@gmail.com'),...path('books','book1',bucket,'relative2')),
+      {uid:'relative2',kind,createdAt:serverTimestamp()}));
+    await assertFails(updateDoc(ref,{kind:'hack'}));
+    await assertSucceeds(deleteDoc(ref));
+  }
 });
