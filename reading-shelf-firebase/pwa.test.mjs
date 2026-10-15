@@ -40,7 +40,7 @@ test('only static app files are cached; user records remain Firebase-only',()=>{
   assert.match(sw,/url\.origin!==self\.location\.origin/);
   assert.ok(!sw.includes('firestore.googleapis.com'));
   assert.ok(!sw.includes('accounts.google.com'));
-  assert.match(text('app.mjs'),/serviceWorker\.register\('\/sw\.js'\)/);
+  assert.match(text('app.mjs'),/serviceWorker\.register\('\/sw\.js',\{updateViaCache:'none'\}\)/);
 });
 test('browser security rules deny all book and series writes',()=>{
   const rules=text('firestore.rules');
@@ -77,4 +77,25 @@ test('new family interaction surfaces preserve chat-only formal record editing',
     assert.ok(rules.includes('match /'+collection+'/'),collection+' must have a Firestore access rule');
   }
   assert.doesNotMatch(html,/id="bookForm"/);
+});
+
+test('no removed DOM ID can silently cause a null property assignment',()=>{
+  const html=text('index.html'),app=text('app.mjs');
+  const ids=new Set([...html.matchAll(/\\bid="([^"]+)"/g)].map(m=>m[1]));
+  const references=[...app.matchAll(/\\$\\('([^']+)'\\)/g)].map(m=>m[1]);
+  assert.ok(references.length>20);
+  for(const id of references)assert.ok(ids.has(id),'app references missing DOM element: '+id);
+  assert.ok(!app.includes("$('familyTab')"),'removed family tab cannot be accessed');
+});
+test('PWA cannot combine stale JS with current HTML after deployment',()=>{
+  const html=text('index.html'),sw=text('sw.js');
+  const config=JSON.parse(text('firebase.json'));
+  assert.match(html,/app\\.mjs\\?build=20261016-stable-v4/);
+  assert.match(sw,/const ARTWORK_PATHS=new Set\\(ARTWORK\\)/);
+  assert.doesNotMatch(sw,/PUBLIC_ASSETS|\\/app\\.mjs',');
+  assert.ok(!sw.includes("'/index.html'"));
+  assert.ok(!sw.includes("'/domain.mjs'"));
+  for(const source of ['/', '**/*.html','**/*.mjs','**/*.css','/sw.js']){
+    assert.ok(config.hosting.headers.some(h=>h.source===source&&h.headers.some(k=>k.key==='Cache-Control'&&k.value==='no-store')),source);
+  }
 });
