@@ -15,7 +15,27 @@ const inviteFromUrl=new URLSearchParams(location.search).get('family')||'';
 function show(id){SHOW.forEach(x=>$(x).hidden=x!==id)}
 function notice(m,error=false){$('message').hidden=!m;$('message').textContent=m||'';$('message').className='notice'+(error?' error':'')}
 function statusError(e){console.error(e);notice('操作を完了できません: '+(e?.code||e?.message||e)+'\n接続状態・ログイン権限を確認してください。',true)}
+let deferredInstallPrompt=null;
+function registerInstallAction(){
+  const button=$('installApp');
+  window.addEventListener('beforeinstallprompt',event=>{
+    event.preventDefault();
+    deferredInstallPrompt=event;
+    button.hidden=false;
+  });
+  window.addEventListener('appinstalled',()=>{
+    deferredInstallPrompt=null;
+    button.hidden=true;
+  });
+  button.onclick=async()=>{
+    if(!deferredInstallPrompt)return;
+    const prompt=deferredInstallPrompt;deferredInstallPrompt=null;
+    button.hidden=true;
+    try{await prompt.prompt();await prompt.userChoice}catch(error){console.warn('Install prompt cancelled',error)}
+  };
+}
 function initUI(){
+  registerInstallAction();
   $('googleLogin').onclick=login;
   $('signOut').onclick=async()=>{closeListeners();await signOut(auth)};
   document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{view=b.dataset.view;render()});
