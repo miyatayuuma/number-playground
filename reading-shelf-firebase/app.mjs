@@ -6,7 +6,7 @@ import {mountBookCommunity} from './book-community.mjs';
 import {mountRecommendations} from './recommendations.mjs';
 import {STATUSES,filteredBooks,readPeriodLabel,readPeriodGrouping} from './domain.mjs';
 
-const $=id=>document.getElementById(id);
+const $=id=>{const element=document.getElementById(id);if(!element)throw new Error('APP_DOM_MISMATCH: missing #'+id);return element};
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const safeCover=url=>/^(https:\/\/|data:image\/(jpeg|png|webp);base64,)/i.test(String(url||''))?String(url):'';
 const SHOW=['loading','loginPanel','setupPanel','shelfPanel'];
@@ -17,7 +17,14 @@ const inviteFromUrl=new URLSearchParams(location.search).get('family')||'';
 
 function show(id){SHOW.forEach(x=>$(x).hidden=x!==id)}
 function notice(m,error=false){$('message').hidden=!m;$('message').textContent=m||'';$('message').className='notice'+(error?' error':'')}
-function statusError(e){console.error(e);notice('操作を完了できません: '+(e?.code||e?.message||e)+'\n接続状態・ログイン権限を確認してください。',true)}
+function statusError(e){
+  console.error(e);
+  const detail=String(e?.code||e?.message||e);
+  const versionMismatch=/APP_DOM_MISMATCH|Cannot set properties of null|Cannot read properties of null/.test(detail);
+  notice(versionMismatch
+    ?'アプリの表示に不整合が発生しました。更新後の画面を読み直すため、アプリを一度終了して開き直してください。改善しない場合はブラウザから開いてください。'
+    :'操作を完了できません: '+detail+'\n接続状態・ログイン権限を確認してください。',true);
+}
 let deferredInstallPrompt=null;
 function registerInstallAction(){
   const button=$('installApp');
@@ -341,7 +348,9 @@ async function start(){
 // Install the app shell without caching private Firebase data.
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
-    navigator.serviceWorker.register('/sw.js').catch(error=>console.warn('PWA registration failed',error));
+    navigator.serviceWorker.register('/sw.js',{updateViaCache:'none'})
+      .then(registration=>registration.update())
+      .catch(error=>console.warn('PWA registration failed',error));
   });
 }
 void start();
