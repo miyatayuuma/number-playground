@@ -330,7 +330,7 @@ function renderFamily(){
     row.append(tx,cancel);root.append(row);
   }
   const note=document.createElement('p');note.className='muted';
-  note.textContent='読書記録の追加・修正・削除はChatGPTに伝えてください。';
+  note.textContent='本の登録・修正・削除は管理者が行います。';
   root.append(note);
 }
 async function start(){
