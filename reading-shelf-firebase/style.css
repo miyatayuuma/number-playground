@@ -7,3 +7,10 @@
 .detailNote{font-size:13px;border-top:1px solid var(--line);padding-top:12px;line-height:1.8;overflow-wrap:anywhere}
 .detailNote a{color:var(--green);font-weight:700}
 @media(max-width:440px){.bookSummary{grid-template-columns:95px minmax(0,1fr);gap:12px}.bookDetailCover{width:95px;font-size:12px}.bibliography{grid-template-columns:1fr;gap:2px;font-size:12px}.bibliography dd{margin:0 0 8px}}
+
+.logoIcon{width:44px;height:44px;display:block;flex-shrink:0;border-radius:12px}
+.logo{font-size:20px;letter-spacing:.015em}
+.logo small{font-size:10px;letter-spacing:.04em;line-height:1.25;margin-top:2px;font-weight:500}
+.book:focus-visible{outline:3px solid #63b9db;outline-offset:4px}
+.installNote{margin-top:18px;font-size:12px;line-height:1.7;color:var(--muted)}
+@media(max-width:650px){.logoIcon{width:37px;height:37px}.logo{font-size:17px}.logo small{font-size:10px}}
