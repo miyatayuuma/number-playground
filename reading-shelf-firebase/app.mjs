@@ -1,6 +1,6 @@
 import {initializeApp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-app.js';
 import {getAuth,GoogleAuthProvider,signInWithPopup,signInWithRedirect,getRedirectResult,setPersistence,browserLocalPersistence,onAuthStateChanged,signOut} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js';
-import {getFirestore,doc,collection,getDoc,setDoc,deleteDoc,onSnapshot,writeBatch,Timestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
+import {getFirestore,doc,collection,getDoc,setDoc,updateDoc,deleteDoc,onSnapshot,writeBatch,Timestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
 import {firebaseConfig} from './firebase-config.mjs';
 import {STATUSES,sortBooks,filteredBooks,validateBackup,normalizeBook,newBook} from './domain.mjs';
 
@@ -27,7 +27,12 @@ function initUI(){
   $('removeBook').onclick=removeEditor;
   document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>$((b.dataset.close)).close());
 }
-function closeListeners(){unsubs.forEach(u=>u());unsubs=[];fid='';books=[];series=[];members=[];invites=[];household=null;role=''}
+function updateShelfHeading(){
+  const name=household?.name||'本棚';
+  $('shelfName').textContent=name;
+  document.title=household?name+' | 読書記録':'読書記録';
+}
+function closeListeners(){unsubs.forEach(u=>u());unsubs=[];fid='';books=[];series=[];members=[];invites=[];household=null;role='';updateShelfHeading()}
 function familyDoc(...a){return doc(db,'families',fid,...a)}
 function familyCollection(...a){return collection(db,'families',fid,...a)}
 async function login(){
@@ -56,13 +61,13 @@ function showFirstSetup(){
   $('setupDesc').textContent='家族に本棚がある場合は、管理者から招待URLを受け取ってください。新規作成すると、あなたが管理者になります。';
   $('setupBody').replaceChildren();
   const label=document.createElement('label');label.textContent='本棚の名前';
-  const inp=document.createElement('input');inp.id='familyName';inp.maxLength=80;inp.value='家族の本棚';label.append(inp);
+  const inp=document.createElement('input');inp.id='familyName';inp.maxLength=80;inp.value='あおのほんだな';label.append(inp);
   const btn=document.createElement('button');btn.id='createFamily';btn.className='primary';btn.textContent='新しい本棚を作成';btn.onclick=createFamily;
   $('setupBody').append(label,btn);
 }
 async function createFamily(){
   if(busy||!user)return;busy=true;try{
-    const name=($('familyName')?.value||'家族の本棚').trim();
+    const name=($('familyName')?.value||'あおのほんだな').trim();
     if(!name||name.length>80)throw Error('本棚の名前を確認してください');
     const ref=doc(collection(db,'families'));
     await setDoc(ref,{ownerUid:user.uid,name,createdAt:Timestamp.now(),schemaVersion:1});
@@ -97,9 +102,14 @@ async function enterFamily(id,seq){
   fid=id;const f=await getDoc(doc(db,'families',id));if(seq!==generation)return;
   if(!f.exists())throw Error('家族の本棚が見つかりません。アクセス権を確認してください');
   household=f.data();
+  updateShelfHeading();
   const memberRef=await getDoc(doc(db,'families',id,'members',user.uid));
   role=household.ownerUid===user.uid?'owner':memberRef.data()?.role||'viewer';
   show('shelfPanel');
+  unsubs.push(onSnapshot(doc(db,'families',fid),snapshot=>{
+    if(!snapshot.exists()){notice('本棚が見つかりません。管理者にお問い合わせください。',true);return}
+    household=snapshot.data();updateShelfHeading();if(view==='family')render();
+  },statusError));
   unsubs.push(onSnapshot(familyCollection('books'),snap=>{books=snap.docs.map(d=>d.data());render()},statusError));
   unsubs.push(onSnapshot(familyCollection('series'),snap=>{series=snap.docs.map(d=>d.data());render()},statusError));
   unsubs.push(onSnapshot(familyCollection('members'),snap=>{members=snap.docs.map(d=>d.data());render()},statusError));
@@ -200,7 +210,24 @@ async function importData(ev){
 }
 function renderFamily(){
   const root=$('content');root.replaceChildren();root.className='listPanel';
-  const h=document.createElement('h2');h.textContent=household?.name||'家族の本棚';root.append(h);
+  const h=document.createElement('h2');h.textContent=household?.name||'本棚';root.append(h);
+  if(role==='owner'){
+    const renameRow=document.createElement('div');renameRow.className='familyActions';
+    const nameInput=document.createElement('input');nameInput.value=household?.name||'';nameInput.maxLength=80;nameInput.setAttribute('aria-label','本棚の名前');
+    const rename=document.createElement('button');rename.textContent='本棚名を変更';
+    rename.onclick=async()=>{
+      const name=nameInput.value.trim();
+      if(!name||name.length>80)return notice('本棚名は1〜80文字で入力してください。',true);
+      if(name===household?.name)return;
+      rename.disabled=true;
+      try{
+        await updateDoc(doc(db,'families',fid),{name});
+        household={...household,name};updateShelfHeading();notice('本棚名を変更しました。');
+        if(view==='family')renderFamily();
+      }catch(e){statusError(e)}finally{rename.disabled=false}
+    };
+    renameRow.append(nameInput,rename);root.append(renameRow);
+  }
   const info=document.createElement('p');info.className='muted';info.textContent='ログイン中：'+user.email+' / 権限：'+(role==='owner'?'管理者':role==='editor'?'編集可能':'閲覧のみ');root.append(info);
   const heading=document.createElement('h3');heading.textContent='家族メンバー';root.append(heading);
   for(const m of members){const row=document.createElement('div');row.className='person';const who=document.createElement('div');
