@@ -2,72 +2,44 @@
 <html lang="ja"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#214a3d">
+<meta name="theme-color" content="#FFF8EF">
+<meta name="application-name" content="よんでね">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="よんでね">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="./icon-192.png">
 <meta name="description" content="家族の読書記録を安全に共有する本棚">
-<title>読書記録</title>
+<title>よんでね | あおのほんだな</title>
 <link rel="stylesheet" href="./style.css">
 </head><body>
 <header><div class="top">
-  <div class="logo"><span class="mark">本</span><div>読書記録</div></div>
+  <div class="logo"><img class="logoIcon" alt="" src="./icon.svg"><div>よんでね<small>あおのほんだな</small></div></div>
   <div class="headerActions"><span id="identity" aria-live="polite"></span><button id="signOut" hidden>ログアウト</button></div>
 </div></header>
 <main>
-  <section class="hero"><h1 id="shelfName">本棚</h1><p>読んだ本を家族で記録・共有できます。</p></section>
+  <section class="hero"><h1 id="shelfName">あおのほんだな</h1><p>家族で見る、読書の記録。</p></section>
   <div id="message" role="alert" class="notice" hidden></div>
   <section id="loading" class="panel center"><p>データを確認しています…</p></section>
   <section id="loginPanel" class="panel center" hidden><h2>Googleアカウントでログイン</h2><p>一度ログインすると、同じ端末では原則として次回から自動で接続します。</p><button class="primary" id="googleLogin">Googleでログイン</button><p class="muted tiny">このURLを知っているだけでは読書記録は見られません。</p></section>
-  <section id="setupPanel" class="panel" hidden><h2 id="setupTitle">家族の本棚を作成</h2><p id="setupDesc">家族共通の本棚を作成します。</p><div id="setupBody">
-    <label>本棚の名前 <input id="familyName" maxlength="80" value="あおのほんだな"></label>
-    <button class="primary" id="createFamily">本棚を作成する</button>
-  </div></section>
+  <section id="setupPanel" class="panel" hidden><h2 id="setupTitle">家族の本棚へ参加</h2><p id="setupDesc">管理者から受け取った招待URLでログインしてください。</p><div id="setupBody"></div></section>
   <section id="shelfPanel" hidden>
-    <div class="stats"><div><strong id="readCount">0</strong><span>読了済み</span></div><div><strong id="totalCount">0</strong><span>登録した本</span></div><div><strong id="seriesCount">0</strong><span>読了したシリーズ</span></div></div>
+    <div class="stats"><div><strong id="readCount">0</strong><span>読了済み</span></div><div><strong id="totalCount">0</strong><span>登録した本</span></div><div><strong id="seriesCount">0</strong><span>シリーズ</span></div></div>
     <nav class="tabs" aria-label="表示切替">
       <button data-view="shelf" class="active">本棚</button><button data-view="series">シリーズ別</button><button data-view="timeline">読了時期</button><button data-view="family" id="familyTab">家族の管理</button>
     </nav>
     <div id="bookControls" class="controls"><input id="search" type="search" placeholder="タイトル・作者で検索" aria-label="作品名・作者名">
       <select id="filter" aria-label="読書状況"><option value="read">読了済み</option><option value="all">すべて</option><option value="reading">読書中</option><option value="paused">中断</option><option value="unread">未読</option></select>
       <select id="sort" aria-label="並べ替え"><option value="read-new">読了時期：新しい順</option><option value="read-old">読了時期：古い順</option><option value="author-asc">作者：昇順</option><option value="author-desc">作者：降順</option><option value="title-asc">作品名：昇順</option><option value="title-desc">作品名：降順</option><option value="year-new">出版年：新しい順</option><option value="year-old">出版年：古い順</option></select>
-      <button id="addBook" class="primary">＋ 本を追加</button>
     </div>
     <div id="content" aria-live="polite"></div>
   </section>
 </main>
-<dialog id="bookDialog">
-  <form id="bookForm" class="dialogInner"><div class="dialogTop"><h2 id="bookDialogTitle">本を登録</h2><button type="button" class="ghost" data-close="bookDialog" aria-label="閉じる">×</button></div>
-    <div class="formGrid">
-      <label class="wide">作品名 <input name="title" required maxlength="250"></label>
-      <label>タイトルの読み <input name="titleKana"></label>
-      <label>作者 <input name="author"></label>
-      <label>作者の読み <input name="authorKana"></label>
-      <label>読書状況 <select name="status"><option value="read">読了</option><option value="reading">読書中</option><option value="paused">中断</option><option value="unread">未読</option></select></label>
-      <label>読了月・読了日（分かる場合のみ） <input name="finishedAt" placeholder="2026-10 または 2026-10-15"></label>
-      <label class="wide">読了時期の区分 <input name="finishedPeriodLabel" maxlength="160" placeholder="2026年度・小1・2学期"></label>
-      <label>期間の開始月 <input name="finishedPeriodStart" placeholder="2026-09" inputmode="numeric"></label>
-      <label>期間の終了月 <input name="finishedPeriodEnd" placeholder="2026-10" inputmode="numeric"></label>
-      <p class="wide muted tiny">学期・夏休みなどは、月を断定せず期間として記録できます。上の読了日が不明な場合は空欄で構いません。</p>
-      <label>シリーズ <select name="seriesId" id="seriesPicker"><option value="">なし</option></select></label>
-      <label>巻番号 <input name="volume" type="number" min="1"></label>
-      <label>版・副題 <input name="edition"></label>
-      <label>著者区分（文・再話） <input name="adaptedBy"></label>
-      <label>挿絵 <input name="illustrator"></label>
-      <label>出版社 <input name="publisher"></label>
-      <label>出版年 <input name="publicationYear" type="number" min="1400" max="2200"></label>
-      <label>ISBN <input name="isbn"></label>
-      <label>対象年齢 <input name="ageLabel" placeholder="6歳〜"></label>
-      <label>ページ数 <input name="pageCount" type="number" min="1"></label>
-      <label class="wide">表紙画像URL（HTTPS） <input name="coverUrl" type="url" placeholder="https://..."></label>
-      <label class="wide">読書・発達の観察メモ <textarea name="notes" rows="3"></textarea></label>
-      <label class="wide">版についてのメモ <textarea name="editionNote" rows="2"></textarea></label>
-    </div>
-    <div class="dialogActions"><button type="button" id="removeBook" class="danger" hidden>削除</button><button class="primary" type="submit" id="saveBook">保存</button></div>
-  </form>
-</dialog>
 <dialog id="bookInfoDialog">
   <div class="dialogInner">
     <div class="dialogTop"><h2 id="bookInfoTitle">本の情報</h2><button type="button" class="ghost" data-close="bookInfoDialog" aria-label="閉じる">×</button></div>
     <div id="bookInfoBody"></div>
-    <div class="dialogActions"><button id="bookInfoEdit" class="primary">この本を編集</button></div>
   </div>
 </dialog>
 <script type="module" src="./app.mjs"></script>
