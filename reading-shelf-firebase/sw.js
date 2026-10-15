@@ -1,6 +1,6 @@
 // Offline cache contains public application code only; no Firebase user data.
-const CACHE_NAME='yondene-static-v1';
-const PUBLIC_ASSETS=['/','/index.html','/style.css','/app.mjs','/domain.mjs','/firebase-config.mjs','/manifest.webmanifest','/icon.svg','/icon-192.png','/icon-512.png'];
+const CACHE_NAME='yondene-static-v3-family-social';
+const PUBLIC_ASSETS=['/','/index.html','/style.css','/app.mjs','/book-community.mjs','/recommendations.mjs','/domain.mjs','/firebase-config.mjs','/manifest.webmanifest','/icon.svg','/icon-192.png','/icon-512.png'];
 const PUBLIC_PATHS=new Set(PUBLIC_ASSETS);
 
 self.addEventListener('install',event=>{
