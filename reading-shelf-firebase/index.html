@@ -41,7 +41,11 @@
       <label>作者 <input name="author"></label>
       <label>作者の読み <input name="authorKana"></label>
       <label>読書状況 <select name="status"><option value="read">読了</option><option value="reading">読書中</option><option value="paused">中断</option><option value="unread">未読</option></select></label>
-      <label>読了時期 <input name="finishedAt" placeholder="2026-10 または 2026-10-15"></label>
+      <label>読了月・読了日（分かる場合のみ） <input name="finishedAt" placeholder="2026-10 または 2026-10-15"></label>
+      <label class="wide">読了時期の区分 <input name="finishedPeriodLabel" maxlength="160" placeholder="2026年度・小1・2学期"></label>
+      <label>期間の開始月 <input name="finishedPeriodStart" placeholder="2026-09" inputmode="numeric"></label>
+      <label>期間の終了月 <input name="finishedPeriodEnd" placeholder="2026-10" inputmode="numeric"></label>
+      <p class="wide muted tiny">学期・夏休みなどは、月を断定せず期間として記録できます。上の読了日が不明な場合は空欄で構いません。</p>
       <label>シリーズ <select name="seriesId" id="seriesPicker"><option value="">なし</option></select></label>
       <label>巻番号 <input name="volume" type="number" min="1"></label>
       <label>版・副題 <input name="edition"></label>
