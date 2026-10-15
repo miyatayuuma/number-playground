@@ -154,3 +154,6 @@ button:focus-visible,input:focus-visible,select:focus-visible,.book:focus-visibl
   .tabs { gap: 5px; }
 }
 @media(max-width:360px){ .books { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+
+.installApp{border-color:#abd9c2;background:#e6f7ed;color:#1c6954;white-space:nowrap;font-size:12px}
+.installApp:hover{background:#d6f0e3}
