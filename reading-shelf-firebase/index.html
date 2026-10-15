@@ -29,18 +29,30 @@
     <nav class="tabs" aria-label="表示切替">
       <button data-view="shelf" class="active">本棚</button><button data-view="series">シリーズ</button><button data-view="recommendations">おすすめ</button>
     </nav>
-    <div id="bookControls" class="controls">
-      <input id="search" type="search" placeholder="本や作者をさがす" aria-label="本や作者を検索">
-      <select id="filter" aria-label="読書状況">
-        <option value="read">読んだ</option><option value="all">すべて</option>
-        <option value="reading">読んでいる</option><option value="paused">お休み中</option><option value="unread">まだ読んでいない</option>
-      </select>
-      <select id="sort" aria-label="並び方">
-        <option value="order">読んだ順</option><option value="title">タイトル</option>
-        <option value="author">作者</option><option value="year">出版年</option>
-      </select>
-      <button id="sortDirection" aria-label="並び順を反転" title="並び順を反転">新しい順 ↓</button>
-      <button id="timelineToggle" aria-pressed="false">時期別に見る</button>
+    <div id="bookControls" class="controls" aria-label="本をさがす・並べる">
+      <input id="search" type="search" placeholder="タイトル・作者で検索" aria-label="本のタイトル・作者で検索">
+      <div class="bookSelectRow">
+        <label class="fieldLabel"><span class="srOnly">表示する本</span>
+          <select id="filter" aria-label="表示する本">
+            <option value="read">読んだ本</option>
+            <option value="all">すべての本</option>
+            <option value="reading">読んでいる本</option>
+            <option value="paused">お休み中の本</option>
+            <option value="unread">まだ読んでいない本</option>
+            <option value="timeline">読んだ時期別</option>
+          </select>
+        </label>
+        <label class="fieldLabel"><span class="srOnly">並び順</span>
+          <select id="sort" aria-label="並び順">
+            <option value="order-new">最近読んだ順</option>
+            <option value="order-old">最初に読んだ順</option>
+            <option value="title-asc">タイトル順</option>
+            <option value="author-asc">作者順</option>
+            <option value="year-new">出版年が新しい順</option>
+            <option value="year-old">出版年が古い順</option>
+          </select>
+        </label>
+      </div>
     </div>
     <div id="content" aria-live="polite"></div>
   </section>
