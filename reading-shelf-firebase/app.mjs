@@ -3,6 +3,7 @@ import {getAuth,GoogleAuthProvider,signInWithPopup,signInWithRedirect,getRedirec
 import {getFirestore,doc,collection,getDoc,setDoc,deleteDoc,onSnapshot,Timestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
 import {firebaseConfig} from './firebase-config.mjs';
 import {mountBookCommunity} from './book-community.mjs';
+import {mountRecommendations} from './recommendations.mjs';
 import {STATUSES,filteredBooks,readPeriodLabel,readPeriodGrouping} from './domain.mjs';
 
 const $=id=>document.getElementById(id);
@@ -11,7 +12,7 @@ const safeCover=url=>/^(https:\/\/|data:image\/(jpeg|png|webp);base64,)/i.test(S
 const SHOW=['loading','loginPanel','setupPanel','shelfPanel'];
 let auth,db,user=null,fid='',role='',household=null,books=[],series=[],members=[],invites=[];
 let unsubs=[],view='shelf',generation=0,periodMode=false,sortDescending=true;
-let closeCommunity=null;
+let closeCommunity=null,closeRecommendations=null;
 const inviteFromUrl=new URLSearchParams(location.search).get('family')||'';
 
 function show(id){SHOW.forEach(x=>$(x).hidden=x!==id)}
@@ -56,7 +57,7 @@ function updateShelfHeading(){
   $('shelfName').textContent=name;
   document.title=household?'よんでね | '+name:'よんでね';
 }
-function closeListeners(){closeCommunity?.();closeCommunity=null;unsubs.forEach(u=>u());unsubs=[];fid='';books=[];series=[];members=[];invites=[];household=null;role='';updateShelfHeading()}
+function closeListeners(){closeRecommendations?.();closeRecommendations=null;closeCommunity?.();closeCommunity=null;unsubs.forEach(u=>u());unsubs=[];fid='';books=[];series=[];members=[];invites=[];household=null;role='';updateShelfHeading()}
 function familyDoc(...a){return doc(db,'families',fid,...a)}
 function familyCollection(...a){return collection(db,'families',fid,...a)}
 async function login(){
@@ -127,6 +128,7 @@ async function enterFamily(id,seq){
   render();
 }
 function render(){
+  if(view!=='recommendations'){closeRecommendations?.();closeRecommendations=null}
   if(!fid||!$('shelfPanel')||$('shelfPanel').hidden)return;
   $('readCount').textContent=books.filter(b=>b.status==='read').length+'冊';
   $('totalCount').textContent=books.length+'冊';
@@ -255,9 +257,11 @@ function openBookInfo(book){
   $('bookInfoDialog').showModal();
 }
 function renderRecommendations(){
+  if(closeRecommendations)return;
   const root=$('content');root.className='';root.replaceChildren();
-  const hint=document.createElement('p');hint.className='empty';
-  hint.textContent='家族のおすすめを準備しています。';root.append(hint);
+  closeRecommendations=mountRecommendations({
+    db,fid,user,owner:role==='owner',members:()=>members,books:()=>books,container:root,onError:statusError
+  });
 }
 function renderFamily(){
   const root=$('content');root.replaceChildren();root.className='listPanel';
