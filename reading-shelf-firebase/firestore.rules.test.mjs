@@ -1,7 +1,7 @@
 import {readFileSync} from 'node:fs';
 import test,{after} from 'node:test';
 import {initializeTestEnvironment,assertFails,assertSucceeds} from '@firebase/rules-unit-testing';
-import {doc,collection,getDoc,getDocs,setDoc,updateDoc,deleteDoc,Timestamp,serverTimestamp,query,where} from 'firebase/firestore';
+import {doc,collection,getDoc,getDocs,setDoc,updateDoc,deleteDoc,Timestamp,serverTimestamp,query,where,orderBy,limit,writeBatch} from 'firebase/firestore';
 
 const env=await initializeTestEnvironment({
   projectId:'demo-reading-shelf-rules',
@@ -119,4 +119,48 @@ test('recommendations permit family sharing but prohibit impersonation and catal
   await assertSucceeds(getDocs(visible));
   await assertSucceeds(updateDoc(doc(owner,...pathTo),{hidden:false}));
   await assertSucceeds(deleteDoc(doc(relative,...pathTo)));
+});
+
+
+test('book lookup metadata is optional; unsafe covers and unexpected fields are rejected',async()=>{
+  const family=user('relative2','relative2@gmail.com');
+  const record={authorUid:'relative2',title:'あたらしい本',normalizedTitle:'あたらしい本',
+    reason:'おすすめ',url:'',hidden:false,createdAt:serverTimestamp(),updatedAt:serverTimestamp()};
+  const reference=doc(family,...path('recommendations','with-metadata'));
+  await assertSucceeds(setDoc(reference,{...record,
+    author:'作家',publisher:'出版社',publishedDate:'2021-09',
+    isbn:'9784198650032',coverUrl:'https://books.google.com/books/content?id=book',
+    metadataSource:'https://books.google.com/books?id=book'}));
+  await assertFails(setDoc(doc(family,...path('recommendations','bad-cover')),
+    {...record,coverUrl:'javascript:alert(1)'}));
+  await assertFails(setDoc(doc(family,...path('recommendations','unexpected')),
+    {...record,privateEmail:'example@private.test'}));
+});
+test('only authenticated family may publish metadata-only activity',async()=>{
+  const family=user('relative2','relative2@gmail.com');
+  const stranger=user('stranger','stranger@gmail.com');
+  const data={actorUid:'relative2',kind:'comment',title:'ねこと王さま',
+    bookId:'book1',sourceId:'comment-new',hidden:false,createdAt:serverTimestamp()};
+  await assertFails(setDoc(doc(stranger,...path('activity','bad')),data));
+  await assertFails(setDoc(doc(family,...path('activity','spoof')),{...data,actorUid:'owner1'}));
+  await assertFails(setDoc(doc(family,...path('activity','body')),{...data,body:'子どもの感想全文'}));
+  await assertSucceeds(setDoc(doc(family,...path('activity','activity1')),data));
+  const stream=query(collection(family,...path('activity')),orderBy('createdAt','desc'),limit(10));
+  await assertSucceeds(getDocs(stream));
+  await assertFails(updateDoc(doc(family,...path('activity','activity1')),{hidden:true}));
+  await assertSucceeds(updateDoc(doc(user('owner1','owner@gmail.com'),...path('activity','activity1')),{hidden:true}));
+  await assertSucceeds(deleteDoc(doc(family,...path('activity','activity1'))));
+});
+test('community comment plus activity can be committed in one atomic batch',async()=>{
+  const family=user('relative2','relative2@gmail.com');
+  const batch=writeBatch(family);
+  batch.set(doc(family,...path('books','book1','comments','new-comment')),{
+    authorUid:'relative2',body:'大好きな本です',createdAt:serverTimestamp(),
+    updatedAt:serverTimestamp(),hidden:false
+  });
+  batch.set(doc(family,...path('activity','comment-new-comment')),{
+    actorUid:'relative2',kind:'comment',title:'ねこと王さま',
+    bookId:'book1',sourceId:'new-comment',hidden:false,createdAt:serverTimestamp()
+  });
+  await assertSucceeds(batch.commit());
 });
