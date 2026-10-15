@@ -267,4 +267,10 @@ async function start(){
     onAuthStateChanged(auth,u=>{void signedIn(u)},statusError);
   }catch(e){show('setupPanel');statusError(e)}
 }
+// Install the app shell without caching private Firebase data.
+if('serviceWorker' in navigator){
+  window.addEventListener('load',()=>{
+    navigator.serviceWorker.register('/sw.js').catch(error=>console.warn('PWA registration failed',error));
+  });
+}
 void start();
