@@ -151,6 +151,45 @@ service cloud.firestore {
         allow get, list: if member(fid);
         allow create, update, delete: if false;
       }
+      match /recommendations/{recommendationId} {
+        allow get: if member(fid) && (owner(fid) || resource.data.hidden == false ||
+          resource.data.authorUid == request.auth.uid);
+        allow list: if member(fid) && (owner(fid) || resource.data.hidden == false);
+        allow create: if member(fid)
+          && request.resource.data.keys().hasOnly(['authorUid','title','normalizedTitle','reason','url','hidden','createdAt','updatedAt'])
+          && request.resource.data.keys().hasAll(['authorUid','title','normalizedTitle','reason','url','hidden','createdAt','updatedAt'])
+          && request.resource.data.authorUid == request.auth.uid
+          && request.resource.data.title is string
+          && request.resource.data.title.size() > 0
+          && request.resource.data.title.size() <= 250
+          && request.resource.data.normalizedTitle is string
+          && request.resource.data.normalizedTitle.size() > 0
+          && request.resource.data.normalizedTitle.size() <= 250
+          && request.resource.data.reason is string
+          && request.resource.data.reason.size() <= 1000
+          && request.resource.data.url is string
+          && request.resource.data.url.size() <= 1500
+          && (request.resource.data.url == '' || request.resource.data.url.matches('^https://.+'))
+          && request.resource.data.hidden == false
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time;
+        allow update: if member(fid) && (
+          (resource.data.authorUid == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reason','url','updatedAt'])
+            && request.resource.data.reason is string
+            && request.resource.data.reason.size() <= 1000
+            && request.resource.data.url is string
+            && request.resource.data.url.size() <= 1500
+            && (request.resource.data.url == '' || request.resource.data.url.matches('^https://.+'))
+            && request.resource.data.updatedAt == request.time)
+          ||
+          (owner(fid) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['hidden'])
+            && request.resource.data.hidden is bool
+            && request.resource.data.hidden != resource.data.hidden)
+        );
+        allow delete: if member(fid) && resource.data.authorUid == request.auth.uid;
+      }
+
     }
   }
 }
