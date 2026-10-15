@@ -2,7 +2,7 @@ import {initializeApp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-
 import {getAuth,GoogleAuthProvider,signInWithPopup,signInWithRedirect,getRedirectResult,setPersistence,browserLocalPersistence,onAuthStateChanged,signOut} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js';
 import {getFirestore,doc,collection,getDoc,setDoc,updateDoc,deleteDoc,onSnapshot,writeBatch,runTransaction,Timestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
 import {firebaseConfig} from './firebase-config.mjs';
-import {STATUSES,sortBooks,filteredBooks,validateBackup,normalizeBook,newBook,readPeriodLabel,readPeriodGrouping} from './domain.mjs';
+import {STATUSES,sortBooks,filteredBooks,validateBackup,normalizeBook,newBook,readPeriodLabel,readPeriodGrouping,validatePeriodUpdates} from './domain.mjs';
 
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -213,6 +213,40 @@ async function importData(ev){
     notice('クラウドへの移行完了：'+imported.length+'冊を確認してください。');
   }catch(e){statusError(e)}finally{busy=false}
 }
+async function importReadingPeriods(ev){
+  const file=ev.target.files?.[0];ev.target.value='';if(!file)return;
+  if(role!=='owner'||busy)return;
+  if(file.size>MAX_IMPORT_BYTES)return notice('ファイルが大きすぎます',true);
+  try{
+    const updates=validatePeriodUpdates(JSON.parse(await file.text()));
+    if(!confirm(updates.length+'冊の読了時期だけを反映します。既存の感想・表紙・読書状況は変更しません。続けますか？'))return;
+    busy=true;
+    const outcome=await runTransaction(db,async tx=>{
+      const refs=updates.map(b=>familyDoc('books',b.id));
+      const snapshots=[];
+      for(const ref of refs)snapshots.push(await tx.get(ref));
+      const edits=[];
+      for(let i=0;i<updates.length;i++){
+        const b=updates[i],snap=snapshots[i];
+        if(!snap.exists())throw Error('移行先に本がありません: '+b.title+'。先に27冊の全件移行を完了してください');
+        const current=snap.data();
+        if(current.title!==b.title)throw Error('書名が一致しません: '+b.title);
+        if(current.status!=='read')throw Error('読了済みではありません: '+b.title);
+        const changes={};
+        for(const key of ['finishedPeriodLabel','finishedPeriodStart','finishedPeriodEnd','finishedPeriodPrecision','finishedPeriodBasis','finishedPeriodNote']){
+          const next=b[key]??'';
+          const old=current[key]??'';
+          if(old&&old!==next)throw Error('既存の時期情報と競合: '+b.title+'。手動変更を保護しました');
+          if(old!==next)changes[key]=next;
+        }
+        if(Object.keys(changes).length)edits.push({ref:refs[i],changes});
+      }
+      for(const e of edits)tx.update(e.ref,e.changes);
+      return edits.length;
+    });
+    notice('期間情報を確認しました。'+outcome+'冊分を更新しました（感想・表紙は保持）。');
+  }catch(e){statusError(e)}finally{busy=false}
+}
 function renderFamily(){
   const root=$('content');root.replaceChildren();root.className='listPanel';
   const h=document.createElement('h2');h.textContent=household?.name||'本棚';root.append(h);
@@ -262,6 +296,10 @@ function renderFamily(){
     const copy=document.createElement('button');copy.textContent='URLをコピー';copy.onclick=async()=>{try{await navigator.clipboard.writeText(link.toString());notice('URLをコピーしました')}catch(e){statusError(e)}};
     url.append(title,a,copy);root.append(url);
     for(const inv of invites){const v=document.createElement('div');v.className='person';const tx=document.createElement('span');tx.textContent=inv.email+' · '+(inv.role==='editor'?'編集可能':'閲覧のみ')+' · 期限 '+inv.expiresAt?.toDate().toLocaleDateString('ja-JP');const del=document.createElement('button');del.textContent='招待を取り消す';del.onclick=async()=>{try{await deleteDoc(familyDoc('invites',inv.email))}catch(e){statusError(e)}};v.append(tx,del);root.append(v)}
+    const periods=document.createElement('input');periods.type='file';periods.accept='.json,application/json';periods.hidden=true;periods.onchange=importReadingPeriods;
+    const periodButton=document.createElement('button');periodButton.textContent='読了時期だけを更新';periodButton.onclick=()=>periods.click();
+    const periodRow=document.createElement('div');periodRow.className='familyActions';periodRow.append(periodButton,periods);
+    root.append(periodRow);
     const backupTitle=document.createElement('h3');backupTitle.textContent='記録の移行とバックアップ';root.append(backupTitle);
     const backup=document.createElement('button');backup.textContent='全記録をJSONで保存';backup.onclick=exportData;
     const upload=document.createElement('input');upload.type='file';upload.accept='.json,application/json';upload.hidden=true;upload.onchange=importData;
