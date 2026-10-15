@@ -28,7 +28,7 @@ test('read-only library has no book editors, imports, or upload controls',()=>{
   assert.match(html,/よんでね/);
   assert.match(html,/manifest\.webmanifest/);
   assert.match(html,/id="bookInfoDialog"/);
-  assert.match(html,/読了済み/);
+  assert.match(html,/読んだ本/);
   assert.match(html,/<span>シリーズ<\/span>/);
   for(const forbidden of ['bookForm','bookDialogTitle','removeBook','addBook','bookInfoEdit','createFamily','importData','importReadingPeriods','openEditor','saveEditor','exportData']){
     assert.ok(!html.includes(forbidden)&&!js.includes(forbidden),forbidden+' must not be in PWA UI');
@@ -63,4 +63,18 @@ test('series is not counted solely by completed series',()=>{
   const js=text('app.mjs');
   assert.match(js,/\$\('seriesCount'\)\.textContent=series\.length/);
   assert.match(js,/if\(!book\.seriesId\)continue/);
+});
+
+test('new family interaction surfaces preserve chat-only formal record editing',()=>{
+  const html=text('index.html'),app=text('app.mjs'),rules=text('firestore.rules');
+  assert.match(html,/data-view="recommendations"/);
+  assert.match(html,/id="familySettings"/);
+  assert.match(html,/id="sortDirection"/);
+  assert.match(html,/id="timelineToggle"/);
+  assert.match(app,/mountBookCommunity/);
+  assert.match(app,/mountRecommendations/);
+  for(const collection of ['comments','reactions','requests','childReflections','recommendations']){
+    assert.match(rules,new RegExp('\\\\/'+collection+'\\\\/'));
+  }
+  assert.doesNotMatch(html,/id="bookForm"/);
 });
