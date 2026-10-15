@@ -1,0 +1,114 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+    function familyPath(fid) {
+      return /databases/$(database)/documents/families/$(fid);
+    }
+    function memberPath(fid, uid) {
+      return /databases/$(database)/documents/families/$(fid)/members/$(uid);
+    }
+    function invitePath(fid, email) {
+      return /databases/$(database)/documents/families/$(fid)/invites/$(email);
+    }
+    function owner(fid) {
+      return signedIn() && exists(familyPath(fid))
+          && get(familyPath(fid)).data.ownerUid == request.auth.uid;
+    }
+    function member(fid) {
+      return signedIn() && (owner(fid) || exists(memberPath(fid, request.auth.uid)));
+    }
+    function editor(fid) {
+      return owner(fid) || (signedIn()
+        && exists(memberPath(fid, request.auth.uid))
+        && get(memberPath(fid, request.auth.uid)).data.role == 'editor');
+    }
+    function ownEmail(email) {
+      return signedIn() && request.auth.token.email_verified == true
+        && request.auth.token.email == email;
+    }
+    function allowedBook() {
+      return request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.title.size() <= 250
+        && request.resource.data.status in ['read', 'reading', 'paused', 'unread']
+        && request.resource.data.id is string
+        && request.resource.data.id.size() > 0
+        && request.resource.data.id.size() <= 200;
+    }
+    match /users/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow list, delete: if false;
+      allow create, update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.familyId is string
+        && member(request.resource.data.familyId)
+        && ( !exists(/databases/$(database)/documents/users/$(uid))
+             || resource.data.familyId == request.resource.data.familyId);
+    }
+    match /families/{fid} {
+      allow get: if member(fid);
+      allow list, delete: if false;
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['ownerUid','name','createdAt','schemaVersion'])
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 80
+        && request.resource.data.schemaVersion == 1
+        && request.resource.data.createdAt is timestamp;
+      allow update: if owner(fid)
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && request.resource.data.schemaVersion == resource.data.schemaVersion;
+      match /members/{uid} {
+        allow get, list: if member(fid);
+        allow create: if signedIn()
+          && request.auth.uid == uid
+          && request.resource.data.uid == uid
+          && request.resource.data.email == request.auth.token.email
+          && request.resource.data.displayName is string
+          && request.resource.data.joinedAt is timestamp
+          && (
+            (owner(fid) && request.resource.data.role == 'owner') ||
+            (request.auth.token.email_verified == true
+              && exists(invitePath(fid, request.auth.token.email))
+              && get(invitePath(fid, request.auth.token.email)).data.expiresAt > request.time
+              && get(invitePath(fid, request.auth.token.email)).data.role == request.resource.data.role
+              && request.resource.data.role in ['editor','viewer'])
+          );
+        allow update: if owner(fid) && uid != request.auth.uid
+          && resource.data.role != 'owner'
+          && request.resource.data.uid == uid
+          && request.resource.data.email == resource.data.email
+          && request.resource.data.role in ['editor', 'viewer'];
+        allow delete: if owner(fid) && resource.data.role != 'owner';
+      }
+      match /invites/{email} {
+        allow get: if owner(fid) || ownEmail(email);
+        allow list: if owner(fid);
+        allow create, update: if owner(fid)
+          && request.resource.data.email == email
+          && request.resource.data.role in ['editor','viewer']
+          && request.resource.data.expiresAt is timestamp
+          && request.resource.data.expiresAt > request.time;
+        allow delete: if owner(fid);
+      }
+      match /books/{bookId} {
+        allow get, list: if member(fid);
+        allow create, update: if editor(fid)
+          && allowedBook()
+          && request.resource.data.id == bookId;
+        allow delete: if editor(fid);
+      }
+      match /series/{sid} {
+        allow get, list: if member(fid);
+        allow create, update: if editor(fid)
+          && request.resource.data.id == sid
+          && request.resource.data.name is string
+          && request.resource.data.name.size() > 0;
+        allow delete: if owner(fid);
+      }
+    }
+  }
+}
