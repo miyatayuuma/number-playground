@@ -91,7 +91,7 @@ test('no removed DOM ID can silently cause a null property assignment',()=>{
 test('PWA cannot combine stale JS with current HTML after deployment',()=>{
   const html=text('index.html'),sw=text('sw.js');
   const config=JSON.parse(text('firebase.json'));
-  assert.match(html,/app\.mjs\?build=20261016-stable-v4/);
+  assert.match(html,/app\.mjs\?build=20261016-family-detail-v5/);
   assert.match(sw,/const ARTWORK_PATHS=new Set\(ARTWORK\)/);
   assert.ok(!sw.includes('PUBLIC_ASSETS'));
   for(const path of ['/app.mjs','/index.html','/domain.mjs','/book-community.mjs','/recommendations.mjs']){
@@ -100,4 +100,27 @@ test('PWA cannot combine stale JS with current HTML after deployment',()=>{
   for(const source of ['/', '**/*.html','**/*.mjs','**/*.css','/sw.js']){
     assert.ok(config.hosting.headers.some(h=>h.source===source&&h.headers.some(k=>k.key==='Cache-Control'&&k.value==='no-store')),source);
   }
+});
+
+test('family-facing copy consistently identifies 管理者, not ChatGPT',()=>{
+  const app=text('app.mjs'),community=text('book-community.mjs'),html=text('index.html');
+  assert.doesNotMatch(app,/ChatGPT/);
+  assert.doesNotMatch(community,/ChatGPT/);
+  assert.doesNotMatch(html,/ChatGPT/);
+  assert.match(app,/本の登録・修正・削除は管理者が行います。/);
+  assert.match(community,/子どもの感想は管理者が記録します。/);
+});
+test('book detail exposes conversation before collapsed complete catalog data',()=>{
+  const app=text('app.mjs'),css=text('style.css');
+  const start=app.indexOf('function openBookInfo(book){');
+  const end=app.indexOf('function renderRecommendations()',start);
+  assert.ok(start>=0&&end>start);
+  const block=app.slice(start,end);
+  assert.ok(block.indexOf('mountBookCommunity(')<block.indexOf('root.append(disclosure)'), 'social section precedes catalog');
+  assert.match(block,/document\.createElement\('details'\)/);
+  assert.match(block,/ISBN/);
+  assert.match(block,/読書・観察メモ/);
+  assert.match(block,/dialog\.scrollTop=0/);
+  assert.match(css,/#bookInfoDialog \.dialogTop/);
+  assert.match(css,/position:sticky/);
 });
