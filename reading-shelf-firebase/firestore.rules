@@ -20,6 +20,9 @@ service cloud.firestore {
     function member(fid) {
       return signedIn() && (owner(fid) || exists(memberPath(fid, request.auth.uid)));
     }
+    function linkInvitePath(fid, token) {
+      return /databases/$(database)/documents/families/$(fid)/openInvites/$(token);
+    }
     function ownEmail(email) {
       return signedIn() && request.auth.token.email_verified == true
         && request.auth.token.email == email;
