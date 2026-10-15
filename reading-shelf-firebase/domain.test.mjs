@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {STATUSES,sortBooks,filteredBooks,validateBackup,normalizeBook,validDate,validatePeriodUpdates,readPeriodLabel} from './domain.mjs';
+import {STATUSES,sortBooks,filteredBooks,validateBackup,normalizeBook,validDate,validatePeriodUpdates,readPeriodLabel,readingModeLabel,READING_MODES} from './domain.mjs';
 
 test('book statuses remain distinct',()=>{
   assert.deepEqual(Object.keys(STATUSES),['read','reading','paused','unread']);
@@ -82,4 +82,13 @@ test('natural reading labels and read-order sorting remain accurate',()=>{
   ];
   assert.deepEqual(sortBooks(books,'order-new').map(b=>b.title),['後','前','未登録順']);
   assert.deepEqual(sortBooks(books,'order-old').map(b=>b.title),['前','後','未登録順']);
+});
+
+test('reading modes are explicit facts, not defaults inferred from unread status',()=>{
+  assert.equal(readingModeLabel({readingMode:'read-aloud'}),'読み聞かせ');
+  assert.equal(readingModeLabel({readingMode:'independent'}),'自分で読んだ');
+  assert.equal(readingModeLabel({readingMode:'mixed'}),'両方');
+  assert.equal(readingModeLabel({}),'');
+  assert.equal(readingModeLabel({readingMode:'unknown'}),'');
+  assert.equal(Object.keys(READING_MODES).length,3);
 });
