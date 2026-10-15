@@ -96,7 +96,7 @@ async function joinInvite(id,seq){
     const invitation=await getDoc(ref);if(seq!==generation)return;
     if(!invitation.exists()||invitation.data().expiresAt.toMillis()<Date.now())throw Error('有効な招待がありません。管理者へ確認してください');
     const info=invitation.data();
-    $('setupDesc').textContent=email+' 宛の招待があります。権限：'+(info.role==='editor'?'編集可能':'閲覧のみ');
+    $('setupDesc').textContent=email+' 宛に家族の本棚への招待が届いています。';
     const btn=document.createElement('button');btn.textContent='家族の本棚に参加する';btn.className='primary';
     btn.onclick=async()=>{btn.disabled=true;try{
       const membership=doc(db,'families',id,'members',user.uid);
