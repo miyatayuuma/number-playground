@@ -48,7 +48,7 @@ function initUI(){
     sortDescending=['order','year'].includes($('sort').value);render();
   });
   $('sortDirection').onclick=()=>{sortDescending=!sortDescending;render()};
-  $('timelineToggle').onclick=()=>{periodMode=!periodMode;render()};
+  $('timelineToggle').onclick=()=>{periodMode=!periodMode;if(periodMode)$('filter').value='read';render()};
   document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>$((b.dataset.close)).close());
   $('bookInfoDialog').addEventListener('close',()=>{closeCommunity?.();closeCommunity=null});
 }
@@ -138,6 +138,7 @@ function render(){
   $('bookControls').hidden=view!=='shelf';
   $('timelineToggle').setAttribute('aria-pressed',String(periodMode));
   $('timelineToggle').classList.toggle('active',periodMode);
+  $('filter').disabled=view==='shelf'&&periodMode;
   const sort=$('sort').value;
   $('sortDirection').textContent=['order','year'].includes(sort)
     ?(sortDescending?'新しい順 ↓':'古い順 ↑')
