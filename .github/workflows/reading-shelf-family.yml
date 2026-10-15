@@ -20,9 +20,11 @@ jobs:
         with:
           node-version: '22'
       - name: Pure domain behavior
-        run: node --test reading-shelf-firebase/domain.test.mjs
+        run: node --test reading-shelf-firebase/domain.test.mjs reading-shelf-firebase/pwa.test.mjs
       - name: Browser module syntax
-        run: node --check reading-shelf-firebase/app.mjs
+        run: |
+          node --check reading-shelf-firebase/app.mjs
+          node --check reading-shelf-firebase/sw.js
   firestore-rules:
     runs-on: ubuntu-latest
     timeout-minutes: 15
