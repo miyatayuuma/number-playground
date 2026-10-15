@@ -151,13 +151,39 @@ service cloud.firestore {
         allow get, list: if member(fid);
         allow create, update, delete: if false;
       }
+      // Activity feed stores only who performed which action on which book.
+      // No comment text, children's words, email address or recommendation reason.
+      match /activity/{activityId} {
+        allow get, list: if member(fid);
+        allow create: if member(fid)
+          && request.resource.data.keys().hasOnly(['actorUid','kind','title','bookId','sourceId','hidden','createdAt'])
+          && request.resource.data.keys().hasAll(['actorUid','kind','title','bookId','sourceId','hidden','createdAt'])
+          && request.resource.data.actorUid == request.auth.uid
+          && request.resource.data.kind in ['comment','recommendation']
+          && request.resource.data.title is string
+          && request.resource.data.title.size() > 0
+          && request.resource.data.title.size() <= 250
+          && request.resource.data.bookId is string
+          && request.resource.data.bookId.size() <= 128
+          && request.resource.data.sourceId is string
+          && request.resource.data.sourceId.size() > 0
+          && request.resource.data.sourceId.size() <= 128
+          && request.resource.data.hidden == false
+          && request.resource.data.createdAt == request.time;
+        allow update: if owner(fid) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['hidden'])
+          && request.resource.data.hidden is bool;
+        allow delete: if member(fid) && (
+          resource.data.actorUid == request.auth.uid || owner(fid)
+        );
+      }
       match /recommendations/{recommendationId} {
         allow get: if member(fid) && (owner(fid) || resource.data.hidden == false ||
           resource.data.authorUid == request.auth.uid);
         allow list: if member(fid) && (owner(fid) || resource.data.hidden == false);
         allow create: if member(fid)
-          && request.resource.data.keys().hasOnly(['authorUid','title','normalizedTitle','reason','url','hidden','createdAt','updatedAt'])
-          && request.resource.data.keys().hasAll(['authorUid','title','normalizedTitle','reason','url','hidden','createdAt','updatedAt'])
+          && request.resource.data.keys().hasOnly(['authorUid','title','normalizedTitle','reason','url','hidden','createdAt','updatedAt','author','publisher','publishedDate','isbn','coverUrl','metadataSource'])
+          && request.resource.data.keys().hasAll(['authorUid','title','normalizedTitle','reason','url','hidden','createdAt','updatedAt','author','publisher','publishedDate','isbn','coverUrl','metadataSource'])
           && request.resource.data.authorUid == request.auth.uid
           && request.resource.data.title is string
           && request.resource.data.title.size() > 0
@@ -170,6 +196,20 @@ service cloud.firestore {
           && request.resource.data.url is string
           && request.resource.data.url.size() <= 1500
           && (request.resource.data.url == '' || request.resource.data.url.matches('^https://.+'))
+          && request.resource.data.get('author','') is string
+          && request.resource.data.get('author','').size() <= 250
+          && request.resource.data.get('publisher','') is string
+          && request.resource.data.get('publisher','').size() <= 250
+          && request.resource.data.get('publishedDate','') is string
+          && request.resource.data.get('publishedDate','').size() <= 35
+          && request.resource.data.get('isbn','') is string
+          && request.resource.data.get('isbn','').size() <= 13
+          && request.resource.data.get('coverUrl','') is string
+          && request.resource.data.get('coverUrl','').size() <= 1500
+          && (request.resource.data.get('coverUrl','') == '' || request.resource.data.get('coverUrl','').matches('^https://.+'))
+          && request.resource.data.get('metadataSource','') is string
+          && request.resource.data.get('metadataSource','').size() <= 1500
+          && (request.resource.data.get('metadataSource','') == '' || request.resource.data.get('metadataSource','').matches('^https://.+'))
           && request.resource.data.hidden == false
           && request.resource.data.createdAt == request.time
           && request.resource.data.updatedAt == request.time;
