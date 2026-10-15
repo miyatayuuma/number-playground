@@ -1,4 +1,4 @@
-export const STATUSES=Object.freeze({read:'読了',reading:'読書中',paused:'中断',unread:'未読'});
+export const STATUSES=Object.freeze({read:'読んだ',reading:'読んでいる',paused:'お休み中',unread:'まだ読んでいない'});
 const collator=new Intl.Collator('ja',{numeric:true,sensitivity:'base'});
 export function normalize(v){return String(v??'').normalize('NFKC').toLowerCase().replace(/[\s\u3000『』（）・\-]/g,'')}
 export function cleanTitle(t){return String(t??'').trim().slice(0,250)}
@@ -9,7 +9,16 @@ export function readPeriodStart(b){return b.finishedPeriodStart||String(b.finish
 export function readPeriodEnd(b){return b.finishedPeriodEnd||String(b.finishedAt||'').slice(0,7)}
 export function readPeriodGrouping(b){return b.finishedPeriodLabel|| (b.finishedAt?b.finishedAt.slice(0,7).replace('-','年')+'月':'時期未登録')}
 
-export function sortBooks(books,sort='read-new'){
+export function sortBooks(books,sort='order-new'){
+  if(sort==='order-new'||sort==='order-old'){
+    const direction=sort==='order-new'?-1:1;
+    return [...books].sort((a,b)=>{
+      const missing=x=>!Number.isFinite(x.readOrder)||x.readOrder<=0;
+      if(missing(a)!==missing(b))return missing(a)?1:-1;
+      const delta=missing(a)?0:direction*(a.readOrder-b.readOrder);
+      return delta||collator.compare(a.title||'',b.title||'');
+    });
+  }
   const fields={
     'read-new':['readPeriodStart',-1],
     'read-old':['readPeriodStart',1],
@@ -29,7 +38,7 @@ export function sortBooks(books,sort='read-new'){
     return diff||(field==='readPeriodStart'?(dir===-1?-1:1)*(Number(a.readOrder||999999)-Number(b.readOrder||999999)):Number(a.readOrder||999999)-Number(b.readOrder||999999))||collator.compare(a.title||'',b.title||'');
   });
 }
-export function filteredBooks(books,{search='',filter='read',sort='read-new'}={},series=[]){
+export function filteredBooks(books,{search='',filter='read',sort='order-new'}={},series=[]){
   const q=normalize(search), names=new Map(series.map(s=>[s.id,s.name]));
   return sortBooks(books.filter(b=>(filter==='all'||b.status===filter)
     &&normalize([b.title,b.titleKana,b.author,b.authorKana,names.get(b.seriesId)].join(' ')).includes(q)),sort);
