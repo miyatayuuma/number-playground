@@ -21,7 +21,7 @@ export function mountFamilyActivity({db,fid,container,members,onBook,onRecommend
       const who=members().find(m=>m.uid===item.actorUid)?.displayName||'家族';
       const button=document.createElement('button');button.type='button';button.className='activityItem';
       const lead=document.createElement('span');lead.className='activityTitle';
-      lead.textContent=who+(item.kind==='recommendation'?'がおすすめしました':'がコメントしました');
+      lead.textContent=item.kind==='reflection'?'子どもの感想が記録されました':who+(item.kind==='recommendation'?'がおすすめしました':'がコメントしました');
       const book=document.createElement('span');book.className='activityBook';
       book.textContent=item.title;
       const date=document.createElement('span');date.className='muted tiny';
