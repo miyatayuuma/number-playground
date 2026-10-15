@@ -1,19 +1,20 @@
 import {initializeApp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-app.js';
 import {getAuth,GoogleAuthProvider,signInWithPopup,signInWithRedirect,getRedirectResult,setPersistence,browserLocalPersistence,onAuthStateChanged,signOut} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js';
 import {getFirestore,doc,collection,getDoc,setDoc,deleteDoc,onSnapshot,Timestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
-import {firebaseConfig} from './firebase-config.mjs?build=20261016-ui-v6';
-import {mountBookCommunity} from './book-community.mjs?build=20261016-ui-v6';
-import {mountRecommendations} from './recommendations.mjs?build=20261016-ui-v6';
-import {STATUSES,filteredBooks,readPeriodLabel,readPeriodGrouping,readingModeLabel} from './domain.mjs?build=20261016-ui-v6';
+import {firebaseConfig} from './firebase-config.mjs?build=20261016-high-v7';
+import {mountBookCommunity} from './book-community.mjs?build=20261016-high-v7';
+import {mountRecommendations} from './recommendations.mjs?build=20261016-high-v7';
+import {mountFamilyActivity} from './activity.mjs?build=20261016-high-v7';
+import {STATUSES,filteredBooks,readPeriodLabel,readPeriodGrouping,readingModeLabel} from './domain.mjs?build=20261016-high-v7';
 
-const APP_BUILD='20261016-ui-v6';
+const APP_BUILD='20261016-high-v7';
 const $=id=>{const element=document.getElementById(id);if(!element)throw new Error('APP_DOM_MISMATCH: missing #'+id);return element};
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const safeCover=url=>/^(https:\/\/|data:image\/(jpeg|png|webp);base64,)/i.test(String(url||''))?String(url):'';
 const SHOW=['loading','loginPanel','setupPanel','shelfPanel'];
 let auth,db,user=null,fid='',role='',household=null,books=[],series=[],members=[],invites=[];
 let unsubs=[],view='shelf',generation=0;
-let closeCommunity=null,closeRecommendations=null;
+let closeCommunity=null,closeRecommendations=null,closeActivity=null;
 const inviteFromUrl=new URLSearchParams(location.search).get('family')||'';
 
 function show(id){SHOW.forEach(x=>$(x).hidden=x!==id)}
@@ -62,7 +63,7 @@ function updateShelfHeading(){
   $('shelfName').textContent=name;
   document.title=household?'よんでね | '+name:'よんでね';
 }
-function closeListeners(){closeRecommendations?.();closeRecommendations=null;closeCommunity?.();closeCommunity=null;unsubs.forEach(u=>u());unsubs=[];fid='';books=[];series=[];members=[];invites=[];household=null;role='';updateShelfHeading()}
+function closeListeners(){closeActivity?.();closeActivity=null;closeRecommendations?.();closeRecommendations=null;closeCommunity?.();closeCommunity=null;unsubs.forEach(u=>u());unsubs=[];fid='';books=[];series=[];members=[];invites=[];household=null;role='';updateShelfHeading()}
 function familyDoc(...a){return doc(db,'families',fid,...a)}
 function familyCollection(...a){return collection(db,'families',fid,...a)}
 async function login(){
@@ -133,6 +134,7 @@ async function enterFamily(id,seq){
   render();
 }
 function render(){
+  closeActivity?.();closeActivity=null;
   if(view!=='recommendations'){closeRecommendations?.();closeRecommendations=null}
   if(!fid||!$('shelfPanel')||$('shelfPanel').hidden)return;
   $('readCount').textContent=books.filter(b=>b.status==='read').length+'冊';
@@ -154,7 +156,13 @@ function render(){
   const data=filteredBooks(books,opts,series);
   const root=$('content');root.className='';root.replaceChildren();
   if(!data.length){root.innerHTML='<div class="empty">該当する本はまだありません。</div>';return}
-  if(view==='shelf'&&!periodMode){root.append(bookGrid(data));return}
+  if(view==='shelf'&&!periodMode){
+    const area=document.createElement('div');root.append(area);
+    closeActivity=mountFamilyActivity({db,fid,container:area,members:()=>members,onError:statusError,
+      onBook:id=>{const found=books.find(b=>b.id===id);if(found)openBookInfo(found)},
+      onRecommendations:()=>{view='recommendations';render()}});
+    root.append(bookGrid(data));return;
+  }
   if(view==='series'){
     // A series screen should never collect unrelated stand-alone books.
     const known=new Map(series.map(s=>[s.id,s]));
