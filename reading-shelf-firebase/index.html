@@ -4,20 +4,20 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#214a3d">
 <meta name="description" content="家族の読書記録を安全に共有する本棚">
-<title>こどもの本棚 — 家族で共有</title>
+<title>読書記録</title>
 <link rel="stylesheet" href="./style.css">
 </head><body>
 <header><div class="top">
-  <div class="logo"><span class="mark">本</span><div>こどもの本棚<small>FAMILY READING JOURNAL</small></div></div>
+  <div class="logo"><span class="mark">本</span><div>読書記録</div></div>
   <div class="headerActions"><span id="identity" aria-live="polite"></span><button id="signOut" hidden>ログアウト</button></div>
 </div></header>
 <main>
-  <section class="hero"><span class="eyebrow">OUR READING JOURNEY</span><h1>物語がならぶ、<br>家族の本棚。</h1><p>読んだ本を残し、家族と共有する。表紙から見返せる読書の記録。</p></section>
+  <section class="hero"><h1 id="shelfName">本棚</h1><p>読んだ本を家族で記録・共有できます。</p></section>
   <div id="message" role="alert" class="notice" hidden></div>
   <section id="loading" class="panel center"><p>データを確認しています…</p></section>
   <section id="loginPanel" class="panel center" hidden><h2>Googleアカウントでログイン</h2><p>一度ログインすると、同じ端末では原則として次回から自動で接続します。</p><button class="primary" id="googleLogin">Googleでログイン</button><p class="muted tiny">このURLを知っているだけでは読書記録は見られません。</p></section>
   <section id="setupPanel" class="panel" hidden><h2 id="setupTitle">家族の本棚を作成</h2><p id="setupDesc">家族共通の本棚を作成します。</p><div id="setupBody">
-    <label>本棚の名前 <input id="familyName" maxlength="80" value="家族の本棚"></label>
+    <label>本棚の名前 <input id="familyName" maxlength="80" value="あおのほんだな"></label>
     <button class="primary" id="createFamily">本棚を作成する</button>
   </div></section>
   <section id="shelfPanel" hidden>
