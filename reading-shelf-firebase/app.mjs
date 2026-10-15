@@ -1,6 +1,6 @@
 import {initializeApp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-app.js';
 import {getAuth,GoogleAuthProvider,signInWithPopup,signInWithRedirect,getRedirectResult,setPersistence,browserLocalPersistence,onAuthStateChanged,signOut} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js';
-import {getFirestore,doc,collection,getDoc,setDoc,deleteDoc,onSnapshot,Timestamp,runTransaction,serverTimestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
+import {getFirestore,doc,collection,getDoc,setDoc,deleteDoc,onSnapshot,Timestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
 import {firebaseConfig} from './firebase-config.mjs?build=20261016-high-v7';
 import {mountBookCommunity} from './book-community.mjs?build=20261016-high-v7';
 import {mountRecommendations} from './recommendations.mjs?build=20261016-high-v7';
@@ -12,11 +12,10 @@ const $=id=>{const element=document.getElementById(id);if(!element)throw new Err
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const safeCover=url=>/^(https:\/\/|data:image\/(jpeg|png|webp);base64,)/i.test(String(url||''))?String(url):'';
 const SHOW=['loading','loginPanel','setupPanel','shelfPanel'];
-let auth,db,user=null,fid='',role='',household=null,books=[],series=[],members=[],invites=[],openInvites=[];
+let auth,db,user=null,fid='',role='',household=null,books=[],series=[],members=[],invites=[];
 let unsubs=[],view='shelf',generation=0;
 let closeCommunity=null,closeRecommendations=null,closeActivity=null;
 const inviteFromUrl=new URLSearchParams(location.search).get('family')||'';
-const inviteTokenFromUrl=new URLSearchParams(location.search).get('invite')||'';
 
 function show(id){SHOW.forEach(x=>$(x).hidden=x!==id)}
 function notice(m,error=false){$('message').hidden=!m;$('message').textContent=m||'';$('message').className='notice'+(error?' error':'')}
@@ -84,7 +83,7 @@ async function signedIn(u){
   try{
     const profile=await getDoc(doc(db,'users',u.uid));if(seq!==generation)return;
     if(profile.exists()&&profile.data().familyId){await enterFamily(profile.data().familyId,seq)}
-    else if(inviteFromUrl&&/^[A-Za-z0-9]{8,60}$/.test(inviteFromUrl)&&/^[a-f0-9]{32}$/.test(inviteTokenFromUrl)){await joinInvite(inviteFromUrl,inviteTokenFromUrl,seq)}
+    else if(inviteFromUrl&&/^[A-Za-z0-9]{8,60}$/.test(inviteFromUrl)){await joinInvite(inviteFromUrl,seq)}
     else showFirstSetup();
   }catch(e){if(seq===generation)statusError(e)}
 }
@@ -94,52 +93,27 @@ function showFirstSetup(){
   $('setupDesc').textContent='この本棚は家族専用です。管理者から招待URLを受け取って開いてください。';
   $('setupBody').replaceChildren();
 }
-async function joinInvite(id,token,seq){
+async function joinInvite(id,seq){
   show('setupPanel');$('setupTitle').textContent='家族の本棚に参加';
   $('setupDesc').textContent='招待を確認しています…';$('setupBody').replaceChildren();
   try{
-    if(!user.emailVerified)throw Error('確認済みのGoogleアカウントが必要です');
-    const membership=doc(db,'families',id,'members',user.uid);
-    // If the profile write failed after a successful claim, permit recovery.
-    const known=await getDoc(membership).catch(()=>null);
-    if(seq!==generation)return;
-    if(known?.exists()){
+    if(!user.emailVerified)throw Error('確認済みのGoogleメールアドレスが必要です');
+    const email=user.email.toLowerCase(), ref=doc(db,'families',id,'invites',email);
+    const invitation=await getDoc(ref);if(seq!==generation)return;
+    if(!invitation.exists()||invitation.data().expiresAt.toMillis()<Date.now())throw Error('有効な招待がありません。管理者へ確認してください');
+    const info=invitation.data();
+    $('setupDesc').textContent=email+' 宛に家族の本棚への招待が届いています。';
+    const btn=document.createElement('button');btn.textContent='家族の本棚に参加する';btn.className='primary';
+    btn.onclick=async()=>{btn.disabled=true;try{
+      const membership=doc(db,'families',id,'members',user.uid);
+      try{await setDoc(membership,{uid:user.uid,email:user.email,displayName:user.displayName||'',role:info.role,joinedAt:Timestamp.now()})}
+      catch(error){const existing=await getDoc(membership).catch(()=>null);if(!existing?.exists())throw error}
       await setDoc(doc(db,'users',user.uid),{familyId:id});
       history.replaceState(null,'',location.pathname);
       await enterFamily(id,++generation);
-      return;
-    }
-    const ref=doc(db,'families',id,'openInvites',token);
-    const snap=await getDoc(ref);if(seq!==generation)return;
-    const data=snap.data();
-    if(!snap.exists()||data.usedByUid||data.expiresAt?.toMillis?.()<=Date.now()){
-      throw Error('この招待URLは使用済み、または有効期限切れです。管理者に新しいURLを依頼してください。');
-    }
-    $('setupDesc').textContent='このURLは1人が参加すると自動的に受付終了します。';
-    const btn=document.createElement('button');btn.className='primary';
-    btn.textContent='家族の本棚に参加する';
-    btn.onclick=async()=>{
-      btn.disabled=true;
-      try{
-        await runTransaction(db,async transaction=>{
-          const current=await transaction.get(ref);
-          if(!current.exists()||current.data().usedByUid||
-             current.data().expiresAt.toMillis()<=Date.now()){
-            throw Error('招待はすでに使われたか期限が切れています');
-          }
-          transaction.set(membership,{
-            uid:user.uid,email:user.email,displayName:user.displayName||'',
-            role:'viewer',joinedAt:serverTimestamp(),inviteToken:token
-          });
-          transaction.update(ref,{usedByUid:user.uid,usedAt:serverTimestamp()});
-        });
-        await setDoc(doc(db,'users',user.uid),{familyId:id});
-        history.replaceState(null,'',location.pathname);
-        await enterFamily(id,++generation);
-      }catch(error){btn.disabled=false;statusError(error)}
-    };
+    }catch(e){btn.disabled=false;statusError(e)}};
     $('setupBody').append(btn);
-  }catch(error){$('setupDesc').textContent='招待を確認できませんでした。';statusError(error)}
+  }catch(e){$('setupDesc').textContent='招待を確認できませんでした。';statusError(e)}
 }
 async function enterFamily(id,seq){
   fid=id;const f=await getDoc(doc(db,'families',id));if(seq!==generation)return;
@@ -156,7 +130,7 @@ async function enterFamily(id,seq){
   unsubs.push(onSnapshot(familyCollection('books'),snap=>{books=snap.docs.map(d=>d.data());render()},statusError));
   unsubs.push(onSnapshot(familyCollection('series'),snap=>{series=snap.docs.map(d=>d.data());render()},statusError));
   unsubs.push(onSnapshot(familyCollection('members'),snap=>{members=snap.docs.map(d=>d.data());render()},statusError));
-  if(role==='owner')unsubs.push(onSnapshot(familyCollection('openInvites'),snap=>{openInvites=snap.docs.map(d=>({token:d.id,...d.data()}));if(view==='family')render()},statusError));
+  if(role==='owner')unsubs.push(onSnapshot(familyCollection('invites'),snap=>{invites=snap.docs.map(d=>d.data());render()},statusError));
   render();
 }
 function render(){
@@ -367,52 +341,36 @@ function renderFamily(){
     root.append(row);
   }
   if(role!=='owner')return;
-  const inviteTitle=document.createElement('h3');inviteTitle.textContent='家族を招待';
-  root.append(inviteTitle);
-  const infoText=document.createElement('p');infoText.className='muted';
-  infoText.textContent='メールアドレスの登録は不要。URLを開いたGoogleアカウント1人が参加すると自動で受付終了します。';
-  root.append(infoText);
-  const create=document.createElement('button');create.className='primary';
-  create.textContent='1回限りの招待URLを発行';
-  create.onclick=async()=>{
-    create.disabled=true;
+  const inviteTitle=document.createElement('h3');inviteTitle.textContent='家族を招待';root.append(inviteTitle);
+  const p=document.createElement('p');p.className='muted';
+  p.textContent='招待先のGoogleメールアドレスを登録し、招待URLを送ってください。招待は14日間有効です。';
+  root.append(p);
+  const input=document.createElement('input');input.type='email';input.placeholder='family@gmail.com';
+  input.setAttribute('aria-label','招待するGoogleメールアドレス');
+  const btn=document.createElement('button');btn.className='primary';btn.textContent='招待を作成';
+  const ctr=document.createElement('div');ctr.className='familyActions';ctr.append(input,btn);root.append(ctr);
+  btn.onclick=async()=>{
+    const email=input.value.trim().toLowerCase();
+    if(!/^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(email))return notice('有効なメールアドレスを入力してください',true);
     try{
-      const bytes=new Uint8Array(16);
-      crypto.getRandomValues(bytes);
-      const token=Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
-      await setDoc(familyDoc('openInvites',token),{
-        createdAt:serverTimestamp(),expiresAt:Timestamp.fromMillis(Date.now()+7*86400000),
-        role:'viewer',usedByUid:''
-      });
-      notice('招待URLを発行しました。下の「URLをコピー」から共有できます。');
-    }catch(error){statusError(error)}finally{create.disabled=false}
+      await setDoc(familyDoc('invites',email),{email,role:'viewer',expiresAt:Timestamp.fromMillis(Date.now()+14*86400000)});
+      notice('招待を作成しました。以下のURLを家族に送ってください。');
+    }catch(e){statusError(e)}
   };
-  root.append(create);
-  const caption=document.createElement('p');caption.className='muted tiny';
-  caption.textContent='有効期限：7日間。共有相手が参加する前なら受付停止できます。URLを知らない人は参加できません。';
-  root.append(caption);
-  const active=openInvites.filter(x=>!x.usedByUid&&x.expiresAt?.toMillis?.()>Date.now())
-    .sort((a,b)=>(b.createdAt?.toMillis?.()||0)-(a.createdAt?.toMillis?.()||0));
-  for(const invitation of active){
-    const link=new URL(location.href);
-    link.search='';link.searchParams.set('family',fid);
-    link.searchParams.set('invite',invitation.token);
-    const panel=document.createElement('div');panel.className='invite';
-    const header=document.createElement('strong');header.textContent='受付中 · 1人限り';
-    const uri=document.createElement('div');uri.className='link';uri.textContent=link.toString();
-    const copy=document.createElement('button');copy.textContent='URLをコピー';
-    copy.onclick=async()=>{
-      try{await navigator.clipboard.writeText(link.toString());notice('招待URLをコピーしました')}
-      catch(error){statusError(error)}
-    };
-    const stop=document.createElement('button');stop.className='danger';stop.textContent='受付停止';
-    stop.onclick=async()=>{try{await deleteDoc(familyDoc('openInvites',invitation.token))}catch(error){statusError(error)}};
-    const actions=document.createElement('div');actions.className='familyActions';actions.append(copy,stop);
-    panel.append(header,uri,actions);root.append(panel);
-  }
-  if(!active.length){
-    const empty=document.createElement('p');empty.className='muted';
-    empty.textContent='現在受付中の招待URLはありません。';root.append(empty);
+  const link=new URL(location.href);link.search='';link.searchParams.set('family',fid);
+  const url=document.createElement('div');url.className='invite';
+  const shareTitle=document.createElement('strong');shareTitle.textContent='招待URL（家族へ共有）';
+  const address=document.createElement('div');address.className='link';address.textContent=link.toString();
+  const copy=document.createElement('button');copy.textContent='URLをコピー';
+  copy.onclick=async()=>{try{await navigator.clipboard.writeText(link.toString());notice('URLをコピーしました')}catch(e){statusError(e)}};
+  url.append(shareTitle,address,copy);root.append(url);
+  for(const invite of invites){
+    const row=document.createElement('div');row.className='person';
+    const tx=document.createElement('span');
+    tx.textContent=invite.email+' · 有効期限 '+invite.expiresAt?.toDate().toLocaleDateString('ja-JP');
+    const cancel=document.createElement('button');cancel.textContent='招待を取り消す';
+    cancel.onclick=async()=>{try{await deleteDoc(familyDoc('invites',invite.email))}catch(e){statusError(e)}};
+    row.append(tx,cancel);root.append(row);
   }
   const note=document.createElement('p');note.className='muted';
   note.textContent='本の登録・修正・削除は管理者が行います。';
