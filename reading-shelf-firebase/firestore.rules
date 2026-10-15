@@ -85,6 +85,67 @@ service cloud.firestore {
       match /books/{bookId} {
         allow get, list: if member(fid);
         allow create, update, delete: if false;
+
+        // Child observations are formally recorded by the authorized
+        // ChatGPT->GitHub->Admin SDK pipeline, not by family web clients.
+        match /childReflections/{reflectionId} {
+          allow get, list: if member(fid);
+          allow create, update, delete: if false;
+        }
+        match /comments/{commentId} {
+          // Listeners must query hidden == false; owners may separately
+          // list moderated comments for restoration.
+          allow get: if member(fid) && (
+            owner(fid) || resource.data.hidden == false ||
+            resource.data.authorUid == request.auth.uid
+          );
+          allow list: if member(fid) && (owner(fid) || resource.data.hidden == false);
+          allow create: if member(fid)
+            && request.resource.data.keys().hasOnly(['authorUid','body','createdAt','updatedAt','hidden'])
+            && request.resource.data.keys().hasAll(['authorUid','body','createdAt','updatedAt','hidden'])
+            && request.resource.data.authorUid == request.auth.uid
+            && request.resource.data.body is string
+            && request.resource.data.body.size() > 0
+            && request.resource.data.body.size() <= 2000
+            && request.resource.data.createdAt == request.time
+            && request.resource.data.updatedAt == request.time
+            && request.resource.data.hidden == false;
+          allow update: if member(fid) && (
+            (resource.data.authorUid == request.auth.uid
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['body','updatedAt'])
+              && request.resource.data.body is string
+              && request.resource.data.body.size() > 0
+              && request.resource.data.body.size() <= 2000
+              && request.resource.data.updatedAt == request.time)
+            ||
+            (owner(fid) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['hidden'])
+              && request.resource.data.hidden is bool
+              && request.resource.data.hidden != resource.data.hidden)
+          );
+          allow delete: if member(fid) && resource.data.authorUid == request.auth.uid;
+        }
+        match /reactions/{uid} {
+          allow get, list: if member(fid);
+          allow create: if member(fid) && uid == request.auth.uid
+            && request.resource.data.keys().hasOnly(['uid','kind','createdAt'])
+            && request.resource.data.keys().hasAll(['uid','kind','createdAt'])
+            && request.resource.data.uid == uid
+            && request.resource.data.kind == 'like'
+            && request.resource.data.createdAt == request.time;
+          allow update: if false;
+          allow delete: if member(fid) && uid == request.auth.uid;
+        }
+        match /requests/{uid} {
+          allow get, list: if member(fid);
+          allow create: if member(fid) && uid == request.auth.uid
+            && request.resource.data.keys().hasOnly(['uid','kind','createdAt'])
+            && request.resource.data.keys().hasAll(['uid','kind','createdAt'])
+            && request.resource.data.uid == uid
+            && request.resource.data.kind == 'ask-reflection'
+            && request.resource.data.createdAt == request.time;
+          allow update: if false;
+          allow delete: if member(fid) && uid == request.auth.uid;
+        }
       }
       match /series/{sid} {
         allow get, list: if member(fid);
