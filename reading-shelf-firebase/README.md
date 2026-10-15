@@ -7,7 +7,7 @@
 - Cloud Firestore: 家族単位の読書記録と招待情報
 - Security Rules: デフォルト拒否、メンバーのみ閲覧、owner/editorのみ編集
 - Firebase Hosting: Firebase側のWebドメインから配信
-- CDN Firebase Web SDK v12.19.0、バンドラ不要
+- CDN Firebase Web SDK v13.0.0、バンドラ不要
 
 ## セットアップとデータ移行
 1. https://console.firebase.google.com/ で専用Firebaseプロジェクトを作成。
