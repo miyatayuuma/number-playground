@@ -93,7 +93,7 @@ test('no removed DOM ID can silently cause a null property assignment',()=>{
 test('PWA cannot combine stale JS with current HTML after deployment',()=>{
   const html=text('index.html'),sw=text('sw.js');
   const config=JSON.parse(text('firebase.json'));
-  assert.match(html,/app\.mjs\?build=20261016-ui-v6/);
+  assert.match(html,/app\.mjs\?build=20261016-high-v7/);
   assert.match(sw,/const ARTWORK_PATHS=new Set\(ARTWORK\)/);
   assert.ok(!sw.includes('PUBLIC_ASSETS'));
   for(const path of ['/app.mjs','/index.html','/domain.mjs','/book-community.mjs','/recommendations.mjs']){
@@ -145,16 +145,42 @@ test('single-step sorting options have distinct clear Japanese descriptions',()=
 });
 test('PWA build matches all local module edges and cannot silently run old domain labels',()=>{
   const html=text('index.html'),app=text('app.mjs'),recs=text('recommendations.mjs');
-  const build='20261016-ui-v6';
+  const build='20261016-high-v7';
   assert.match(html,new RegExp('data-app-build="'+build+'"'));
   assert.match(html,new RegExp('app\\.mjs\\?build='+build));
   assert.match(html,new RegExp('style\\.css\\?build='+build));
   assert.match(app,new RegExp("const APP_BUILD='"+build+"'"));
   assert.match(app,/document\.documentElement\.dataset\.appBuild!==APP_BUILD/);
-  for(const module of ['domain','book-community','recommendations','firebase-config']){
+  for(const module of ['domain','book-community','recommendations','firebase-config','activity']){
     assert.ok(app.includes("'./"+module+".mjs?build="+build+"'"),'versioned import: '+module);
   }
   assert.ok(recs.includes("'./domain.mjs?build="+build+"'"));
   assert.doesNotMatch(app,/ChatGPT|sortDirection|timelineToggle/);
   assert.match(app,/アプリのバージョン：/);
+});
+
+test('bookshelf cards focus on reading rather than publication metadata',()=>{
+  const app=text('app.mjs'),domain=text('domain.mjs');
+  const card=app.slice(app.indexOf('function bookGrid(data){'),app.indexOf('function openBookInfo('));
+  assert.match(card,/readingModeLabel\(b\)/);
+  assert.match(card,/readPeriodLabel\(b\)/);
+  assert.doesNotMatch(card,/b\.publicationYear|b\.ageLabel/);
+  assert.match(domain,/export function readingModeLabel/);
+});
+test('recent family activity uses one limited live listener, no all-book fanout',()=>{
+  const app=text('app.mjs'),activity=text('activity.mjs'),rules=text('firestore.rules');
+  assert.match(app,/mountFamilyActivity/);
+  assert.match(activity,/orderBy\('createdAt','desc'\),limit\(15\)/);
+  assert.match(rules,/match \/activity\/\{activityId\}/);
+  const community=text('book-community.mjs'),recs=text('recommendations.mjs');
+  assert.match(community,/batch\.set\(activityFor\(ref\.id\)/);
+  assert.match(recs,/batch\.set\(activityFor\(recRef\.id\)/);
+});
+test('recommendation enrichment is explicit and optional',()=>{
+  const recs=text('recommendations.mjs'),lookup=text('book-lookup.mjs'),rules=text('firestore.rules');
+  assert.match(recs,/書誌を検索/);
+  assert.match(recs,/selected=\{\.\.\.candidate,queryTitle:query\}/);
+  assert.match(recs,/const confirmed=selected\?\.queryTitle===book\?selected:null/);
+  assert.match(lookup,/www\.googleapis\.com\/books\/v1\/volumes/);
+  assert.match(rules,/metadataSource/);
 });
