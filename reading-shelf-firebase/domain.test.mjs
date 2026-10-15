@@ -72,3 +72,14 @@ test('period patch validates unique IDs, precision and month bounds',()=>{
   assert.throws(()=>validatePeriodUpdates({...base,books:[base.books[0],base.books[0]]}),/重複/);
   assert.throws(()=>validatePeriodUpdates({...base,books:[{...base.books[0],finishedPeriodEnd:'2024-04'}]}),/年月/);
 });
+
+test('natural reading labels and read-order sorting remain accurate',()=>{
+  assert.deepEqual(Object.values(STATUSES),['読んだ','読んでいる','お休み中','まだ読んでいない']);
+  const books=[
+    {title:'前',status:'read',readOrder:5,finishedPeriodStart:'2026-10'},
+    {title:'後',status:'read',readOrder:7,finishedPeriodStart:'2026-09'},
+    {title:'未登録順',status:'unread',readOrder:null}
+  ];
+  assert.deepEqual(sortBooks(books,'order-new').map(b=>b.title),['後','前','未登録順']);
+  assert.deepEqual(sortBooks(books,'order-old').map(b=>b.title),['前','後','未登録順']);
+});
