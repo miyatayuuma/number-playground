@@ -1,8 +1,8 @@
 import {initializeApp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-app.js';
 import {getAuth,GoogleAuthProvider,signInWithPopup,signInWithRedirect,getRedirectResult,setPersistence,browserLocalPersistence,onAuthStateChanged,signOut} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js';
-import {getFirestore,doc,collection,getDoc,setDoc,updateDoc,deleteDoc,onSnapshot,writeBatch,Timestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
+import {getFirestore,doc,collection,getDoc,setDoc,updateDoc,deleteDoc,onSnapshot,writeBatch,runTransaction,Timestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
 import {firebaseConfig} from './firebase-config.mjs';
-import {STATUSES,sortBooks,filteredBooks,validateBackup,normalizeBook,newBook} from './domain.mjs';
+import {STATUSES,sortBooks,filteredBooks,validateBackup,normalizeBook,newBook,readPeriodLabel,readPeriodGrouping} from './domain.mjs';
 
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -139,8 +139,8 @@ function render(){
     return;
   }
   const groups=new Map();
-  for(const b of data.filter(x=>x.status==='read')){const p=b.finishedAt?.slice(0,7)||'時期未記録';if(!groups.has(p))groups.set(p,[]);groups.get(p).push(b)}
-  for(const [key,items] of groups)root.append(groupSection(key==='時期未記録'?key:key.replace('-','年')+'月','',items));
+  for(const b of data.filter(x=>x.status==='read')){const p=readPeriodGrouping(b);if(!groups.has(p))groups.set(p,[]);groups.get(p).push(b)}
+  for(const [key,items] of groups)root.append(groupSection(key,'',items));
 }
 function groupSection(title,note,items,total){
   const section=document.createElement('section');section.className='group';
@@ -158,7 +158,8 @@ function bookGrid(data){
     const title=document.createElement('strong');title.textContent=b.title+(b.edition?' 〈'+b.edition+'〉':'');
     const author=document.createElement('span');author.className='sub';author.textContent=b.author||'作者未登録';
     const meta=document.createElement('span');meta.className='sub';meta.textContent=[b.publicationYear?b.publicationYear+'年':'出版年不明',b.ageLabel].filter(Boolean).join(' · ');
-    btn.append(cover,title,author,meta);div.append(btn);
+    const period=document.createElement('span');period.className='sub';period.textContent=b.status==='read'?readPeriodLabel(b):'';
+    btn.append(cover,title,author,meta,period);div.append(btn);
   }return div;
 }
 function openEditor(book){
@@ -176,6 +177,10 @@ async function saveEditor(e){
   try{
     const data=Object.fromEntries(new FormData(e.currentTarget).entries());
     const updated=normalizeBook({...currentBook,...data});
+    if(updated.status!=='read'){
+      updated.finishedPeriodLabel='';updated.finishedPeriodStart='';updated.finishedPeriodEnd='';
+      updated.finishedPeriodPrecision='';updated.finishedPeriodBasis='';updated.finishedPeriodNote='';
+    }
     if(!currentBook.createdAt)updated.createdAt=new Date().toISOString();
     if(updated.status==='read'&&!updated.readOrder)updated.readOrder=1+Math.max(0,...books.map(b=>Number(b.readOrder||0)));
     await setDoc(familyDoc('books',updated.id),updated);
