@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ja"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#203d36"><meta name="description" content="非公開クラウドで読書記録を管理する本棚">
+<title>こどもの本棚 | 読書記録</title>
+<style>
+:root{color-scheme:light;--ink:#1c302a;--green:#234e43;--pale:#e7f0e9;--muted:#68766e;--line:#d9e3dc;--paper:#fafaf6}*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font:14px/1.65 system-ui,-apple-system,"Noto Sans JP",sans-serif}
+button,input,select,textarea{font:inherit}button{cursor:pointer}button:disabled{opacity:.55;cursor:not-allowed}a{color:var(--green)}
+.shell{max-width:1280px;margin:auto;padding:0 26px 70px}
+header{position:sticky;top:0;z-index:5;background:rgba(250,250,246,.97);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.top{max-width:1280px;min-height:78px;margin:auto;padding:13px 26px;display:flex;align-items:center;gap:14px;justify-content:space-between;flex-wrap:wrap}
+.brand{font-size:22px;font-weight:800;letter-spacing:.03em}.brand small{display:block;font-size:10px;letter-spacing:.26em;font-weight:500;color:var(--muted)}
+.actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+button{border:1px solid var(--line);background:white;color:var(--ink);border-radius:11px;padding:10px 14px;font-weight:600}
+button.primary{background:var(--green);color:#fff;border-color:var(--green)}button.active{background:#dbece0;border-color:#8db89f}
+button.text{background:transparent;border:0;padding:5px 0;color:var(--green)}
+.status{font-size:12px;color:var(--muted);padding:6px 2px}
+.hero{margin:32px 0 22px;padding:30px 34px;background:linear-gradient(116deg,#1e3e36,#376556);border-radius:20px;color:#fff}
+.hero .over{font-size:10px;letter-spacing:.3em;color:#b9d6c3}.hero h1{font-size:clamp(27px,4vw,42px);letter-spacing:.08em;margin:10px 0 6px}.hero p{color:#d7e5dc;margin:4px 0}
+.metrics{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:26px}.metric{min-width:130px;border:1px solid var(--line);background:white;border-radius:14px;padding:13px 22px}.metric strong{font-size:25px}.metric span{display:block;color:var(--muted);font-size:12px}
+.toolbar{display:flex;gap:11px;align-items:center;flex-wrap:wrap;margin:0 0 20px}
+.toolbar input,.toolbar select{min-height:44px;border:1px solid #cbd9cd;background:white;border-radius:10px;padding:8px 12px}
+#search{flex:1;min-width:155px;max-width:340px}.toolbar select{max-width:240px}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 20px}
+.books{display:grid;grid-template-columns:repeat(auto-fill,minmax(145px,1fr));gap:22px 17px}
+.book{border:0;border-radius:12px;text-align:left;padding:0;background:transparent;min-width:0}
+.cover{height:225px;display:flex;flex-direction:column;justify-content:center;align-items:center;overflow:hidden;background:linear-gradient(130deg,#d9e4d5,#f1e5d6);border:1px solid #d2dbd1;border-radius:11px;position:relative;text-align:center;padding:20px 13px;box-shadow:0 4px 13px #1e372414}
+.cover img{width:100%;height:100%;position:absolute;inset:0;object-fit:contain;background:#f4f4f0}
+.cover .ph{font-family:serif;font-weight:700;font-size:17px;line-height:1.45;overflow-wrap:anywhere}.cover .missing{position:absolute;top:9px;font:10px system-ui;color:#62766d}
+.flag{position:absolute;bottom:0;right:0;background:#224b40;color:white;padding:4px 12px;font-size:10px;border-radius:9px 0 0 0}
+.flag.paused{background:#a4723d}.flag.unread{background:#737d74}.flag.reading{background:#425c9c}
+.book h3{font-size:14px;line-height:1.5;margin:8px 0 3px;overflow-wrap:anywhere}.book p{font-size:12px;color:var(--muted);margin:0}
+.info{font-size:11px;color:var(--muted);margin:4px 0}
+.group{padding:19px 0 26px;border-bottom:1px solid var(--line)}.group h2{margin:0 0 5px;font-size:21px}.group small{color:var(--muted)}
+.group .books{margin-top:16px}.summary{margin-bottom:10px}
+.notice{border:1px solid var(--line);background:#fff;border-radius:14px;padding:16px 18px;color:#40574c;margin-bottom:20px}
+dialog{width:min(95vw,650px);max-height:88dvh;overflow:auto;border:0;border-radius:18px;box-shadow:0 16px 70px #0005;padding:0;color:var(--ink)}
+dialog::backdrop{background:#101e19a8}.dialogTop{padding:17px 24px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line)}
+.dialogTop h2{font-size:20px;margin:0}.dialogBody{padding:21px 24px}
+.fields{display:grid;grid-template-columns:1fr 1fr;gap:13px}.field{min-width:0}.wide{grid-column:1/-1}
+.field label{display:block;font-size:12px;font-weight:700;margin-bottom:5px}.field input,.field textarea,.field select{display:block;width:100%;padding:10px;border-radius:9px;border:1px solid #cbd9cd;background:white}
+.field textarea{min-height:90px}.row{display:flex;flex-wrap:wrap;gap:9px;align-items:center;margin-top:17px}
+.help{color:var(--muted);font-size:12px}.danger{color:#992f31}.results{max-height:320px;overflow:auto}
+.result{width:100%;display:flex;align-items:center;text-align:left;gap:12px;border-bottom:1px solid var(--line);border-radius:0;padding:10px}
+.result img{width:47px;height:66px;object-fit:contain;background:#eee}.result strong{display:block}.result small{display:block;color:var(--muted)}
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:100;background:#183c33;color:#fff;max-width:90vw;padding:14px 18px;border-radius:10px;box-shadow:0 6px 30px #0004}
+footer{text-align:center;color:var(--muted);font-size:11px;margin:50px auto}
+@media(max-width:650px){.top{padding:12px 15px}.brand{font-size:19px}.status{width:100%}.shell{padding:0 14px 50px}.hero{margin-top:18px;padding:23px 19px}.books{grid-template-columns:repeat(3,minmax(0,1fr));gap:16px 10px}.cover{height:auto;aspect-ratio:2/3;padding:13px 5px}.cover .ph{font-size:12px}.book h3{font-size:12px}.book p{font-size:11px}.metrics{gap:7px}.metric{min-width:95px;padding:9px 14px}.metric strong{font-size:21px}.fields{grid-template-columns:1fr}.wide{grid-column:auto}.toolbar select{max-width:100%}dialog{max-height:94dvh}}
+@media(max-width:360px){.books{grid-template-columns:repeat(2,minmax(0,1fr))}}
+</style>
+</head><body>
+<header><div class="top"><div class="brand">こどもの本棚<small>READING JOURNAL · PRIVATE CLOUD</small></div><div class="actions"><button id="cloudBtn">クラウド接続</button><button id="exportBtn">バックアップ</button><button class="primary" id="addBtn">＋ 本を登録</button></div><div class="status" id="status">未接続：非公開の読書記録を読み込んでいません</div></div></header>
+<main class="shell"><section class="hero"><div class="over">OUR READING JOURNEY</div><h1>物語がならぶ、わたしたちの本棚。</h1><p>読了の順序も、心に残った場面も。読み聞かせから自力読書までを記録します。</p></section>
+<div class="metrics"><div class="metric"><strong id="countRead">—</strong><span>読了済み</span></div><div class="metric"><strong id="countTotal">—</strong><span>登録した本</span></div><div class="metric"><strong id="countSeries">—</strong><span>読了したシリーズ</span></div></div>
+<div class="tabs"><button data-view="shelf" class="active">本棚</button><button data-view="series">シリーズ別</button><button data-view="timeline">読了時期</button></div>
+<div class="toolbar"><input id="search" aria-label="タイトル・作者検索" placeholder="作品名・作者名を検索"><select id="filter" aria-label="読書状況"><option value="read">読了済み</option><option value="all">すべて</option><option value="reading">読書中</option><option value="paused">中断</option><option value="unread">未読</option></select><select id="sort" aria-label="並べ替え"><option value="read-new">読了時期：新しい順</option><option value="read-old">読了時期：古い順</option><option value="author-asc">作者：昇順</option><option value="author-desc">作者：降順</option><option value="title-asc">作品名：昇順</option><option value="title-desc">作品名：降順</option><option value="year-new">出版年：新しい順</option><option value="year-old">出版年：古い順</option></select><button id="bulkCover">未登録の表紙を照合</button><button id="reloadBtn">最新を取得</button></div>
+<div id="content"><div class="notice">クラウドに接続すると、非公開の読書記録が表示されます。</div></div>
+<footer>読了時期・適齢は確認できた情報のみを登録。公開URLには個人の読書記録を埋め込んでいません。</footer></main>
+<dialog id="modal"><div class="dialogTop"><h2 id="modalTitle"></h2><button id="closeModal" aria-label="閉じる">×</button></div><div class="dialogBody" id="modalBody"></div></dialog>
+<script>
+'use strict';
+(function(){
+const O='miyatayuuma',R='legacy-games',PATH='reading-shelf/records.json',API='https://api.github.com/repos/'+O+'/'+R+'/contents/'+PATH,KEY='reading-shelf-cloud-token-v1',CACHE='reading-shelf-private-local-cache';
+const $=q=>document.querySelector(q),esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const STATUS={read:'読了',reading:'読書中',paused:'中断',unread:'未読'};
+let db={version:1,books:[],series:[]},token='',sha='',ready=false,locked=false,pending=false,saving=false,revision=0,remember=false,view='shelf',current=null;
+const coll=new Intl.Collator('ja',{sensitivity:'base',numeric:true}),normalized=s=>String(s||'').normalize('NFKC').toLowerCase().replace(/[\s『』（）・\-]/g,'');
+function signal(s){$('#status').textContent=s}
+function toast(s){document.querySelector('.toast')?.remove();const x=document.createElement('div');x.className='toast';x.textContent=s;document.body.append(x);setTimeout(()=>x.remove(),4200)}
+function auth(t){return {'Accept':'application/vnd.github+json','Authorization':'Bearer '+t,'X-GitHub-Api-Version':'2022-11-28'}}
+function encode(s){const a=new TextEncoder().encode(s);let t='';for(let i=0;i<a.length;i+=8192)t+=String.fromCharCode(...a.slice(i,i+8192));return btoa(t)}
+function decode(s){const t=atob(s.replace(/\s/g,''));const a=Uint8Array.from(t,c=>c.charCodeAt(0));return new TextDecoder().decode(a)}
+function valid(x){return x&&x.version===1&&Array.isArray(x.books)&&Array.isArray(x.series)&&x.books.length<20000&&x.books.every(b=>b&&typeof b.id==='string'&&typeof b.title==='string'&&Object.prototype.hasOwnProperty.call(STATUS,b.status))}
+async function getCloud(t){const r=await fetch(API+'?ref=main',{headers:auth(t),cache:'no-store'});if(!r.ok)throw Error('クラウド読込 HTTP '+r.status+'（トークンの権限・期限を確認）');const o=await r.json();if(!o.sha||!o.content)throw Error('クラウドのデータ形式が不正です');const d=JSON.parse(decode(o.content));if(!valid(d))throw Error('未対応データのため上書きを停止しました');return{data:d,sha:o.sha}}
+async function connect(t,keep){signal('クラウド接続中…');const x=await getCloud(t);db=x.data;sha=x.sha;token=t;ready=true;locked=false;pending=false;remember=keep;localStorage.setItem(CACHE,JSON.stringify(db));if(keep){localStorage.setItem(KEY,t);sessionStorage.removeItem(KEY)}else{sessionStorage.setItem(KEY,t);localStorage.removeItem(KEY)}$('#modal').close();signal('✓ 非公開クラウド同期済み');render()}
+function openModal(title,body){$('#modalTitle').textContent=title;$('#modalBody').innerHTML=body;$('#modal').showModal()}
+function cloudModal(){openModal('非公開クラウド接続','<div class="notice">記録はGitHubの非公開リポジトリ「legacy-games」に保存されています。GitHubのFine-grained Personal Access Tokenを、この端末で入力してください。<strong>トークンをチャットや他人に渡さないでください。</strong></div><div class="field"><label for="token">GitHubアクセストークン</label><input type="password" autocomplete="off" id="token" placeholder="github_pat_…"></div><p class="help">GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens。対象リポジトリを legacy-games のみに限定し、Contents の Read and write を付与します。</p><label class="help"><input type="checkbox" id="remember" '+(remember?'checked':'')+'> この端末にトークンを記憶する（共有端末では非推奨）</label><div class="row"><button class="primary" id="connect">接続する</button><a target="_blank" rel="noopener noreferrer" href="https://github.com/settings/personal-access-tokens/new">GitHubでトークン作成</a></div><p id="cloudError" class="danger"></p>');$('#connect').onclick=async()=>{const btn=$('#connect');btn.disabled=true;try{await connect($('#token').value.trim(),$('#remember').checked)}catch(e){$('#cloudError').textContent=e.message;signal('⚠ クラウド未接続');btn.disabled=false}}}
+async function save(){if(!ready||locked)return;pending=true;revision++;try{localStorage.setItem(CACHE,JSON.stringify(db))}catch(e){locked=true;signal('⚠ 一時保存不可');toast('端末容量が不足しています。バックアップを取得してください');return}signal('◌ クラウド保存中…');void flush()}
+async function flush(){if(!ready||saving||locked||!pending||!navigator.onLine)return;saving=true;try{while(pending&&!locked){pending=false;const rev=revision;const r=await fetch(API,{method:'PUT',headers:{...auth(token),'Content-Type':'application/json'},body:JSON.stringify({message:'Update private reading records',content:encode(JSON.stringify(db,null,2)),sha,branch:'main'})});if(r.status===409||r.status===422){locked=true;pending=true;signal('⚠ 更新競合・編集停止');toast('他端末による更新と競合しました。バックアップを保存してください');break}if(!r.ok){pending=true;throw Error('保存 HTTP '+r.status)}const result=await r.json();if(!result.content?.sha){pending=true;throw Error('SHA不明')}sha=result.content.sha;if(revision!==rev)pending=true}if(!pending)signal('✓ 非公開クラウド同期済み')}catch(e){pending=true;signal('⚠ 未同期の変更あり');toast(e.message+'。JSONバックアップを取ってください')}finally{saving=false}}
+async function reload(){if(!ready)return cloudModal();if(pending){await flush();if(pending)return toast('未同期の変更が残っています。バックアップを取得してください')}if(saving)return;try{signal('クラウドから再読込中…');const x=await getCloud(token);db=x.data;sha=x.sha;localStorage.setItem(CACHE,JSON.stringify(db));signal('✓ 非公開クラウド同期済み');render()}catch(e){signal('⚠ 再読込失敗');toast(e.message)}}
+const seriesName=id=>db.series.find(s=>s.id===id)?.name||'';
+function compareBooks(a,b){const mode=$('#sort').value;let x,y,dir=1;if(mode.startsWith('read-')){x=a.finishedAt||null;y=b.finishedAt||null;dir=mode==='read-new'?-1:1}else if(mode.startsWith('year-')){x=a.publicationYear||null;y=b.publicationYear||null;dir=mode==='year-new'?-1:1}else{const f=mode.startsWith('author-')?'author':'title';x=a[f+'Kana']||a[f]||null;y=b[f+'Kana']||b[f]||null;dir=mode.endsWith('-desc')?-1:1}if(x==null)return y==null?(a.readOrder||0)-(b.readOrder||0):1;if(y==null)return -1;return dir*coll.compare(String(x),String(y))||(a.readOrder||0)-(b.readOrder||0)}
+function img(b){let src=String(b.coverUrl||'');if(!/^(https:\/\/|data:image\/(?:png|jpeg|webp);base64,)/i.test(src))src='';return '<div class="cover" data-id="'+esc(b.id)+'">'+(src?'<img loading="lazy" alt="'+esc(b.title)+' の表紙" src="'+esc(src)+'">':'<span class="missing">表紙未取得</span><span class="ph">'+esc(b.title)+'</span>')+'<span class="flag '+esc(b.status)+'">'+(STATUS[b.status]||'')+'</span></div>'}
+function card(b){return '<button class="book" data-open="'+esc(b.id)+'">'+img(b)+'<h3>'+esc(b.title)+'</h3><p>'+esc(b.author||'著者未登録')+'</p><div class="info">'+(b.publicationYear?esc(b.publicationYear)+'年':'出版年不明')+(b.ageLabel?' · '+esc(b.ageLabel):'')+'</div></button>'}
+function render(){if(!ready){$('#content').innerHTML='<div class="notice">非公開の読書記録を表示するには「クラウド接続」を選んでください。公開ページ自体に読書データは含まれていません。</div>';return}
+const all=db.books,read=all.filter(b=>b.status==='read');$('#countRead').textContent=read.length+'冊';$('#countTotal').textContent=all.length+'冊';$('#countSeries').textContent=new Set(read.map(b=>b.seriesId).filter(Boolean)).size;
+document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===view));
+const term=normalized($('#search').value),filter=$('#filter').value,match=b=>(filter==='all'||b.status===filter)&&normalized([b.title,b.author,b.titleKana,b.authorKana,seriesName(b.seriesId)].join(' ')).includes(term);
+let h='';if(view==='shelf'){const v=all.filter(match).sort(compareBooks);h=v.length?'<div class="books">'+v.map(card).join('')+'</div>':'<div class="notice">該当する本がありません。</div>'}
+else if(view==='series'){const grouped=db.series.map(s=>({s,books:all.filter(b=>b.seriesId===s.id&&match(b))})).filter(x=>x.books.length);h=grouped.map(({s,books})=>{const r=all.filter(b=>b.seriesId===s.id&&b.status==='read').length;return '<section class="group"><h2>'+esc(s.name)+'</h2><div class="summary">'+r+'冊読了'+(s.totalVolumes?' / 本編全'+s.totalVolumes+'巻':'')+'　<small>未登録の巻は未読とは限りません</small></div><div class="books">'+books.sort((a,b)=>(a.volume||9999)-(b.volume||9999)).map(card).join('')+'</div></section>'}).join('')||'<div class="notice">該当するシリーズがありません。</div>'}
+else{const groups=new Map();all.filter(b=>b.status==='read'&&match(b)).sort(compareBooks).forEach(b=>{const key=b.finishedAt?b.finishedAt.slice(0,7):'時期未記録';if(!groups.has(key))groups.set(key,[]);groups.get(key).push(b)});h=[...groups].map(([k,v])=>'<section class="group"><h2>'+esc(k==='時期未記録'?k:k.replace('-','年')+'月')+'</h2><div class="books">'+v.map(card).join('')+'</div></section>').join('')||'<div class="notice">読了記録がありません。</div>'}
+$('#content').innerHTML=h;document.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>editor(all.find(x=>x.id===b.dataset.open)))}
+const blank=()=>({id:crypto.randomUUID(),title:'',titleKana:'',author:'',authorKana:'',publicationYear:null,isbn:'',seriesId:'',volume:null,status:'unread',finishedAt:'',finishPrecision:'unknown',ageLabel:'',ageSource:'',readingMode:'read-aloud',coverUrl:'',notes:'',readOrder:null});
+function editor(b){if(!ready||locked)return cloudModal();current=b?JSON.parse(JSON.stringify(b)):blank();const q=current;
+const opts=db.series.map(s=>'<option value="'+esc(s.id)+'"'+(q.seriesId===s.id?' selected':'')+'>'+esc(s.name)+'</option>').join('');
+openModal(q.title?'本の編集':'本を登録','<form id="bookForm" class="fields">'+
+field('作品名','title',q.title,true)+field('ふりがな','titleKana',q.titleKana)+field('作者','author',q.author)+field('作者よみ','authorKana',q.authorKana)+
+'<div class="field"><label>読書状況</label><select name="status">'+Object.keys(STATUS).map(k=>'<option value="'+k+'"'+(q.status===k?' selected':'')+'>'+STATUS[k]+'</option>').join('')+'</select></div>'+
+'<div class="field"><label>読了時期（年月または年月日）</label><input name="finishedAt" value="'+esc(q.finishedAt||'')+'" placeholder="2026-10 または 2026-10-15"></div>'+
+field('出版年（書誌の版）','publicationYear',q.publicationYear||'','', 'number')+field('ISBN','isbn',q.isbn||'')+
+'<div class="field"><label>シリーズ</label><select name="seriesId"><option value="">なし</option>'+opts+'<option value="__new__">新しいシリーズを作る</option></select></div>'+
+field('新シリーズ名（追加時のみ）','newSeries','')+field('巻番号','volume',q.volume||'','', 'number')+field('適齢目安','ageLabel',q.ageLabel||'')+
+field('適齢の根拠','ageSource',q.ageSource||'')+
+'<div class="field"><label>読書形式</label><select name="readingMode"><option value="read-aloud">読み聞かせ</option><option value="independent">自力読書</option><option value="other">その他</option></select></div>'+
+field('表紙URL','coverUrl',q.coverUrl||'')+'<div class="field wide"><label>感想・観察メモ</label><textarea name="notes">'+esc(q.notes||'')+'</textarea></div>'+
+'<div class="field wide"><div class="row"><button type="button" id="bookLookup">Google Booksで表紙を探す</button><button type="button" id="uploadBtn">画像を選択</button><input type="file" id="coverFile" accept="image/png,image/jpeg,image/webp" hidden></div><div class="row"><button class="primary" type="submit">記録を保存</button>'+(b?'<button type="button" class="danger" id="deleteBook">削除</button>':'')+'</div></div></form>');
+$('#bookForm').elements.readingMode.value=q.readingMode||'read-aloud';
+$('#bookForm').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);const d=Object.fromEntries(f.entries());if(!d.title.trim())return toast('作品名を入力してください');if(d.finishedAt&&!/^\d{4}-\d{2}(?:-\d{2})?$/.test(d.finishedAt))return toast('読了日はYYYY-MMまたはYYYY-MM-DDにしてください');let name=d.newSeries.trim();if(d.seriesId==='__new__'){if(!name)return toast('新しいシリーズ名を入力してください');d.seriesId='custom-'+normalized(name).slice(0,40);if(!db.series.some(x=>x.id===d.seriesId))db.series.push({id:d.seriesId,name,totalVolumes:null,note:'登録済み作品のみを表示'});}
+delete d.newSeries;d.publicationYear=d.publicationYear?Number(d.publicationYear):null;d.volume=d.volume?Number(d.volume):null;d.finishedAt=d.status==='read'?d.finishedAt:'';d.finishPrecision=d.finishedAt?(d.finishedAt.length===7?'month':'day'):'unknown';d.coverUrl=/^(https:\/\/|data:image\/(?:png|jpeg|webp);base64,)/i.test(d.coverUrl)?d.coverUrl:'';Object.assign(q,d);if(!b){q.readOrder=q.status==='read'?1+Math.max(0,...db.books.map(x=>x.readOrder||0)):null;db.books.push(q)}else Object.assign(b,q);$('#modal').close();render();void save()};
+if(b){$('#deleteBook').onclick=()=>{if(confirm('この本の記録を削除しますか？')){db.books=db.books.filter(x=>x.id!==b.id);$('#modal').close();render();void save()}}}
+$('#bookLookup').onclick=()=>lookup(q);
+$('#uploadBtn').onclick=()=>$('#coverFile').click();
+$('#coverFile').onchange=async e=>{const file=e.target.files[0];if(!file)return;if(!/^image\/(jpeg|png|webp)$/.test(file.type)||file.size>12e6)return toast('画像はJPEG/PNG/WebP・12MB以下');try{const url=await compress(file);$('#bookForm').elements.coverUrl.value=url;toast('画像を取り込みました。保存ボタンで確定します')}catch(err){toast(err.message)}};
+}
+function field(label,name,value,required=false,type='text'){return '<div class="field"><label>'+label+'</label><input '+(required?'required ':'')+'type="'+type+'" name="'+name+'" value="'+esc(value)+'"></div>'}
+function compress(file){return new Promise((resolve,reject)=>{const rd=new FileReader();rd.onload=()=>{const i=new Image();i.onload=()=>{const k=Math.min(1,440/i.width,650/i.height),c=document.createElement('canvas');c.width=Math.round(i.width*k);c.height=Math.round(i.height*k);c.getContext('2d').drawImage(i,0,0,c.width,c.height);resolve(c.toDataURL('image/jpeg',.66))};i.onerror=()=>reject(Error('画像が開けません'));i.src=rd.result};rd.onerror=()=>reject(Error('画像が読めません'));rd.readAsDataURL(file)})}
+function score(b,it){let x=normalized(b.title),y=normalized(it.title||'');let n=x===y?20:y.startsWith(x)||x.startsWith(y)?10:0;if(b.author&&normalized((it.authors||[]).join('')).includes(normalized(b.author)))n+=5;if(b.isbn&&(it.industryIdentifiers||[]).some(v=>v.identifier===b.isbn))n+=30;return n}
+async function searchBooks(q){const r=await fetch('https://www.googleapis.com/books/v1/volumes?'+new URLSearchParams({q,maxResults:'15',printType:'books'}));if(!r.ok)throw Error('Google Books HTTP '+r.status);const j=await r.json();return (j.items||[]).map(i=>({title:i.volumeInfo?.title||'',authors:i.volumeInfo?.authors||[],isbn:(i.volumeInfo?.industryIdentifiers||[]).find(x=>x.type==='ISBN_13')?.identifier||'',cover:i.volumeInfo?.imageLinks?.thumbnail||i.volumeInfo?.imageLinks?.smallThumbnail||'',year:i.volumeInfo?.publishedDate?.slice(0,4)||''})).map(i=>({...i,cover:i.cover.replace(/^http:/,'https:')}))}
+async function lookup(b){const prior=new FormData($('#bookForm'));for(const[k,v]of prior){if(k!=='coverUrl'&&k!=='newSeries')b[k]=v}b.publicationYear=b.publicationYear?Number(b.publicationYear):null;
+openModal('書誌と表紙の照合','<p class="help">同じ作品でも版が異なります。正しい表紙を選択してください。</p><div class="row"><input id="queryBooks" style="flex:1;min-width:130px;padding:10px" value="'+esc(b.isbn?'isbn:'+b.isbn:'intitle:'+b.title)+'"><button id="doQuery">検索</button></div><div id="results" class="results"></div><div class="row"><button id="backEditor">編集画面へ戻る</button></div>');
+$('#backEditor').onclick=()=>editor(b);
+$('#doQuery').onclick=run;async function run(){$('#results').textContent='検索中…';try{const arr=(await searchBooks($('#queryBooks').value)).sort((x,y)=>score(b,{title:y.title,authors:y.authors,industryIdentifiers:[{identifier:y.isbn}]})-score(b,{title:x.title,authors:x.authors,industryIdentifiers:[{identifier:x.isbn}]}));$('#results').innerHTML=arr.length?arr.map((v,i)=>'<button class="result" data-result="'+i+'">'+(v.cover?'<img src="'+esc(v.cover)+'" alt="">':'')+'<span><strong>'+esc(v.title)+'</strong><small>'+esc(v.authors.join('、'))+'</small><small>'+esc(v.year)+' · '+esc(v.isbn)+'</small></span></button>').join(''):'候補がありません';document.querySelectorAll('[data-result]').forEach(el=>el.onclick=()=>{const v=arr[Number(el.dataset.result)];b.coverUrl=v.cover||b.coverUrl;b.isbn=v.isbn||b.isbn;b.publicationYear=v.year?Number(v.year):b.publicationYear;editor(b)})}catch(e){$('#results').textContent='取得できませんでした: '+e.message}}run()}
+async function bulk(){if(!ready||locked)return cloudModal();const arr=db.books.filter(b=>!b.coverUrl);if(!arr.length)return toast('未登録の表紙はありません');if(!confirm('表紙未登録の'+arr.length+'冊をGoogle Booksで照合します。誤った版は後から個別修正してください。'))return;$('#bulkCover').disabled=true;let found=0,errors=0;for(const b of arr){try{const result=(await searchBooks(b.isbn?'isbn:'+b.isbn:'intitle:'+b.title)).sort((a,c)=>score(b,{title:c.title,authors:c.authors,industryIdentifiers:[{identifier:c.isbn}]})-score(b,{title:a.title,authors:a.authors,industryIdentifiers:[{identifier:a.isbn}]}))[0];if(result&&result.cover&&score(b,{title:result.title,authors:result.authors,industryIdentifiers:[{identifier:result.isbn}]})>=(b.isbn?30:20)){b.coverUrl=result.cover;found++}}catch(e){errors++;if(errors>=3)break}}$('#bulkCover').disabled=false;if(found){render();await save()}toast(arr.length+'冊のうち'+found+'冊に画像URLを登録'+(errors?'（通信失敗 '+errors+'件）':''))}
+function download(name,mime,data){const u=URL.createObjectURL(new Blob([data],{type:mime}));const a=document.createElement('a');a.href=u;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),2000)}
+function backup(){const s=JSON.stringify(db,null,2);download('reading-shelf-'+new Date().toISOString().slice(0,10)+'.json','application/json',s)}
+$('#cloudBtn').onclick=cloudModal;$('#reloadBtn').onclick=reload;$('#exportBtn').onclick=backup;$('#addBtn').onclick=()=>editor(null);$('#bulkCover').onclick=bulk;$('#closeModal').onclick=()=>$('#modal').close();
+document.querySelectorAll('[data-view]').forEach(el=>el.onclick=()=>{view=el.dataset.view;render()});
+['search','sort','filter'].forEach(id=>$('#'+id).addEventListener(id==='search'?'input':'change',render));
+document.addEventListener('error',e=>{if(e.target.matches('.cover img')){e.target.remove()}},true);
+window.addEventListener('online',()=>pending?void flush():void reload());
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&ready&&!pending&&!saving)void reload()});
+try{const saved=sessionStorage.getItem(KEY)||localStorage.getItem(KEY);remember=!!localStorage.getItem(KEY);if(saved)connect(saved,remember).catch(()=>{signal('⚠ 再認証が必要');cloudModal()});else setTimeout(cloudModal,250)}catch(e){cloudModal()}
+})();
+</script>
+</body></html>
