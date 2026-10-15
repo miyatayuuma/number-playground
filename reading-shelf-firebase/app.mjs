@@ -210,11 +210,39 @@ function bookGrid(data){
 function openBookInfo(book){
   $('bookInfoTitle').textContent=book.title;
   const root=$('bookInfoBody');root.replaceChildren();
-  const summary=document.createElement('div');summary.className='bookSummary';
+  const summary=document.createElement('div');summary.className='bookSummary bookSummaryCompact';
   const art=document.createElement('div');art.className='bookDetailCover cover';art.textContent=book.title;
   const src=safeCover(book.coverUrl);
-  if(src){const img=document.createElement('img');img.alt=book.title+' の表紙';img.src=src;img.onerror=()=>img.remove();art.append(img)}
-  const metadata=document.createElement('div');metadata.className='bibliography';
+  if(src){
+    const img=document.createElement('img');img.alt=book.title+' の表紙';img.src=src;
+    img.onerror=()=>img.remove();art.append(img);
+  }
+  const lead=document.createElement('div');lead.className='bookLead';
+  const label=document.createElement('span');label.className='bookStatusPill';
+  label.textContent=STATUSES[book.status]||'状態未登録';lead.append(label);
+  for(const value of [
+    book.author,
+    book.status==='read'?readPeriodLabel(book):'',
+    series.find(q=>q.id===book.seriesId)?.name,
+  ]){
+    if(!value)continue;
+    const p=document.createElement('p');p.className='bookLeadLine';p.textContent=value;lead.append(p);
+  }
+  summary.append(art,lead);root.append(summary);
+
+  // Family interactions are the primary use of the detail page, not ISBN data.
+  closeCommunity?.();
+  const community=document.createElement('div');community.className='communityRoot';
+  root.append(community);
+  closeCommunity=mountBookCommunity({
+    db,fid,book,user,owner:role==='owner',members:()=>members,container:community,onError:statusError
+  });
+
+  // Preserve the complete original bibliography in an optional disclosure.
+  const disclosure=document.createElement('details');disclosure.className='bookMetadataDetails';
+  const heading=document.createElement('summary');heading.textContent='書誌情報・読書メモを見る';
+  disclosure.append(heading);
+  const metadata=document.createElement('dl');metadata.className='bibliography';
   const seriesName=series.find(q=>q.id===book.seriesId)?.name||'';
   const verified=book.publicationYearBasis==='photo-confirmed-edition';
   const fields=[
@@ -238,31 +266,32 @@ function openBookInfo(book){
   ];
   for(const [name,value] of fields){
     if(value===undefined||value===null||value==='')continue;
-    const label=document.createElement('dt');label.textContent=name;
+    const field=document.createElement('dt');field.textContent=name;
     const detail=document.createElement('dd');detail.textContent=String(value);
-    metadata.append(label,detail);
+    metadata.append(field,detail);
   }
-  summary.append(art,metadata);root.append(summary);
-  for(const [heading,value] of [['版の説明',book.editionNote],['読書・観察メモ',book.notes],['書影の参照元',book.coverReferenceSource]]){
+  disclosure.append(metadata);
+  for(const [name,value] of [
+    ['版の説明',book.editionNote],
+    ['読書・観察メモ',book.notes],
+    ['書影の参照元',book.coverReferenceSource]
+  ]){
     if(!value)continue;
     const p=document.createElement('p');p.className='detailNote';
-    const strong=document.createElement('strong');strong.textContent=heading+'：';
-    p.append(strong,document.createTextNode(value));root.append(p);
+    const strong=document.createElement('strong');strong.textContent=name+'：';
+    p.append(strong,document.createTextNode(value));disclosure.append(p);
   }
   const reference=safeCover(book.bibliographicSource);
   if(reference){
     const p=document.createElement('p');p.className='detailNote';
     const a=document.createElement('a');a.href=reference;a.target='_blank';a.rel='noopener noreferrer';
     a.textContent='出版社・図書館などの書誌出典を確認 ↗';
-    p.append(a);root.append(p);
+    p.append(a);disclosure.append(p);
   }
-  closeCommunity?.();
-  const community=document.createElement('div');community.className='communityRoot';
-  root.append(community);
-  closeCommunity=mountBookCommunity({
-    db,fid,book,user,owner:role==='owner',members:()=>members,container:community,onError:statusError
-  });
-  $('bookInfoDialog').showModal();
+  root.append(disclosure);
+  const dialog=$('bookInfoDialog');
+  dialog.showModal();
+  dialog.scrollTop=0;
 }
 function renderRecommendations(){
   if(closeRecommendations)return;
