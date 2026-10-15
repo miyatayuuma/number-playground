@@ -1,5 +1,5 @@
 import {collection,doc,query,where,limit,onSnapshot,setDoc,updateDoc,deleteDoc,serverTimestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
-import {normalize,STATUSES} from './domain.mjs';
+import {normalize,STATUSES} from './domain.mjs?build=20261016-ui-v6';
 
 const el=(tag,className='',text='')=>{
   const n=document.createElement(tag);
