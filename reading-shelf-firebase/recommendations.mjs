@@ -1,5 +1,6 @@
 import {collection,doc,query,where,limit,onSnapshot,setDoc,updateDoc,deleteDoc,serverTimestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
-import {normalize,STATUSES} from './domain.mjs?build=20261016-ui-v6';
+import {normalize,STATUSES} from './domain.mjs?build=20261016-high-v7';
+import {searchBookMetadata} from './book-lookup.mjs?build=20261016-high-v7';
 
 const el=(tag,className='',text='')=>{
   const n=document.createElement(tag);
@@ -24,9 +25,42 @@ export function mountRecommendations({db,fid,user,owner,members,books,container,
   url.placeholder='本の紹介URL（任意）';url.setAttribute('aria-label','本の紹介URL');
   const reason=el('textarea');reason.rows=2;reason.maxLength=1000;
   reason.placeholder='おすすめしたい理由（任意）';reason.setAttribute('aria-label','おすすめ理由');
+  const lookup=el('button','bookLookupButton','書誌を検索');lookup.type='button';
+  const results=el('div','bookLookupResults');
+  const chosen=el('div','bookLookupSelected');
   const submit=el('button','primary','おすすめする');submit.type='submit';
   const status=el('p','muted tiny');status.setAttribute('role','status');
-  compose.append(title,url,reason,submit,status);root.append(compose);
+  let selected=null,lookupSeq=0;
+  const resetSelection=()=>{
+    selected=null;chosen.replaceChildren();results.replaceChildren();
+  };
+  title.addEventListener('input',resetSelection);
+  lookup.onclick=async()=>{
+    const query=title.value.trim();if(!query)return(status.textContent='先にタイトルを入力してください');
+    lookup.disabled=true;results.replaceChildren();chosen.replaceChildren();selected=null;
+    status.textContent='書誌を確認しています…';
+    const seq=++lookupSeq;
+    try{
+      const matches=await searchBookMetadata(query);
+      if(!active||seq!==lookupSeq)return;
+      if(!matches.length){status.textContent='候補が見つかりません。検索せず投稿できます。';return}
+      status.textContent='該当する版を選んでください。合わなければ選択せずに投稿できます。';
+      for(const candidate of matches){
+        const pick=el('button','bookLookupCandidate');pick.type='button';
+        const desc=[candidate.title,candidate.author,candidate.publisher,candidate.publishedDate].filter(Boolean).join(' · ');
+        pick.textContent=desc;
+        pick.onclick=()=>{
+          selected={...candidate,queryTitle:query};
+          chosen.textContent='書誌候補：'+desc;
+          results.replaceChildren();
+          status.textContent='書誌は参考情報として保存します。';
+        };
+        results.append(pick);
+      }
+    }catch(e){if(active&&seq===lookupSeq)status.textContent='書誌検索が使えません。タイトルだけでも投稿できます。'}
+    finally{if(active&&seq===lookupSeq)lookup.disabled=false}
+  };
+  compose.append(title,lookup,results,chosen,url,reason,submit,status);root.append(compose);
   const list=el('div','recommendationList');root.append(list);
   const moderation=el('div','recommendationModeration');
   if(owner){
@@ -47,6 +81,12 @@ export function mountRecommendations({db,fid,user,owner,members,books,container,
     const booksNow=books();
     const linked=booksNow.find(b=>normalize(b.title)===normalize(lead.title));
     const heading=el('h3','',lead.title);card.append(heading);
+    const enriched=group.find(r=>r.coverUrl||r.author||r.publisher);
+    if(enriched?.coverUrl&&safeURL(enriched.coverUrl)){
+      const img=el('img','recommendationCover');img.alt=lead.title+' の参考書影';img.loading='lazy';
+      img.src=enriched.coverUrl;img.onerror=()=>img.remove();card.append(img);
+    }
+    if(enriched?.author||enriched?.publisher)card.append(el('p','muted tiny',[enriched.author,enriched.publisher].filter(Boolean).join(' · ')));
     if(linked){
       card.append(el('span','recommendationTag',STATUSES[linked.status]||'本棚に登録済み'));
     }else card.append(el('span','recommendationTag','家族のおすすめ'));
@@ -124,9 +164,16 @@ export function mountRecommendations({db,fid,user,owner,members,books,container,
     }
     submit.disabled=true;status.textContent='';
     try{
-      await setDoc(doc(ref),{authorUid:user.uid,title:book,normalizedTitle:normalize(book),
-        reason:why,url:web,hidden:false,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
-      title.value=url.value=reason.value='';
+      const recRef=doc(ref);
+      const confirmed=selected?.queryTitle===book?selected:null;
+      const patch=confirmed?{
+        author:confirmed.author,publisher:confirmed.publisher,
+        publishedDate:confirmed.publishedDate,isbn:confirmed.isbn,
+        coverUrl:confirmed.coverUrl,metadataSource:confirmed.sourceUrl
+      }:{};
+      await setDoc(recRef,{authorUid:user.uid,title:book,normalizedTitle:normalize(book),
+        reason:why,url:web,hidden:false,createdAt:serverTimestamp(),updatedAt:serverTimestamp(),...patch});
+      title.value=url.value=reason.value='';resetSelection();
       status.textContent='おすすめを追加しました';
     }catch(e){notify(e)}finally{if(active)submit.disabled=false}
   };
