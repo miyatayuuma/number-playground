@@ -84,8 +84,8 @@ async function joinInvite(id,seq){
     const btn=document.createElement('button');btn.textContent='家族の本棚に参加する';btn.className='primary';
     btn.onclick=async()=>{btn.disabled=true;try{
       const membership=doc(db,'families',id,'members',user.uid);
-      const existing=await getDoc(membership);
-      if(!existing.exists())await setDoc(membership,{uid:user.uid,email:user.email,displayName:user.displayName||'',role:info.role,joinedAt:Timestamp.now()});
+      try{await setDoc(membership,{uid:user.uid,email:user.email,displayName:user.displayName||'',role:info.role,joinedAt:Timestamp.now()})}
+      catch(error){const existing=await getDoc(membership).catch(()=>null);if(!existing?.exists())throw error}
       await setDoc(doc(db,'users',user.uid),{familyId:id});
       history.replaceState(null,'',location.pathname);
       await enterFamily(id,++generation);
