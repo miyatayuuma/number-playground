@@ -69,8 +69,10 @@ test('new family interaction surfaces preserve chat-only formal record editing',
   const html=text('index.html'),app=text('app.mjs'),rules=text('firestore.rules');
   assert.match(html,/data-view="recommendations"/);
   assert.match(html,/id="familySettings"/);
-  assert.match(html,/id="sortDirection"/);
-  assert.match(html,/id="timelineToggle"/);
+  assert.match(html,/id="sort" aria-label="並び順"/);
+  assert.match(html,/id="filter" aria-label="表示する本"/);
+  assert.doesNotMatch(html,/id="sortDirection"|id="timelineToggle"/);
+  assert.doesNotMatch(app,/sortDirection|timelineToggle|sortDescending/);
   assert.match(app,/mountBookCommunity/);
   assert.match(app,/mountRecommendations/);
   for(const collection of ['comments','reactions','requests','childReflections','recommendations']){
@@ -91,7 +93,7 @@ test('no removed DOM ID can silently cause a null property assignment',()=>{
 test('PWA cannot combine stale JS with current HTML after deployment',()=>{
   const html=text('index.html'),sw=text('sw.js');
   const config=JSON.parse(text('firebase.json'));
-  assert.match(html,/app\.mjs\?build=20261016-family-detail-v5/);
+  assert.match(html,/app\.mjs\?build=20261016-ui-v6/);
   assert.match(sw,/const ARTWORK_PATHS=new Set\(ARTWORK\)/);
   assert.ok(!sw.includes('PUBLIC_ASSETS'));
   for(const path of ['/app.mjs','/index.html','/domain.mjs','/book-community.mjs','/recommendations.mjs']){
@@ -123,4 +125,36 @@ test('book detail exposes conversation before collapsed complete catalog data',(
   assert.match(block,/dialog\.scrollTop=0/);
   assert.match(css,/#bookInfoDialog \.dialogTop/);
   assert.match(css,/position:sticky/);
+});
+
+test('single-step sorting options have distinct clear Japanese descriptions',()=>{
+  const html=text('index.html'),app=text('app.mjs');
+  for(const [key,label] of [
+    ['order-new','最近読んだ順'],
+    ['order-old','最初に読んだ順'],
+    ['title-asc','タイトル順'],
+    ['author-asc','作者順'],
+    ['year-new','出版年：新しい順'],
+    ['year-old','出版年：古い順']
+  ]){
+    assert.ok(html.includes('<option value="'+key+'">'+label+'</option>'),key);
+  }
+  assert.ok(html.includes('<option value="timeline">読んだ時期別</option>'));
+  assert.match(app,/filter:view==='series'\?'all':\(periodMode\?'read':\$\('filter'\)\.value\)/);
+  assert.match(app,/sort:periodMode\?'order-new':\$\('sort'\)\.value/);
+});
+test('PWA build matches all local module edges and cannot silently run old domain labels',()=>{
+  const html=text('index.html'),app=text('app.mjs'),recs=text('recommendations.mjs');
+  const build='20261016-ui-v6';
+  assert.match(html,new RegExp('data-app-build="'+build+'"'));
+  assert.match(html,new RegExp('app\\.mjs\\?build='+build));
+  assert.match(html,new RegExp('style\\.css\\?build='+build));
+  assert.match(app,new RegExp("const APP_BUILD='"+build+"'"));
+  assert.match(app,/document\.documentElement\.dataset\.appBuild!==APP_BUILD/);
+  for(const module of ['domain','book-community','recommendations','firebase-config']){
+    assert.ok(app.includes("'./"+module+".mjs?build="+build+"'"),'versioned import: '+module);
+  }
+  assert.ok(recs.includes("'./domain.mjs?build="+build+"'"));
+  assert.doesNotMatch(app,/ChatGPT|sortDirection|timelineToggle/);
+  assert.match(app,/アプリのバージョン：/);
 });
