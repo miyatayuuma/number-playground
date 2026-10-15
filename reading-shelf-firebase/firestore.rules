@@ -20,23 +20,9 @@ service cloud.firestore {
     function member(fid) {
       return signedIn() && (owner(fid) || exists(memberPath(fid, request.auth.uid)));
     }
-    function editor(fid) {
-      return owner(fid) || (signedIn()
-        && exists(memberPath(fid, request.auth.uid))
-        && get(memberPath(fid, request.auth.uid)).data.role == 'editor');
-    }
     function ownEmail(email) {
       return signedIn() && request.auth.token.email_verified == true
         && request.auth.token.email == email;
-    }
-    function allowedBook() {
-      return request.resource.data.title is string
-        && request.resource.data.title.size() > 0
-        && request.resource.data.title.size() <= 250
-        && request.resource.data.status in ['read', 'reading', 'paused', 'unread']
-        && request.resource.data.id is string
-        && request.resource.data.id.size() > 0
-        && request.resource.data.id.size() <= 200;
     }
     match /users/{uid} {
       allow get: if signedIn() && request.auth.uid == uid;
@@ -94,20 +80,15 @@ service cloud.firestore {
           && request.resource.data.expiresAt > request.time;
         allow delete: if owner(fid);
       }
+      // ChatGPT sync uses a scoped Google Cloud service account and Admin SDK.
+      // Family browser sessions remain read-only even for the owner.
       match /books/{bookId} {
         allow get, list: if member(fid);
-        allow create, update: if editor(fid)
-          && allowedBook()
-          && request.resource.data.id == bookId;
-        allow delete: if editor(fid);
+        allow create, update, delete: if false;
       }
       match /series/{sid} {
         allow get, list: if member(fid);
-        allow create, update: if editor(fid)
-          && request.resource.data.id == sid
-          && request.resource.data.name is string
-          && request.resource.data.name.size() > 0;
-        allow delete: if owner(fid);
+        allow create, update, delete: if false;
       }
     }
   }
