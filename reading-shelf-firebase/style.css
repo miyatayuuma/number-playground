@@ -198,3 +198,8 @@ button:focus-visible,input:focus-visible,select:focus-visible,.book:focus-visibl
 .recommendationOpinion textarea,.recommendationOpinion input{display:block;width:100%;margin:8px 0}
 .recommendationModeration{border-top:1px solid var(--line);margin-top:23px;padding-top:18px}
 @media(max-width:650px){.recommendationList{grid-template-columns:1fr}.recommendationPage>h2{font-size:21px}}
+
+.iconButton{width:40px;height:40px;border-radius:50%;font-size:20px;padding:0;background:#fff;display:grid;place-items:center}
+.iconButton.active,#timelineToggle.active{background:#ddf3e9;border-color:#acd9bf;color:#246550}
+#sortDirection{white-space:nowrap}
+#timelineToggle{white-space:nowrap}
