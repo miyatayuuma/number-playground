@@ -127,8 +127,6 @@ async function joinInvite(id,token,seq){
              current.data().expiresAt.toMillis()<=Date.now()){
             throw Error('招待はすでに使われたか期限が切れています');
           }
-          const existing=await transaction.get(membership);
-          if(existing.exists())throw Error('このGoogleアカウントは登録済みです');
           transaction.set(membership,{
             uid:user.uid,email:user.email,displayName:user.displayName||'',
             role:'viewer',joinedAt:serverTimestamp(),inviteToken:token
