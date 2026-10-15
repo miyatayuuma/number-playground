@@ -1,17 +1,18 @@
 import {initializeApp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-app.js';
 import {getAuth,GoogleAuthProvider,signInWithPopup,signInWithRedirect,getRedirectResult,setPersistence,browserLocalPersistence,onAuthStateChanged,signOut} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js';
 import {getFirestore,doc,collection,getDoc,setDoc,deleteDoc,onSnapshot,Timestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
-import {firebaseConfig} from './firebase-config.mjs';
-import {mountBookCommunity} from './book-community.mjs';
-import {mountRecommendations} from './recommendations.mjs';
-import {STATUSES,filteredBooks,readPeriodLabel,readPeriodGrouping} from './domain.mjs';
+import {firebaseConfig} from './firebase-config.mjs?build=20261016-ui-v6';
+import {mountBookCommunity} from './book-community.mjs?build=20261016-ui-v6';
+import {mountRecommendations} from './recommendations.mjs?build=20261016-ui-v6';
+import {STATUSES,filteredBooks,readPeriodLabel,readPeriodGrouping} from './domain.mjs?build=20261016-ui-v6';
 
+const APP_BUILD='20261016-ui-v6';
 const $=id=>{const element=document.getElementById(id);if(!element)throw new Error('APP_DOM_MISMATCH: missing #'+id);return element};
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const safeCover=url=>/^(https:\/\/|data:image\/(jpeg|png|webp);base64,)/i.test(String(url||''))?String(url):'';
 const SHOW=['loading','loginPanel','setupPanel','shelfPanel'];
 let auth,db,user=null,fid='',role='',household=null,books=[],series=[],members=[],invites=[];
-let unsubs=[],view='shelf',generation=0,periodMode=false,sortDescending=true;
+let unsubs=[],view='shelf',generation=0;
 let closeCommunity=null,closeRecommendations=null;
 const inviteFromUrl=new URLSearchParams(location.search).get('family')||'';
 
@@ -50,12 +51,9 @@ function initUI(){
   $('signOut').onclick=async()=>{closeListeners();await signOut(auth)};
   document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{view=b.dataset.view;render()});
   $('familySettings').onclick=()=>{view=view==='family'?'shelf':'family';render()};
-  ['search','filter'].forEach(x=>$(x).addEventListener(x==='search'?'input':'change',render));
-  $('sort').addEventListener('change',()=>{
-    sortDescending=['order','year'].includes($('sort').value);render();
-  });
-  $('sortDirection').onclick=()=>{sortDescending=!sortDescending;render()};
-  $('timelineToggle').onclick=()=>{periodMode=!periodMode;if(periodMode)$('filter').value='read';render()};
+  $('search').addEventListener('input',render);
+  $('filter').addEventListener('change',render);
+  $('sort').addEventListener('change',render);
   document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>$((b.dataset.close)).close());
   $('bookInfoDialog').addEventListener('close',()=>{closeCommunity?.();closeCommunity=null});
 }
@@ -143,19 +141,16 @@ function render(){
   document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===view));
   $('familySettings').classList.toggle('active',view==='family');
   $('bookControls').hidden=view!=='shelf';
-  $('timelineToggle').setAttribute('aria-pressed',String(periodMode));
-  $('timelineToggle').classList.toggle('active',periodMode);
-  $('filter').disabled=view==='shelf'&&periodMode;
-  const sort=$('sort').value;
-  $('sortDirection').textContent=['order','year'].includes(sort)
-    ?(sortDescending?'新しい順 ↓':'古い順 ↑')
-    :(sortDescending?'降順 ↓':'昇順 ↑');
+  const periodMode=view==='shelf'&&$('filter').value==='timeline';
+  $('sort').disabled=periodMode;
+  $('sort').title=periodMode?'時期別表示は読んだ順に並びます':'';
   if(view==='family'){renderFamily();return}
   if(view==='recommendations'){renderRecommendations();return}
-  const sortKey=sort==='order'?'order-'+(sortDescending?'new':'old')
-    :sort==='year'?'year-'+(sortDescending?'new':'old')
-    :sort+'-'+(sortDescending?'desc':'asc');
-  const opts={search:$('search').value,filter:view==='series'?'all':$('filter').value,sort:sortKey};
+  const opts={
+    search:$('search').value,
+    filter:view==='series'?'all':(periodMode?'read':$('filter').value),
+    sort:periodMode?'order-new':$('sort').value
+  };
   const data=filteredBooks(books,opts,series);
   const root=$('content');root.className='';root.replaceChildren();
   if(!data.length){root.innerHTML='<div class="empty">該当する本はまだありません。</div>';return}
@@ -247,7 +242,7 @@ function openBookInfo(book){
   const verified=book.publicationYearBasis==='photo-confirmed-edition';
   const fields=[
     ['状態',STATUSES[book.status]||'未登録'],
-    ['読了時期',book.status==='read'?readPeriodLabel(book):''],
+    ['読んだ時期',book.status==='read'?readPeriodLabel(book):''],
     ['作者',book.author],
     ['訳',book.translator],
     ['文・再話',book.adaptedBy],
@@ -361,8 +356,17 @@ function renderFamily(){
   const note=document.createElement('p');note.className='muted';
   note.textContent='本の登録・修正・削除は管理者が行います。';
   root.append(note);
+  const version=document.createElement('p');version.className='muted tiny appVersion';
+  version.textContent='アプリのバージョン：'+APP_BUILD;
+  root.append(version);
 }
 async function start(){
+  if(document.documentElement.dataset.appBuild!==APP_BUILD){
+    console.error('HTML and JavaScript build IDs do not match');
+    const alert=document.getElementById('message');
+    if(alert){alert.hidden=false;alert.textContent='アプリの更新データが一致しません。画面を更新してください。';alert.className='notice error'}
+    return;
+  }
   initUI();
   if(!firebaseConfig?.apiKey||!firebaseConfig?.projectId||!firebaseConfig?.appId){
     show('setupPanel');$('setupTitle').textContent='Firebaseの初期設定が必要です';$('setupDesc').textContent='プロジェクト接続設定がまだ登録されていません。管理者がFirebaseを作成し、firebase-config.mjsを設定してください。';$('setupBody').replaceChildren();return;
