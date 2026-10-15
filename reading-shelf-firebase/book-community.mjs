@@ -1,4 +1,4 @@
-import {collection,doc,onSnapshot,query,where,limit,setDoc,updateDoc,deleteDoc,serverTimestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
+import {collection,doc,onSnapshot,query,where,limit,setDoc,updateDoc,deleteDoc,getDoc,writeBatch,serverTimestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
 
 const elem=(tag,className='',text='')=>{
   const node=document.createElement(tag);
@@ -16,6 +16,8 @@ export function mountBookCommunity({db,fid,book,user,owner,members,container,onE
   const unsubs=[];
   const base=['families',fid,'books',book.id];
   const comments=collection(db,...base,'comments');
+  const activity=collection(db,'families',fid,'activity');
+  const activityFor=id=>doc(activity,'comment-'+id);
   const likes=collection(db,...base,'reactions');
   const requests=collection(db,...base,'requests');
   const reflections=collection(db,...base,'childReflections');
@@ -134,11 +136,22 @@ export function mountBookCommunity({db,fid,book,user,owner,members,container,onE
           message.hidden=true;message.after(editor,save,cancel);editor.focus();
         });
         action('削除',async()=>{
-          if(confirm('自分のコメントを削除しますか？'))await deleteDoc(doc(comments,item.id));
+          if(!confirm('自分のコメントを削除しますか？'))return;
+          const activityRef=activityFor(item.id);
+          const record=await getDoc(activityRef);
+          const batch=writeBatch(db);
+          batch.delete(doc(comments,item.id));
+          if(record.exists())batch.delete(activityRef);
+          await batch.commit();
         });
       }
       if(owner)action(isModerated?'表示を戻す':'非表示にする',async()=>{
-        await updateDoc(doc(comments,item.id),{hidden:!isModerated});
+        const activityRef=activityFor(item.id);
+        const present=await getDoc(activityRef);
+        const batch=writeBatch(db);
+        batch.update(doc(comments,item.id),{hidden:!isModerated});
+        if(present.exists())batch.update(activityRef,{hidden:!isModerated});
+        await batch.commit();
       });
       card.append(actions);whereTo.append(card);
     }
@@ -160,8 +173,12 @@ export function mountBookCommunity({db,fid,book,user,owner,members,container,onE
     submit.disabled=true;
     try{
       const ref=doc(comments);
-      await setDoc(ref,{authorUid:user.uid,body,createdAt:serverTimestamp(),
+      const batch=writeBatch(db);
+      batch.set(ref,{authorUid:user.uid,body,createdAt:serverTimestamp(),
         updatedAt:serverTimestamp(),hidden:false});
+      batch.set(activityFor(ref.id),{actorUid:user.uid,kind:'comment',
+        title:book.title,bookId:book.id,sourceId:ref.id,hidden:false,createdAt:serverTimestamp()});
+      await batch.commit();
       input.value='';
     }catch(e){sayError(onError,e)}finally{if(!stopped)submit.disabled=false}
   };
