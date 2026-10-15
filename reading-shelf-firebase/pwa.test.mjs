@@ -74,7 +74,7 @@ test('new family interaction surfaces preserve chat-only formal record editing',
   assert.match(app,/mountBookCommunity/);
   assert.match(app,/mountRecommendations/);
   for(const collection of ['comments','reactions','requests','childReflections','recommendations']){
-    assert.match(rules,new RegExp('\\\\/'+collection+'\\\\/'));
+    assert.ok(rules.includes('match /'+collection+'/'),collection+' must have a Firestore access rule');
   }
   assert.doesNotMatch(html,/id="bookForm"/);
 });
