@@ -1,0 +1,66 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+const get=(name)=>readFileSync(new URL('./'+name,import.meta.url));
+const text=(name)=>get(name).toString('utf8');
+const manifest=JSON.parse(text('manifest.webmanifest'));
+
+test('installable Japanese よんでね PWA manifest',()=>{
+  assert.equal(manifest.name,'よんでね');
+  assert.equal(manifest.short_name,'よんでね');
+  assert.equal(manifest.lang,'ja');
+  assert.equal(manifest.display,'standalone');
+  assert.equal(manifest.start_url,'/');
+  assert.equal(manifest.scope,'/');
+  for(const size of [192,512]){
+    const name='icon-'+size+'.png';
+    assert.ok(manifest.icons.some(i=>i.src==='/'+name&&i.sizes===size+'x'+size&&i.type==='image/png'));
+    const buf=get(name);
+    assert.deepEqual([...buf.subarray(0,8)],[137,80,78,71,13,10,26,10]);
+    assert.equal(buf.toString('ascii',12,16),'IHDR');
+    assert.equal(buf.readUInt32BE(16),size);
+    assert.equal(buf.readUInt32BE(20),size);
+  }
+  assert.match(text('icon.svg'),/<svg /);
+});
+test('read-only library has no book editors, imports, or upload controls',()=>{
+  const html=text('index.html'),js=text('app.mjs');
+  assert.match(html,/よんでね/);
+  assert.match(html,/manifest\.webmanifest/);
+  assert.match(html,/id="bookInfoDialog"/);
+  assert.match(html,/読了済み/);
+  assert.match(html,/<span>シリーズ<\/span>/);
+  for(const forbidden of ['bookForm','bookDialogTitle','removeBook','addBook','bookInfoEdit','createFamily','importData','importReadingPeriods','openEditor','saveEditor','exportData']){
+    assert.ok(!html.includes(forbidden)&&!js.includes(forbidden),forbidden+' must not be in PWA UI');
+  }
+});
+test('only static app files are cached; user records remain Firebase-only',()=>{
+  const sw=text('sw.js');
+  assert.match(sw,/caches\.open/);
+  assert.match(sw,/url\.origin!==self\.location\.origin/);
+  assert.ok(!sw.includes('firestore.googleapis.com'));
+  assert.ok(!sw.includes('accounts.google.com'));
+  assert.match(text('app.mjs'),/serviceWorker\.register\('\/sw\.js'\)/);
+});
+test('browser security rules deny all book and series writes',()=>{
+  const rules=text('firestore.rules');
+  for(const path of ['books','series']){
+    const x=rules.match(new RegExp('match \\/'+path+'\\/\\{[^}]+\\} \\{([\\s\\S]*?)\\n      \\}'));
+    assert.ok(x,'rules missing for '+path);
+    assert.match(x[1],/allow get, list: if member\(fid\);/);
+    assert.match(x[1],/allow create, update, delete: if false;/);
+  }
+});
+
+test('install button is connected to a real browser install event',()=>{
+  const html=text('index.html'),js=text('app.mjs');
+  assert.match(html,/id="installApp"[^>]*hidden/);
+  assert.match(js,/beforeinstallprompt/);
+  assert.match(js,/appinstalled/);
+  assert.match(js,/await prompt\.prompt\(\)/);
+});
+test('series is not counted solely by completed series',()=>{
+  const js=text('app.mjs');
+  assert.match(js,/\$\('seriesCount'\)\.textContent=series\.length/);
+  assert.match(js,/if\(!book\.seriesId\)continue/);
+});
