@@ -93,7 +93,7 @@ test('no removed DOM ID can silently cause a null property assignment',()=>{
 test('PWA cannot combine stale JS with current HTML after deployment',()=>{
   const html=text('index.html'),sw=text('sw.js');
   const config=JSON.parse(text('firebase.json'));
-  assert.match(html,/app\.mjs\?build=20261016-reflect-v9/);
+  assert.match(html,/app\.mjs\?build=20261016-invite-v10/);
   assert.match(sw,/const ARTWORK_PATHS=new Set\(ARTWORK\)/);
   assert.ok(!sw.includes('PUBLIC_ASSETS'));
   for(const path of ['/app.mjs','/index.html','/domain.mjs','/book-community.mjs','/recommendations.mjs']){
@@ -145,7 +145,7 @@ test('single-step sorting options have distinct clear Japanese descriptions',()=
 });
 test('PWA build matches all local module edges and cannot silently run old domain labels',()=>{
   const html=text('index.html'),app=text('app.mjs'),recs=text('recommendations.mjs');
-  const build='20261016-reflect-v9';
+  const build='20261016-invite-v10';
   assert.match(html,new RegExp('data-app-build="'+build+'"'));
   assert.match(html,new RegExp('app\\.mjs\\?build='+build));
   assert.match(html,new RegExp('style\\.css\\?build='+build));
@@ -201,7 +201,7 @@ test('formal child reflection composer is owner-only and separate from informal 
 test('v9 owner reflection and browser dictation modules have versioned import edges',()=>{
   const app=text('app.mjs'),community=text('book-community.mjs');
   const reflection=text('owner-reflection.mjs'),speech=text('speech-dictation.mjs');
-  const build='20261016-reflect-v9';
+  const build='20261016-invite-v10';
   assert.ok(community.includes("'./owner-reflection.mjs?build="+build+"'"));
   assert.ok(reflection.includes("'./speech-dictation.mjs?build="+build+"'"));
   assert.match(reflection,/writeBatch\(db\)/);

@@ -1,4 +1,4 @@
-import {addOwnerReflectionForm} from './owner-reflection.mjs?build=20261016-reflect-v9';
+import {addOwnerReflectionForm} from './owner-reflection.mjs?build=20261016-invite-v10';
 import {collection,doc,onSnapshot,query,where,orderBy,limit,setDoc,updateDoc,deleteDoc,getDoc,writeBatch,serverTimestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
 
 const elem=(tag,className='',text='')=>{

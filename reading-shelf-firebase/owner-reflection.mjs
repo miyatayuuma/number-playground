@@ -1,6 +1,6 @@
 import {collection,doc,writeBatch,serverTimestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
 
-import {attachSpeechInput} from './speech-dictation.mjs?build=20261016-reflect-v9';
+import {attachSpeechInput} from './speech-dictation.mjs?build=20261016-invite-v10';
 
 export function addOwnerReflectionForm({db,fid,book,user,container,onError}){
   const form=document.createElement('form');
