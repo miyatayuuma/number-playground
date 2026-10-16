@@ -164,3 +164,16 @@ test('community comment plus activity can be committed in one atomic batch',asyn
   });
   await assertSucceeds(batch.commit());
 });
+
+test('owner may add child reflection, other family members cannot',async()=>{
+ const owner=user('owner1','owner@gmail.com');
+ const other=user('relative2','relative2@gmail.com');
+ const loc=path('books','book1','childReflections','new-reflection');
+ const payload={quote:'また読みたい',attribution:'verbatim',observedAt:'2026-10',
+   source:'owner-app',authorUid:'owner1',createdAt:serverTimestamp()};
+ await assertFails(setDoc(doc(other,...loc),{...payload,authorUid:'relative2'}));
+ await assertSucceeds(setDoc(doc(owner,...loc),payload));
+ await assertSucceeds(getDoc(doc(other,...loc)));
+ await assertFails(updateDoc(doc(owner,...loc),{quote:'訂正'}));
+ await assertFails(deleteDoc(doc(owner,...loc)));
+});
