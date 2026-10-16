@@ -1,6 +1,6 @@
 import {collection,doc,query,where,limit,onSnapshot,setDoc,updateDoc,deleteDoc,getDoc,writeBatch,serverTimestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
-import {normalize,STATUSES} from './domain.mjs?build=20261016-high-v7';
-import {searchBookMetadata} from './book-lookup.mjs?build=20261016-high-v7';
+import {normalize,STATUSES} from './domain.mjs?build=20261016-reflect-v9';
+import {searchBookMetadata} from './book-lookup.mjs?build=20261016-reflect-v9';
 
 const el=(tag,className='',text='')=>{
   const n=document.createElement(tag);
