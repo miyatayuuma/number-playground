@@ -248,8 +248,11 @@ test('one-time invitation can be used once, without writing books',async()=>{
  await assertFails(getDocs(collection(first,...path('openInvites'))));
  await assertSucceeds(claim(first,tokenA,'link-first','first@example.com'));
  await assertSucceeds(getDoc(doc(first,...path('books','book1'))));
+ await assertSucceeds(getDoc(doc(first,...linkPath(tokenA))));
  await assertSucceeds(setDoc(doc(first,'users','link-first'),{familyId:'familyOne'}));
- await assert.rejects(claim(second,tokenA,'link-second','second@example.com'),/Unavailable/);
+ await assertFails(getDoc(doc(second,...linkPath(tokenA))));
+ await assert.rejects(claim(second,tokenA,'link-second','second@example.com'),
+   error=>error.code==='permission-denied'||/Unavailable/.test(error.message));
  const rejected=writeBatch(second);
  rejected.update(doc(second,...linkPath(tokenA)),{claimedByUid:'link-second',claimedAt:serverTimestamp()});
  rejected.set(doc(second,...path('members','link-second')),memberData('link-second','second@example.com',tokenA));
