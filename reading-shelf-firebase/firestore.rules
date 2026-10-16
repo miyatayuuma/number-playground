@@ -58,13 +58,28 @@ service cloud.firestore {
           && request.resource.data.email == request.auth.token.email
           && request.resource.data.displayName is string
           && request.resource.data.joinedAt is timestamp
+          && request.resource.data.keys().hasOnly(['uid','email','displayName','role','joinedAt','inviteToken'])
           && (
-            (owner(fid) && request.resource.data.role == 'owner') ||
+            (owner(fid) && request.resource.data.role == 'owner'
+              && !request.resource.data.keys().hasAny(['inviteToken'])) ||
             (request.auth.token.email_verified == true
               && exists(invitePath(fid, request.auth.token.email))
               && get(invitePath(fid, request.auth.token.email)).data.expiresAt > request.time
               && get(invitePath(fid, request.auth.token.email)).data.role == request.resource.data.role
-              && request.resource.data.role in ['editor','viewer'])
+              && request.resource.data.role in ['editor','viewer']
+              && !request.resource.data.keys().hasAny(['inviteToken'])) ||
+            (request.auth.token.email_verified == true
+              && request.resource.data.keys().hasAll(['inviteToken'])
+              && request.resource.data.inviteToken is string
+              && request.resource.data.inviteToken.matches('^[A-Za-z0-9_-]{43}$')
+              && exists(linkInvitePath(fid, request.resource.data.inviteToken))
+              && get(linkInvitePath(fid, request.resource.data.inviteToken)).data.role == 'viewer'
+              && get(linkInvitePath(fid, request.resource.data.inviteToken)).data.claimedByUid == ''
+              && get(linkInvitePath(fid, request.resource.data.inviteToken)).data.expiresAt > request.time
+              && request.resource.data.role == 'viewer'
+              && request.resource.data.joinedAt == request.time
+              && getAfter(linkInvitePath(fid, request.resource.data.inviteToken)).data.claimedByUid == uid
+              && getAfter(linkInvitePath(fid, request.resource.data.inviteToken)).data.claimedAt == request.time)
           );
         allow update: if owner(fid) && uid != request.auth.uid
           && resource.data.role != 'owner'
@@ -85,6 +100,35 @@ service cloud.firestore {
       }
       // ChatGPT sync uses a scoped Google Cloud service account and Admin SDK.
       // Family browser sessions remain read-only even for the owner.
+      // A claim and its new membership must be validated atomically.
+      match /openInvites/{token} {
+        allow get: if signedIn() && token.matches('^[A-Za-z0-9_-]{43}$')
+          && (owner(fid) || (resource != null && (resource.data.claimedByUid == ''
+            || resource.data.claimedByUid == request.auth.uid)));
+        allow list: if owner(fid);
+        allow create: if owner(fid)
+          && token.matches('^[A-Za-z0-9_-]{43}$')
+          && request.resource.data.keys().hasOnly(['role','createdAt','expiresAt','claimedByUid','claimedAt'])
+          && request.resource.data.keys().hasAll(['role','createdAt','expiresAt','claimedByUid','claimedAt'])
+          && request.resource.data.role == 'viewer'
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.expiresAt is timestamp
+          && request.resource.data.expiresAt > request.time
+          && request.resource.data.expiresAt <= request.time + duration.value(14,'d')
+          && request.resource.data.claimedByUid == ''
+          && request.resource.data.claimedAt == null;
+        allow update: if signedIn() && request.auth.token.email_verified == true
+          && resource.data.claimedByUid == ''
+          && resource.data.expiresAt > request.time
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['claimedByUid','claimedAt'])
+          && request.resource.data.claimedByUid == request.auth.uid
+          && request.resource.data.claimedAt == request.time
+          && !exists(memberPath(fid,request.auth.uid))
+          && existsAfter(memberPath(fid,request.auth.uid))
+          && getAfter(memberPath(fid,request.auth.uid)).data.inviteToken == token
+          && getAfter(memberPath(fid,request.auth.uid)).data.role == resource.data.role;
+        allow delete: if owner(fid) && resource.data.claimedByUid == '';
+      }
       match /books/{bookId} {
         allow get, list: if member(fid);
         allow create, update, delete: if false;

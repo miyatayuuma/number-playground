@@ -1,7 +1,8 @@
 import {readFileSync} from 'node:fs';
 import test,{after} from 'node:test';
+import assert from 'node:assert/strict';
 import {initializeTestEnvironment,assertFails,assertSucceeds} from '@firebase/rules-unit-testing';
-import {doc,collection,getDoc,getDocs,setDoc,updateDoc,deleteDoc,Timestamp,serverTimestamp,query,where,orderBy,limit,writeBatch} from 'firebase/firestore';
+import {doc,collection,getDoc,getDocs,setDoc,updateDoc,deleteDoc,Timestamp,serverTimestamp,query,where,orderBy,limit,writeBatch,runTransaction} from 'firebase/firestore';
 
 const env=await initializeTestEnvironment({
   projectId:'demo-reading-shelf-rules',
@@ -221,4 +222,69 @@ test('reflection schema rejects fabricated attribution and altered source',async
     {...base,source:'family-comment'}));
   await assertFails(setDoc(doc(owner,...path('books','book1','childReflections','wrong-owner')),
     {...base,authorUid:'relative2'}));
+});
+
+const tokenA='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+const tokenB='BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB';
+const linkPath=t=>path('openInvites',t);
+const memberData=(uid,email,token,role='viewer')=>({uid,email,displayName:'Family',role,
+  joinedAt:serverTimestamp(),inviteToken:token});
+async function claim(db,token,uid,email,role='viewer'){
+ return runTransaction(db,async tx=>{
+  const invite=doc(db,...linkPath(token));
+  const snapshot=await tx.get(invite);
+  if(!snapshot.exists()||snapshot.data().claimedByUid)throw Error('Unavailable');
+  tx.update(invite,{claimedByUid:uid,claimedAt:serverTimestamp()});
+  tx.set(doc(db,...path('members',uid)),memberData(uid,email,token,role));
+ });
+}
+test('one-time invitation can be used once, without writing books',async()=>{
+ const admin=user('owner1','owner@gmail.com');
+ const first=user('link-first','first@example.com'),second=user('link-second','second@example.com');
+ await assertSucceeds(setDoc(doc(admin,...linkPath(tokenA)),{
+  role:'viewer',createdAt:serverTimestamp(),expiresAt:Timestamp.fromMillis(Date.now()+86400000),
+  claimedByUid:'',claimedAt:null}));
+ await assertSucceeds(getDoc(doc(first,...linkPath(tokenA))));
+ await assertFails(getDocs(collection(first,...path('openInvites'))));
+ await assertSucceeds(claim(first,tokenA,'link-first','first@example.com'));
+ await assertSucceeds(getDoc(doc(first,...path('books','book1'))));
+ await assertSucceeds(getDoc(doc(first,...linkPath(tokenA))));
+ await assertSucceeds(setDoc(doc(first,'users','link-first'),{familyId:'familyOne'}));
+ await assertFails(getDoc(doc(second,...linkPath(tokenA))));
+ await assert.rejects(claim(second,tokenA,'link-second','second@example.com'),
+   error=>error.code==='permission-denied'||/Unavailable/.test(error.message));
+ const rejected=writeBatch(second);
+ rejected.update(doc(second,...linkPath(tokenA)),{claimedByUid:'link-second',claimedAt:serverTimestamp()});
+ rejected.set(doc(second,...path('members','link-second')),memberData('link-second','second@example.com',tokenA));
+ await assertFails(rejected.commit());
+ await assertFails(getDoc(doc(second,...path('books','book1'))));
+});
+test('single-document claim, forged membership, and escalation rejected',async()=>{
+ const admin=user('owner1','owner@gmail.com'),person=user('link-role','role@example.com');
+ await assertSucceeds(setDoc(doc(admin,...linkPath(tokenB)),{
+  role:'viewer',createdAt:serverTimestamp(),expiresAt:Timestamp.fromMillis(Date.now()+86400000),
+  claimedByUid:'',claimedAt:null}));
+ await assertFails(setDoc(doc(person,...path('members','link-role')),
+  memberData('link-role','role@example.com',tokenB)));
+ await assertFails(updateDoc(doc(person,...linkPath(tokenB)),
+  {claimedByUid:'link-role',claimedAt:serverTimestamp()}));
+ await assertFails(claim(person,tokenB,'link-role','role@example.com','owner'));
+ await assertFails(claim(person,tokenB,'link-role','role@example.com','editor'));
+ await assertSucceeds(claim(person,tokenB,'link-role','role@example.com'));
+});
+
+test('revoked or already-expired invite cannot be redeemed',async()=>{
+ const admin=user('owner1','owner@gmail.com');
+ const visitor=user('link-revoked','revoked@example.com');
+ const token='CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC';
+ const reference=doc(admin,...linkPath(token));
+ await assertFails(setDoc(reference,{
+  role:'viewer',createdAt:serverTimestamp(),expiresAt:Timestamp.fromMillis(Date.now()-3600000),
+  claimedByUid:'',claimedAt:null}));
+ await assertSucceeds(setDoc(reference,{
+  role:'viewer',createdAt:serverTimestamp(),expiresAt:Timestamp.fromMillis(Date.now()+86400000),
+  claimedByUid:'',claimedAt:null}));
+ await assertSucceeds(deleteDoc(reference));
+ await assert.rejects(claim(visitor,token,'link-revoked','revoked@example.com'),
+   error=>error.code==='permission-denied'||/Unavailable/.test(error.message));
 });

@@ -93,7 +93,7 @@ test('no removed DOM ID can silently cause a null property assignment',()=>{
 test('PWA cannot combine stale JS with current HTML after deployment',()=>{
   const html=text('index.html'),sw=text('sw.js');
   const config=JSON.parse(text('firebase.json'));
-  assert.match(html,/app\.mjs\?build=20261016-reflect-v9/);
+  assert.match(html,/app\.mjs\?build=20261016-invite-v10/);
   assert.match(sw,/const ARTWORK_PATHS=new Set\(ARTWORK\)/);
   assert.ok(!sw.includes('PUBLIC_ASSETS'));
   for(const path of ['/app.mjs','/index.html','/domain.mjs','/book-community.mjs','/recommendations.mjs']){
@@ -145,13 +145,13 @@ test('single-step sorting options have distinct clear Japanese descriptions',()=
 });
 test('PWA build matches all local module edges and cannot silently run old domain labels',()=>{
   const html=text('index.html'),app=text('app.mjs'),recs=text('recommendations.mjs');
-  const build='20261016-reflect-v9';
+  const build='20261016-invite-v10';
   assert.match(html,new RegExp('data-app-build="'+build+'"'));
   assert.match(html,new RegExp('app\\.mjs\\?build='+build));
   assert.match(html,new RegExp('style\\.css\\?build='+build));
   assert.match(app,new RegExp("const APP_BUILD='"+build+"'"));
   assert.match(app,/document\.documentElement\.dataset\.appBuild!==APP_BUILD/);
-  for(const module of ['domain','book-community','recommendations','firebase-config','activity']){
+  for(const module of ['domain','book-community','recommendations','firebase-config','activity','invite-links','cover-thumbnails']){
     assert.ok(app.includes("'./"+module+".mjs?build="+build+"'"),'versioned import: '+module);
   }
   assert.ok(recs.includes("'./domain.mjs?build="+build+"'"));
@@ -201,7 +201,7 @@ test('formal child reflection composer is owner-only and separate from informal 
 test('v9 owner reflection and browser dictation modules have versioned import edges',()=>{
   const app=text('app.mjs'),community=text('book-community.mjs');
   const reflection=text('owner-reflection.mjs'),speech=text('speech-dictation.mjs');
-  const build='20261016-reflect-v9';
+  const build='20261016-invite-v10';
   assert.ok(community.includes("'./owner-reflection.mjs?build="+build+"'"));
   assert.ok(reflection.includes("'./speech-dictation.mjs?build="+build+"'"));
   assert.match(reflection,/writeBatch\(db\)/);
@@ -211,4 +211,19 @@ test('v9 owner reflection and browser dictation modules have versioned import ed
   assert.match(speech,/recognizer\.lang='ja-JP'/);
   assert.match(speech,/session\?\.abort\(\)/);
   assert.doesNotMatch(app,/uploadBytes|MediaRecorder/);
+});
+
+test('invitation URLs are generated in a fragment and consumed by a transaction',()=>{
+  const app=text('app.mjs'),links=text('invite-links.mjs'),rules=text('firestore.rules');
+  assert.match(app,/runTransaction\(db,async transaction=>/);
+  assert.match(app,/transaction\.update\(invite,/);
+  assert.match(app,/transaction\.set\(membership,/);
+  assert.match(rules,/match \/openInvites\/\{token\}/);
+  assert.match(links,/crypto\.getRandomValues/);
+  assert.match(links,/url\.hash/);
+});
+test('shelf uses small CDN cover with fallback to original URL',()=>{
+  const app=text('app.mjs');
+  assert.match(app,/shelfThumbnailUrl\(url\)/);
+  assert.match(app,/img\.src=url/);
 });
