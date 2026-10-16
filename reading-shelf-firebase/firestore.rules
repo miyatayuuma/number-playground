@@ -103,8 +103,8 @@ service cloud.firestore {
       // A claim and its new membership must be validated atomically.
       match /openInvites/{token} {
         allow get: if signedIn() && token.matches('^[A-Za-z0-9_-]{43}$')
-          && (owner(fid) || resource.data.claimedByUid == ''
-            || resource.data.claimedByUid == request.auth.uid);
+          && (owner(fid) || (resource != null && (resource.data.claimedByUid == ''
+            || resource.data.claimedByUid == request.auth.uid)));
         allow list: if owner(fid);
         allow create: if owner(fid)
           && token.matches('^[A-Za-z0-9_-]{43}$')
