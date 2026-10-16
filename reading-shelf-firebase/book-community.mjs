@@ -36,6 +36,10 @@ export function mountBookCommunity({db,fid,book,user,owner,members,container,onE
   const reflectionItems=elem('div','communityStack');
   reflectionItems.append(elem('p','muted tiny','まだ記録されていません。子どもの感想は管理者が記録します。'));
   reflectionBox.append(reflectionItems);
+  if(owner){
+    const form=addOwnerReflectionForm({db,fid,book,user,container:reflectionBox,onError});
+    unsubs.push(form.dispose);
+  }
   section.append(reflectionBox);
 
   const reactionBox=elem('div','communityReactions');
