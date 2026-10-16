@@ -1,5 +1,7 @@
 import {collection,doc,writeBatch,serverTimestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
 
+import {attachSpeechInput} from './speech-dictation.mjs?build=20261016-reflect-v9';
+
 export function addOwnerReflectionForm({db,fid,book,user,container,onError}){
   const form=document.createElement('form');
   form.className='reflectionCompose';
@@ -18,6 +20,7 @@ export function addOwnerReflectionForm({db,fid,book,user,container,onError}){
   const help=document.createElement('p');help.className='muted tiny';
   help.textContent='本人の発言と親による要約を区別して保存します。';
   form.append(heading,kind,input,date,help,save);container.append(form);
+  const stopSpeech=attachSpeechInput({input,help,container:form});
   form.onsubmit=async event=>{
     event.preventDefault();
     const quote=input.value.trim();if(!quote)return;
@@ -34,5 +37,5 @@ export function addOwnerReflectionForm({db,fid,book,user,container,onError}){
       input.value='';date.value='';help.textContent='感想を記録しました。';
     }catch(error){onError?.(error)}finally{save.disabled=false}
   };
-  return {form,input,help,dispose:()=>{form.onsubmit=null}};
+  return {form,input,help,dispose:()=>{stopSpeech();form.onsubmit=null}};
 }
