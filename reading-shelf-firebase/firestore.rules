@@ -93,7 +93,21 @@ service cloud.firestore {
         // ChatGPT->GitHub->Admin SDK pipeline, not by family web clients.
         match /childReflections/{reflectionId} {
           allow get, list: if member(fid);
-          allow create, update, delete: if false;
+          // The Google account that owns this family can append a child's
+          // observed words. Members cannot alter the formal record.
+          allow create: if owner(fid)
+            && request.resource.data.keys().hasOnly(['quote','attribution','observedAt','createdAt','source','authorUid'])
+            && request.resource.data.keys().hasAll(['quote','attribution','observedAt','createdAt','source','authorUid'])
+            && request.resource.data.quote is string
+            && request.resource.data.quote.size() > 0
+            && request.resource.data.quote.size() <= 3000
+            && request.resource.data.attribution in ['verbatim','parent-summary']
+            && request.resource.data.observedAt is string
+            && request.resource.data.observedAt.size() <= 100
+            && request.resource.data.createdAt == request.time
+            && request.resource.data.source == 'owner-app'
+            && request.resource.data.authorUid == request.auth.uid;
+          allow update, delete: if false;
         }
         match /comments/{commentId} {
           // Listeners must query hidden == false; owners may separately
@@ -162,7 +176,8 @@ service cloud.firestore {
           && request.resource.data.keys().hasOnly(['actorUid','kind','title','bookId','sourceId','hidden','createdAt'])
           && request.resource.data.keys().hasAll(['actorUid','kind','title','bookId','sourceId','hidden','createdAt'])
           && request.resource.data.actorUid == request.auth.uid
-          && request.resource.data.kind in ['comment','recommendation']
+          && request.resource.data.kind in ['comment','recommendation','reflection']
+          && (request.resource.data.kind != 'reflection' || owner(fid))
           && request.resource.data.title is string
           && request.resource.data.title.size() > 0
           && request.resource.data.title.size() <= 250
