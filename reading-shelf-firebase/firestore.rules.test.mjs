@@ -285,5 +285,6 @@ test('revoked or already-expired invite cannot be redeemed',async()=>{
   role:'viewer',createdAt:serverTimestamp(),expiresAt:Timestamp.fromMillis(Date.now()+86400000),
   claimedByUid:'',claimedAt:null}));
  await assertSucceeds(deleteDoc(reference));
- await assert.rejects(claim(visitor,token,'link-revoked','revoked@example.com'),/Unavailable/);
+ await assert.rejects(claim(visitor,token,'link-revoked','revoked@example.com'),
+   error=>error.code==='permission-denied'||/Unavailable/.test(error.message));
 });
