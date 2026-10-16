@@ -1,7 +1,7 @@
 import {readFileSync} from 'node:fs';
 import test,{after} from 'node:test';
 import {initializeTestEnvironment,assertFails,assertSucceeds} from '@firebase/rules-unit-testing';
-import {doc,getDoc,setDoc,deleteDoc,Timestamp} from 'firebase/firestore';
+import {doc,collection,getDoc,getDocs,setDoc,updateDoc,deleteDoc,Timestamp,serverTimestamp,query,where,orderBy,limit,writeBatch} from 'firebase/firestore';
 
 const env=await initializeTestEnvironment({
   projectId:'demo-reading-shelf-rules',
@@ -19,6 +19,7 @@ await env.withSecurityRulesDisabled(async context=>{
   await setDoc(doc(db,...path('invites','viewer@gmail.com')),{email:'viewer@gmail.com',role:'viewer',expiresAt:Timestamp.fromMillis(Date.now()+86400000)});
   await setDoc(doc(db,...path('invites','editor@gmail.com')),{email:'editor@gmail.com',role:'editor',expiresAt:Timestamp.fromMillis(Date.now()+86400000)});
   await setDoc(doc(db,...path('books','book1')),{id:'book1',title:'赤毛のアン',status:'read'});
+  await setDoc(doc(db,...path('members','relative2')),{uid:'relative2',email:'relative2@gmail.com',displayName:'Relative 2',role:'viewer',joinedAt:Timestamp.now()});
 });
 
 test('anonymous and uninvited users cannot view a family book',async()=>{
@@ -55,4 +56,169 @@ test('revocation denies subsequent remote reads',async()=>{
   const o=user('owner1','owner@gmail.com');
   await assertSucceeds(deleteDoc(doc(o,...path('members','viewer1'))));
   await assertFails(getDoc(doc(user('viewer1','viewer@gmail.com'),...path('books','book1'))));
+});
+
+test('family members can comment but cannot impersonate other authors',async()=>{
+  const member=user('relative2','relative2@gmail.com');
+  const other=user('stranger','stranger@gmail.com');
+  const ref=doc(member,...path('books','book1','comments','commentA'));
+  const content={authorUid:'relative2',body:'この本、また読んでほしい',hidden:false,
+    createdAt:serverTimestamp(),updatedAt:serverTimestamp()};
+  await assertFails(setDoc(doc(other,...path('books','book1','comments','bad')),content));
+  await assertFails(setDoc(ref,{...content,authorUid:'owner1'}));
+  await assertSucceeds(setDoc(ref,content));
+  await assertSucceeds(getDoc(ref));
+  await assertFails(updateDoc(doc(user('owner1','owner@gmail.com'),...path('books','book1','comments','commentA')),{body:'改ざん',updatedAt:serverTimestamp()}));
+  await assertSucceeds(updateDoc(ref,{body:'もう一度読みたい',updatedAt:serverTimestamp()}));
+  await assertFails(updateDoc(ref,{authorUid:'owner1'}));
+  await assertFails(setDoc(doc(member,...path('books','book1','childReflections','child01')),
+    {quote:'実際には言っていない'}));
+});
+test('owner may moderate but not impersonate family; hidden content is excluded',async()=>{
+  const owner=user('owner1','owner@gmail.com');
+  const member=user('relative2','relative2@gmail.com');
+  const ref=doc(owner,...path('books','book1','comments','commentA'));
+  await assertSucceeds(updateDoc(ref,{hidden:true}));
+  await assertFails(updateDoc(doc(member,...path('books','book1','comments','commentA')),{hidden:false}));
+  await assertFails(getDoc(doc(user('stranger','stranger@gmail.com'),...path('books','book1','comments','commentA'))));
+  const visible=query(collection(member,...path('books','book1','comments')),where('hidden','==',false));
+  await assertSucceeds(getDocs(visible));
+  await assertSucceeds(updateDoc(ref,{hidden:false}));
+  await assertSucceeds(getDocs(visible));
+});
+test('reactions and reflection requests are owned by the authenticated family member',async()=>{
+  const member=user('relative2','relative2@gmail.com');
+  for(const [bucket,kind] of [['reactions','like'],['requests','ask-reflection']]){
+    const ref=doc(member,...path('books','book1',bucket,'relative2'));
+    await assertSucceeds(setDoc(ref,{uid:'relative2',kind,createdAt:serverTimestamp()}));
+    await assertFails(setDoc(doc(user('owner1','owner@gmail.com'),...path('books','book1',bucket,'relative2')),
+      {uid:'relative2',kind,createdAt:serverTimestamp()}));
+    await assertFails(updateDoc(ref,{kind:'hack'}));
+    await assertSucceeds(deleteDoc(ref));
+  }
+});
+
+test('recommendations permit family sharing but prohibit impersonation and catalog writes',async()=>{
+  const relative=user('relative2','relative2@gmail.com');
+  const outsider=user('stranger','stranger@gmail.com');
+  const owner=user('owner1','owner@gmail.com');
+  const pathTo=['families','familyOne','recommendations','recommend1'];
+  const value={authorUid:'relative2',title:'ねこと王さま',normalizedTitle:'ねこと王さま',
+    reason:'絵が気に入った',url:'https://example.com/book',hidden:false,
+    createdAt:serverTimestamp(),updatedAt:serverTimestamp()};
+  await assertFails(setDoc(doc(outsider,...pathTo),value));
+  await assertFails(setDoc(doc(relative,...pathTo),{...value,authorUid:'owner1'}));
+  await assertFails(setDoc(doc(relative,...pathTo),{...value,url:'javascript:alert(1)'}));
+  await assertSucceeds(setDoc(doc(relative,...pathTo),value));
+  await assertSucceeds(getDoc(doc(relative,...pathTo)));
+  await assertFails(updateDoc(doc(owner,...pathTo),{reason:'勝手に改ざん',updatedAt:serverTimestamp()}));
+  await assertFails(updateDoc(doc(relative,...pathTo),{title:'別の本'}));
+  await assertSucceeds(updateDoc(doc(relative,...pathTo),{reason:'一緒に読みたい',updatedAt:serverTimestamp()}));
+  await assertSucceeds(updateDoc(doc(owner,...pathTo),{hidden:true}));
+  const visible=query(collection(relative,'families','familyOne','recommendations'),where('hidden','==',false));
+  await assertSucceeds(getDocs(visible));
+  await assertSucceeds(updateDoc(doc(owner,...pathTo),{hidden:false}));
+  await assertSucceeds(deleteDoc(doc(relative,...pathTo)));
+});
+
+
+test('book lookup metadata is optional; unsafe covers and unexpected fields are rejected',async()=>{
+  const family=user('relative2','relative2@gmail.com');
+  const record={authorUid:'relative2',title:'あたらしい本',normalizedTitle:'あたらしい本',
+    reason:'おすすめ',url:'',hidden:false,createdAt:serverTimestamp(),updatedAt:serverTimestamp()};
+  const reference=doc(family,...path('recommendations','with-metadata'));
+  await assertSucceeds(setDoc(reference,{...record,
+    author:'作家',publisher:'出版社',publishedDate:'2021-09',
+    isbn:'9784198650032',coverUrl:'https://books.google.com/books/content?id=book',
+    metadataSource:'https://books.google.com/books?id=book'}));
+  await assertFails(setDoc(doc(family,...path('recommendations','bad-cover')),
+    {...record,coverUrl:'javascript:alert(1)'}));
+  await assertFails(setDoc(doc(family,...path('recommendations','unexpected')),
+    {...record,privateEmail:'example@private.test'}));
+});
+test('only authenticated family may publish metadata-only activity',async()=>{
+  const family=user('relative2','relative2@gmail.com');
+  const stranger=user('stranger','stranger@gmail.com');
+  const data={actorUid:'relative2',kind:'comment',title:'ねこと王さま',
+    bookId:'book1',sourceId:'comment-new',hidden:false,createdAt:serverTimestamp()};
+  await assertFails(setDoc(doc(stranger,...path('activity','bad')),data));
+  await assertFails(setDoc(doc(family,...path('activity','spoof')),{...data,actorUid:'owner1'}));
+  await assertFails(setDoc(doc(family,...path('activity','body')),{...data,body:'子どもの感想全文'}));
+  await assertSucceeds(setDoc(doc(family,...path('activity','activity1')),data));
+  const stream=query(collection(family,...path('activity')),orderBy('createdAt','desc'),limit(10));
+  await assertSucceeds(getDocs(stream));
+  await assertFails(updateDoc(doc(family,...path('activity','activity1')),{hidden:true}));
+  await assertSucceeds(updateDoc(doc(user('owner1','owner@gmail.com'),...path('activity','activity1')),{hidden:true}));
+  await assertSucceeds(deleteDoc(doc(family,...path('activity','activity1'))));
+});
+test('community comment plus activity can be committed in one atomic batch',async()=>{
+  const family=user('relative2','relative2@gmail.com');
+  const batch=writeBatch(family);
+  batch.set(doc(family,...path('books','book1','comments','new-comment')),{
+    authorUid:'relative2',body:'大好きな本です',createdAt:serverTimestamp(),
+    updatedAt:serverTimestamp(),hidden:false
+  });
+  batch.set(doc(family,...path('activity','comment-new-comment')),{
+    actorUid:'relative2',kind:'comment',title:'ねこと王さま',
+    bookId:'book1',sourceId:'new-comment',hidden:false,createdAt:serverTimestamp()
+  });
+  await assertSucceeds(batch.commit());
+});
+
+test('owner may add child reflection, other family members cannot',async()=>{
+ const owner=user('owner1','owner@gmail.com');
+ const other=user('relative2','relative2@gmail.com');
+ const loc=path('books','book1','childReflections','new-reflection');
+ const payload={quote:'また読みたい',attribution:'verbatim',observedAt:'2026-10',
+   source:'owner-app',authorUid:'owner1',createdAt:serverTimestamp()};
+ await assertFails(setDoc(doc(other,...loc),{...payload,authorUid:'relative2'}));
+ await assertSucceeds(setDoc(doc(owner,...loc),payload));
+ await assertSucceeds(getDoc(doc(other,...loc)));
+ await assertFails(updateDoc(doc(owner,...loc),{quote:'訂正'}));
+ await assertFails(deleteDoc(doc(owner,...loc)));
+});
+
+
+test('owner child reflection and metadata-only activity are committed together',async()=>{
+  const owner=user('owner1','owner@gmail.com');
+  const reflection=doc(owner,...path('books','book1','childReflections','atomic-owner-reflection'));
+  const activity=doc(owner,...path('activity','reflection-atomic-owner-reflection'));
+  const batch=writeBatch(owner);
+  batch.set(reflection,{quote:'また読みたい',attribution:'parent-summary',observedAt:'2026年10月',
+    source:'owner-app',authorUid:'owner1',createdAt:serverTimestamp()});
+  batch.set(activity,{actorUid:'owner1',kind:'reflection',title:'赤毛のアン',bookId:'book1',
+    sourceId:'atomic-owner-reflection',hidden:false,createdAt:serverTimestamp()});
+  await assertSucceeds(batch.commit());
+  const record=await getDoc(reflection);
+  const feed=await getDoc(activity);
+  if(!record.exists()||!feed.exists())throw new Error('atomic owner reflection or activity missing');
+  if(feed.data().quote!==undefined)throw new Error('child quote must not be copied into activity');
+});
+
+test('other family members cannot forge child reflections or their activity in a batch',async()=>{
+  const member=user('relative2','relative2@gmail.com');
+  const owner=user('owner1','owner@gmail.com');
+  const reflectionPath=path('books','book1','childReflections','denied-family-reflection');
+  const activityPath=path('activity','reflection-denied-family-reflection');
+  const batch=writeBatch(member);
+  batch.set(doc(member,...reflectionPath),{quote:'なりすまし',attribution:'verbatim',observedAt:'',
+    source:'owner-app',authorUid:'relative2',createdAt:serverTimestamp()});
+  batch.set(doc(member,...activityPath),{actorUid:'relative2',kind:'reflection',title:'赤毛のアン',
+    bookId:'book1',sourceId:'denied-family-reflection',hidden:false,createdAt:serverTimestamp()});
+  await assertFails(batch.commit());
+  const record=await getDoc(doc(owner,...reflectionPath));
+  const feed=await getDoc(doc(owner,...activityPath));
+  if(record.exists()||feed.exists())throw new Error('rejected atomic write left an unauthorized record');
+});
+
+test('reflection schema rejects fabricated attribution and altered source',async()=>{
+  const owner=user('owner1','owner@gmail.com');
+  const base={quote:'確認できない発言',attribution:'verbatim',observedAt:'',source:'owner-app',
+    authorUid:'owner1',createdAt:serverTimestamp()};
+  await assertFails(setDoc(doc(owner,...path('books','book1','childReflections','invalid-attribution')),
+    {...base,attribution:'unspecified'}));
+  await assertFails(setDoc(doc(owner,...path('books','book1','childReflections','invalid-source')),
+    {...base,source:'family-comment'}));
+  await assertFails(setDoc(doc(owner,...path('books','book1','childReflections','wrong-owner')),
+    {...base,authorUid:'relative2'}));
 });

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {STATUSES,sortBooks,filteredBooks,validateBackup,normalizeBook,validDate,validatePeriodUpdates,readPeriodLabel} from './domain.mjs';
+import {STATUSES,sortBooks,filteredBooks,validateBackup,normalizeBook,validDate,validatePeriodUpdates,readPeriodLabel,readingModeLabel,READING_MODES} from './domain.mjs';
 
 test('book statuses remain distinct',()=>{
   assert.deepEqual(Object.keys(STATUSES),['read','reading','paused','unread']);
@@ -71,4 +71,24 @@ test('period patch validates unique IDs, precision and month bounds',()=>{
   assert.equal(validatePeriodUpdates(base).length,1);
   assert.throws(()=>validatePeriodUpdates({...base,books:[base.books[0],base.books[0]]}),/重複/);
   assert.throws(()=>validatePeriodUpdates({...base,books:[{...base.books[0],finishedPeriodEnd:'2024-04'}]}),/年月/);
+});
+
+test('natural reading labels and read-order sorting remain accurate',()=>{
+  assert.deepEqual(Object.values(STATUSES),['読んだ','読んでいる','お休み中','まだ読んでいない']);
+  const books=[
+    {title:'前',status:'read',readOrder:5,finishedPeriodStart:'2026-10'},
+    {title:'後',status:'read',readOrder:7,finishedPeriodStart:'2026-09'},
+    {title:'未登録順',status:'unread',readOrder:null}
+  ];
+  assert.deepEqual(sortBooks(books,'order-new').map(b=>b.title),['後','前','未登録順']);
+  assert.deepEqual(sortBooks(books,'order-old').map(b=>b.title),['前','後','未登録順']);
+});
+
+test('reading modes are explicit facts, not defaults inferred from unread status',()=>{
+  assert.equal(readingModeLabel({readingMode:'read-aloud'}),'読み聞かせ');
+  assert.equal(readingModeLabel({readingMode:'independent'}),'自分で読んだ');
+  assert.equal(readingModeLabel({readingMode:'mixed'}),'両方');
+  assert.equal(readingModeLabel({}),'');
+  assert.equal(readingModeLabel({readingMode:'unknown'}),'');
+  assert.equal(Object.keys(READING_MODES).length,3);
 });

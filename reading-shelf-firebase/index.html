@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ja"><head>
+<html lang="ja" data-app-build="20261016-reflect-v9"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#FFF8EF">
@@ -12,11 +12,11 @@
 <link rel="apple-touch-icon" href="./icon-192.png">
 <meta name="description" content="家族の読書記録を安全に共有する本棚">
 <title>よんでね | あおのほんだな</title>
-<link rel="stylesheet" href="./style.css">
+<link rel="stylesheet" href="./style.css?build=20261016-reflect-v9">
 </head><body>
 <header><div class="top">
   <div class="logo"><img class="logoIcon" alt="" src="./icon.svg"><div>よんでね<small>あおのほんだな</small></div></div>
-  <div class="headerActions"><button id="installApp" class="installApp" hidden>アプリを追加</button><span id="identity" aria-live="polite"></span><button id="signOut" hidden>ログアウト</button></div>
+  <div class="headerActions"><button id="installApp" class="installApp" hidden>アプリを追加</button><button id="familySettings" class="iconButton" hidden aria-label="家族の設定" title="家族の設定">⚙</button><span id="identity" aria-live="polite"></span><button id="signOut" hidden>ログアウト</button></div>
 </div></header>
 <main>
   <section class="hero"><h1 id="shelfName">あおのほんだな</h1><p>家族で見る、読書の記録。</p></section>
@@ -25,22 +25,43 @@
   <section id="loginPanel" class="panel center" hidden><h2>Googleアカウントでログイン</h2><p>一度ログインすると、同じ端末では原則として次回から自動で接続します。</p><button class="primary" id="googleLogin">Googleでログイン</button><p class="muted tiny">このURLを知っているだけでは読書記録は見られません。</p></section>
   <section id="setupPanel" class="panel" hidden><h2 id="setupTitle">家族の本棚へ参加</h2><p id="setupDesc">管理者から受け取った招待URLでログインしてください。</p><div id="setupBody"></div></section>
   <section id="shelfPanel" hidden>
-    <div class="stats"><div><strong id="readCount">0</strong><span>読了済み</span></div><div><strong id="totalCount">0</strong><span>登録した本</span></div><div><strong id="seriesCount">0</strong><span>シリーズ</span></div></div>
+    <div class="stats"><div><strong id="readCount">0</strong><span>読んだ本</span></div><div><strong id="totalCount">0</strong><span>登録した本</span></div><div><strong id="seriesCount">0</strong><span>シリーズ</span></div></div>
     <nav class="tabs" aria-label="表示切替">
-      <button data-view="shelf" class="active">本棚</button><button data-view="series">シリーズ別</button><button data-view="timeline">読了時期</button><button data-view="family" id="familyTab">家族の管理</button>
+      <button data-view="shelf" class="active">本棚</button><button data-view="series">シリーズ</button><button data-view="recommendations">おすすめ</button>
     </nav>
-    <div id="bookControls" class="controls"><input id="search" type="search" placeholder="タイトル・作者で検索" aria-label="作品名・作者名">
-      <select id="filter" aria-label="読書状況"><option value="read">読了済み</option><option value="all">すべて</option><option value="reading">読書中</option><option value="paused">中断</option><option value="unread">未読</option></select>
-      <select id="sort" aria-label="並べ替え"><option value="read-new">読了時期：新しい順</option><option value="read-old">読了時期：古い順</option><option value="author-asc">作者：昇順</option><option value="author-desc">作者：降順</option><option value="title-asc">作品名：昇順</option><option value="title-desc">作品名：降順</option><option value="year-new">出版年：新しい順</option><option value="year-old">出版年：古い順</option></select>
+    <div id="bookControls" class="controls" aria-label="本をさがす・並べる">
+      <input id="search" type="search" placeholder="タイトル・作者で検索" aria-label="本のタイトル・作者で検索">
+      <div class="bookSelectRow">
+        <label class="fieldLabel"><span class="srOnly">表示する本</span>
+          <select id="filter" aria-label="表示する本">
+            <option value="read">読んだ本</option>
+            <option value="all">すべての本</option>
+            <option value="reading">読んでいる本</option>
+            <option value="paused">お休み中の本</option>
+            <option value="unread">まだ読んでいない本</option>
+            <option value="timeline">読んだ時期別</option>
+          </select>
+        </label>
+        <label class="fieldLabel"><span class="srOnly">並び順</span>
+          <select id="sort" aria-label="並び順">
+            <option value="order-new">最近読んだ順</option>
+            <option value="order-old">最初に読んだ順</option>
+            <option value="title-asc">タイトル順</option>
+            <option value="author-asc">作者順</option>
+            <option value="year-new">出版年：新しい順</option>
+            <option value="year-old">出版年：古い順</option>
+          </select>
+        </label>
+      </div>
     </div>
     <div id="content" aria-live="polite"></div>
   </section>
 </main>
 <dialog id="bookInfoDialog">
   <div class="dialogInner">
-    <div class="dialogTop"><h2 id="bookInfoTitle">本の情報</h2><button type="button" class="ghost" data-close="bookInfoDialog" aria-label="閉じる">×</button></div>
+    <div class="dialogTop"><h2 id="bookInfoTitle">本の詳細</h2><button type="button" class="ghost" data-close="bookInfoDialog" aria-label="閉じる">×</button></div>
     <div id="bookInfoBody"></div>
   </div>
 </dialog>
-<script type="module" src="./app.mjs"></script>
+<script type="module" src="./app.mjs?build=20261016-reflect-v9"></script>
 </body></html>

@@ -7,9 +7,9 @@ URL: https://kodomo-reading-shelf-87f11.web.app
 - 家族はGoogleアカウントでログインし、同じ「あおのほんだな」を閲覧する。
 - 書籍の新規登録・読了・書誌修正・表紙変更・削除は、ChatGPTへの会話によってのみ行う。
 - ブラウザの本棚には書籍の編集フォーム、追加ボタン、JSONの手動取込・書出し、シリーズ追加・本棚名変更フォームは**ない**。
-- 家族の招待・アクセス解除は、管理者の「家族」タブに限り残す（書籍データではなくアクセス管理のため）。
+- 家族の招待・アクセス解除は、管理者の右上「家族の設定」画面に限り残す（書籍データではなくアクセス管理のため）。
 - 家族以外は閲覧不可。通常ブラウザから books/series への create/update/delete は Firestore Rules で拒否される。
-- Firestoreへ書くのは非公開 GitHub `miyatayuuma/legacy-games` から Workload Identity Federation 認証した Admin SDK 同期ジョブ。
+- 書誌・読了履歴・子どもの正式な感想は、非公開 GitHub `miyatayuuma/legacy-games` から Workload Identity Federation 認証した Admin SDK 同期ジョブで書き込む。家族のコメント・リアクション・おすすめ投稿は、ログイン済み本人がアプリからFirestoreへ直接書き込む。
 - 本棚名は「あおのほんだな」、ホーム画面のアプリ名は「よんでね」。既存の「みてね」と同一の商標・ロゴ画像は使わない。
 
 ## インストール
@@ -35,7 +35,21 @@ Firestore RulesによりWebブラウザからの書籍書込みは即座に拒�
 
 ## プライバシー・更新
 
-Service Workerは同一オリジンの公開用静的ファイルだけをキャッシュする。
+Service Workerはアイコンとmanifestのみをキャッシュする。HTML/JavaScript/CSSはキャッシュせず、ネットワークから最新版を取得する。
 Firebase Firestore API、Googleログイン、外部書影、ユーザー読書データはキャッシュ対象にしない。
 正しいサービスワーカーとmanifestが提供され、ブラウザのインストール条件を満たすかは実機検証が必要。
 GitHub Actionsでデータ・UI・ルールの回帰テストを行う。
+
+## 2026-10-16 PWA画面更新の不整合修復
+
+家族交流の新版公開後、旧JavaScriptが廃止済みのDOM IDを操作し、`Cannot set properties of null (setting 'textContent')` を表示した可能性がある。
+新旧HTMLとJSを混在させないため、Service Workerは画像アイコンとmanifestのみ保存し、HTML・JavaScript・CSSはキャッシュしない。
+Firebase Hosting側でもこれらの配信に `Cache-Control: no-store` を指定した。
+
+既存の`feature/yondene-family-social`ローカルブランチにいるCloud Shellでは、最新版を取り込んでHostingのみ更新する。
+
+```bash
+cd ~/reading-shelf-deploy/reading-shelf-firebase && git fetch origin feature/yondene-family-social && git switch feature/yondene-family-social && git merge --ff-only FETCH_HEAD && firebase deploy --only hosting --project kodomo-reading-shelf-87f11
+```
+
+アプリを完全終了して再起動後、赤いエラーが消えることと、読書記録27冊、シリーズ、詳細ページのコメントを確認する。修復にFirestoreデータ移行、ユーザーログアウト、PWAの削除は不要。

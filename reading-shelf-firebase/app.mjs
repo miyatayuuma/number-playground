@@ -1,20 +1,32 @@
 import {initializeApp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-app.js';
 import {getAuth,GoogleAuthProvider,signInWithPopup,signInWithRedirect,getRedirectResult,setPersistence,browserLocalPersistence,onAuthStateChanged,signOut} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js';
 import {getFirestore,doc,collection,getDoc,setDoc,deleteDoc,onSnapshot,Timestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
-import {firebaseConfig} from './firebase-config.mjs';
-import {STATUSES,filteredBooks,readPeriodLabel,readPeriodGrouping} from './domain.mjs';
+import {firebaseConfig} from './firebase-config.mjs?build=20261016-reflect-v9';
+import {mountBookCommunity} from './book-community.mjs?build=20261016-reflect-v9';
+import {mountRecommendations} from './recommendations.mjs?build=20261016-reflect-v9';
+import {mountFamilyActivity} from './activity.mjs?build=20261016-reflect-v9';
+import {STATUSES,filteredBooks,readPeriodLabel,readPeriodGrouping,readingModeLabel} from './domain.mjs?build=20261016-reflect-v9';
 
-const $=id=>document.getElementById(id);
+const APP_BUILD='20261016-reflect-v9';
+const $=id=>{const element=document.getElementById(id);if(!element)throw new Error('APP_DOM_MISMATCH: missing #'+id);return element};
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const safeCover=url=>/^(https:\/\/|data:image\/(jpeg|png|webp);base64,)/i.test(String(url||''))?String(url):'';
 const SHOW=['loading','loginPanel','setupPanel','shelfPanel'];
 let auth,db,user=null,fid='',role='',household=null,books=[],series=[],members=[],invites=[];
 let unsubs=[],view='shelf',generation=0;
+let closeCommunity=null,closeRecommendations=null,closeActivity=null;
 const inviteFromUrl=new URLSearchParams(location.search).get('family')||'';
 
 function show(id){SHOW.forEach(x=>$(x).hidden=x!==id)}
 function notice(m,error=false){$('message').hidden=!m;$('message').textContent=m||'';$('message').className='notice'+(error?' error':'')}
-function statusError(e){console.error(e);notice('操作を完了できません: '+(e?.code||e?.message||e)+'\n接続状態・ログイン権限を確認してください。',true)}
+function statusError(e){
+  console.error(e);
+  const detail=String(e?.code||e?.message||e);
+  const versionMismatch=/APP_DOM_MISMATCH|Cannot set properties of null|Cannot read properties of null/.test(detail);
+  notice(versionMismatch
+    ?'アプリの表示に不整合が発生しました。更新後の画面を読み直すため、アプリを一度終了して開き直してください。改善しない場合はブラウザから開いてください。'
+    :'操作を完了できません: '+detail+'\n接続状態・ログイン権限を確認してください。',true);
+}
 let deferredInstallPrompt=null;
 function registerInstallAction(){
   const button=$('installApp');
@@ -39,15 +51,19 @@ function initUI(){
   $('googleLogin').onclick=login;
   $('signOut').onclick=async()=>{closeListeners();await signOut(auth)};
   document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{view=b.dataset.view;render()});
-  ['search','sort','filter'].forEach(x=>$(x).addEventListener(x==='search'?'input':'change',render));
+  $('familySettings').onclick=()=>{view=view==='family'?'shelf':'family';render()};
+  $('search').addEventListener('input',render);
+  $('filter').addEventListener('change',render);
+  $('sort').addEventListener('change',render);
   document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>$((b.dataset.close)).close());
+  $('bookInfoDialog').addEventListener('close',()=>{closeCommunity?.();closeCommunity=null});
 }
 function updateShelfHeading(){
   const name=household?.name||'本棚';
   $('shelfName').textContent=name;
   document.title=household?'よんでね | '+name:'よんでね';
 }
-function closeListeners(){unsubs.forEach(u=>u());unsubs=[];fid='';books=[];series=[];members=[];invites=[];household=null;role='';updateShelfHeading()}
+function closeListeners(){closeActivity?.();closeActivity=null;closeRecommendations?.();closeRecommendations=null;closeCommunity?.();closeCommunity=null;unsubs.forEach(u=>u());unsubs=[];fid='';books=[];series=[];members=[];invites=[];household=null;role='';updateShelfHeading()}
 function familyDoc(...a){return doc(db,'families',fid,...a)}
 function familyCollection(...a){return collection(db,'families',fid,...a)}
 async function login(){
@@ -61,7 +77,7 @@ async function login(){
 }
 async function signedIn(u){
   const seq=++generation;closeListeners();user=u;notice('');
-  $('identity').textContent=u?.email||'';$('signOut').hidden=!u;
+  $('identity').textContent=u?.email||'';$('signOut').hidden=!u;$('familySettings').hidden=!u;
   if(!u){show('loginPanel');return}
   show('loading');
   try{
@@ -86,7 +102,7 @@ async function joinInvite(id,seq){
     const invitation=await getDoc(ref);if(seq!==generation)return;
     if(!invitation.exists()||invitation.data().expiresAt.toMillis()<Date.now())throw Error('有効な招待がありません。管理者へ確認してください');
     const info=invitation.data();
-    $('setupDesc').textContent=email+' 宛の招待があります。権限：'+(info.role==='editor'?'編集可能':'閲覧のみ');
+    $('setupDesc').textContent=email+' 宛に家族の本棚への招待が届いています。';
     const btn=document.createElement('button');btn.textContent='家族の本棚に参加する';btn.className='primary';
     btn.onclick=async()=>{btn.disabled=true;try{
       const membership=doc(db,'families',id,'members',user.uid);
@@ -115,22 +131,38 @@ async function enterFamily(id,seq){
   unsubs.push(onSnapshot(familyCollection('series'),snap=>{series=snap.docs.map(d=>d.data());render()},statusError));
   unsubs.push(onSnapshot(familyCollection('members'),snap=>{members=snap.docs.map(d=>d.data());render()},statusError));
   if(role==='owner')unsubs.push(onSnapshot(familyCollection('invites'),snap=>{invites=snap.docs.map(d=>d.data());render()},statusError));
-  $('familyTab').textContent='家族';
   render();
 }
 function render(){
+  closeActivity?.();closeActivity=null;
+  if(view!=='recommendations'){closeRecommendations?.();closeRecommendations=null}
   if(!fid||!$('shelfPanel')||$('shelfPanel').hidden)return;
   $('readCount').textContent=books.filter(b=>b.status==='read').length+'冊';
   $('totalCount').textContent=books.length+'冊';
   $('seriesCount').textContent=series.length;
   document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===view));
-  $('bookControls').hidden=view==='family';
+  $('familySettings').classList.toggle('active',view==='family');
+  $('bookControls').hidden=view!=='shelf';
+  const periodMode=view==='shelf'&&$('filter').value==='timeline';
+  $('sort').disabled=periodMode;
+  $('sort').title=periodMode?'時期別表示は読んだ順に並びます':'';
   if(view==='family'){renderFamily();return}
-  const opts={search:$('search').value,filter:view==='series'?'all':$('filter').value,sort:$('sort').value};
+  if(view==='recommendations'){renderRecommendations();return}
+  const opts={
+    search:$('search').value,
+    filter:view==='series'?'all':(periodMode?'read':$('filter').value),
+    sort:periodMode?'order-new':$('sort').value
+  };
   const data=filteredBooks(books,opts,series);
   const root=$('content');root.className='';root.replaceChildren();
   if(!data.length){root.innerHTML='<div class="empty">該当する本はまだありません。</div>';return}
-  if(view==='shelf'){root.append(bookGrid(data));return}
+  if(view==='shelf'&&!periodMode){
+    const area=document.createElement('div');root.append(area);
+    closeActivity=mountFamilyActivity({db,fid,container:area,members:()=>members,onError:statusError,
+      onBook:id=>{const found=books.find(b=>b.id===id);if(found)openBookInfo(found)},
+      onRecommendations:()=>{view='recommendations';render()}});
+    root.append(bookGrid(data));return;
+  }
   if(view==='series'){
     // A series screen should never collect unrelated stand-alone books.
     const known=new Map(series.map(s=>[s.id,s]));
@@ -159,8 +191,8 @@ function groupSection(title,note,items,total,isSeries=false){
   const p=document.createElement('p');
   const read=items.filter(b=>b.status==='read').length;
   p.textContent=isSeries
-    ?'登録'+items.length+'冊・読了'+read+'冊'+(total?' / 全'+total+'巻':'')+(note?' · '+note:'')
-    :read+'冊読了'+(note?' · '+note:'');
+    ?'登録'+items.length+'冊・読んだ'+read+'冊'+(total?' / 全'+total+'巻':'')+(note?' · '+note:'')
+    :read+'冊読んだ'+(note?' · '+note:'');
   section.append(p,bookGrid(items));return section;
 }
 function bookGrid(data){
@@ -173,24 +205,63 @@ function bookGrid(data){
     const tag=document.createElement('span');tag.className='flag '+b.status;tag.textContent=STATUSES[b.status]||'';cover.append(tag);
     const title=document.createElement('strong');title.textContent=b.title+(b.edition?' 〈'+b.edition+'〉':'');
     const author=document.createElement('span');author.className='sub';author.textContent=b.author||'作者未登録';
-    const meta=document.createElement('span');meta.className='sub';meta.textContent=[b.publicationYear?b.publicationYear+'年':'出版年不明',b.ageLabel].filter(Boolean).join(' · ');
-    const period=document.createElement('span');period.className='sub';period.textContent=b.status==='read'?readPeriodLabel(b):'';
-    btn.append(cover,title,author,meta,period);div.append(btn);
+    // Book cards prioritize reading history; bibliographic year and age stay in detail.
+    const trail=document.createElement('span');trail.className='bookReadingTrail';
+    const mode=readingModeLabel(b);
+    if(mode&&['read','reading','paused'].includes(b.status)){
+      const chip=document.createElement('span');chip.className='modeChip';chip.textContent=mode;
+      trail.append(chip);
+    }
+    if(b.status==='read'){
+      const period=document.createElement('span');period.className='readPeriodCompact';
+      period.textContent=readPeriodLabel(b);trail.append(period);
+    }
+    btn.append(cover,title,author,trail);div.append(btn);
   }return div;
 }
 function openBookInfo(book){
   $('bookInfoTitle').textContent=book.title;
   const root=$('bookInfoBody');root.replaceChildren();
-  const summary=document.createElement('div');summary.className='bookSummary';
+  const summary=document.createElement('div');summary.className='bookSummary bookSummaryCompact';
   const art=document.createElement('div');art.className='bookDetailCover cover';art.textContent=book.title;
   const src=safeCover(book.coverUrl);
-  if(src){const img=document.createElement('img');img.alt=book.title+' の表紙';img.src=src;img.onerror=()=>img.remove();art.append(img)}
-  const metadata=document.createElement('div');metadata.className='bibliography';
+  if(src){
+    const img=document.createElement('img');img.alt=book.title+' の表紙';img.src=src;
+    img.onerror=()=>img.remove();art.append(img);
+  }
+  const lead=document.createElement('div');lead.className='bookLead';
+  const label=document.createElement('span');label.className='bookStatusPill';
+  label.textContent=STATUSES[book.status]||'状態未登録';lead.append(label);
+  for(const value of [
+    book.author,
+    book.status==='read'?readPeriodLabel(book):'',
+    ['read','reading','paused'].includes(book.status)?readingModeLabel(book):'',
+    series.find(q=>q.id===book.seriesId)?.name,
+  ]){
+    if(!value)continue;
+    const p=document.createElement('p');p.className='bookLeadLine';p.textContent=value;lead.append(p);
+  }
+  summary.append(art,lead);root.append(summary);
+
+  // Family interactions are the primary use of the detail page, not ISBN data.
+  closeCommunity?.();
+  const community=document.createElement('div');community.className='communityRoot';
+  root.append(community);
+  closeCommunity=mountBookCommunity({
+    db,fid,book,user,owner:role==='owner',members:()=>members,container:community,onError:statusError
+  });
+
+  // Preserve the complete original bibliography in an optional disclosure.
+  const disclosure=document.createElement('details');disclosure.className='bookMetadataDetails';
+  const heading=document.createElement('summary');heading.textContent='書誌情報・読書メモを見る';
+  disclosure.append(heading);
+  const metadata=document.createElement('dl');metadata.className='bibliography';
   const seriesName=series.find(q=>q.id===book.seriesId)?.name||'';
   const verified=book.publicationYearBasis==='photo-confirmed-edition';
   const fields=[
     ['状態',STATUSES[book.status]||'未登録'],
-    ['読了時期',book.status==='read'?readPeriodLabel(book):''],
+    ['読んだ時期',book.status==='read'?readPeriodLabel(book):''],
+    ['読み方',readingModeLabel(book)],
     ['作者',book.author],
     ['訳',book.translator],
     ['文・再話',book.adaptedBy],
@@ -209,25 +280,39 @@ function openBookInfo(book){
   ];
   for(const [name,value] of fields){
     if(value===undefined||value===null||value==='')continue;
-    const label=document.createElement('dt');label.textContent=name;
+    const field=document.createElement('dt');field.textContent=name;
     const detail=document.createElement('dd');detail.textContent=String(value);
-    metadata.append(label,detail);
+    metadata.append(field,detail);
   }
-  summary.append(art,metadata);root.append(summary);
-  for(const [heading,value] of [['版の説明',book.editionNote],['読書・観察メモ',book.notes],['書影の参照元',book.coverReferenceSource]]){
+  disclosure.append(metadata);
+  for(const [name,value] of [
+    ['版の説明',book.editionNote],
+    ['読書・観察メモ',book.notes],
+    ['書影の参照元',book.coverReferenceSource]
+  ]){
     if(!value)continue;
     const p=document.createElement('p');p.className='detailNote';
-    const strong=document.createElement('strong');strong.textContent=heading+'：';
-    p.append(strong,document.createTextNode(value));root.append(p);
+    const strong=document.createElement('strong');strong.textContent=name+'：';
+    p.append(strong,document.createTextNode(value));disclosure.append(p);
   }
   const reference=safeCover(book.bibliographicSource);
   if(reference){
     const p=document.createElement('p');p.className='detailNote';
     const a=document.createElement('a');a.href=reference;a.target='_blank';a.rel='noopener noreferrer';
     a.textContent='出版社・図書館などの書誌出典を確認 ↗';
-    p.append(a);root.append(p);
+    p.append(a);disclosure.append(p);
   }
-  $('bookInfoDialog').showModal();
+  root.append(disclosure);
+  const dialog=$('bookInfoDialog');
+  dialog.showModal();
+  dialog.scrollTop=0;
+}
+function renderRecommendations(){
+  if(closeRecommendations)return;
+  const root=$('content');root.className='';root.replaceChildren();
+  closeRecommendations=mountRecommendations({
+    db,fid,user,owner:role==='owner',members:()=>members,books:()=>books,container:root,onError:statusError
+  });
 }
 function renderFamily(){
   const root=$('content');root.replaceChildren();root.className='listPanel';
@@ -288,10 +373,19 @@ function renderFamily(){
     row.append(tx,cancel);root.append(row);
   }
   const note=document.createElement('p');note.className='muted';
-  note.textContent='読書記録の追加・修正・削除はChatGPTに伝えてください。';
+  note.textContent='本の登録・修正・削除は管理者が行います。';
   root.append(note);
+  const version=document.createElement('p');version.className='muted tiny appVersion';
+  version.textContent='アプリのバージョン：'+APP_BUILD;
+  root.append(version);
 }
 async function start(){
+  if(document.documentElement.dataset.appBuild!==APP_BUILD){
+    console.error('HTML and JavaScript build IDs do not match');
+    const alert=document.getElementById('message');
+    if(alert){alert.hidden=false;alert.textContent='アプリの更新データが一致しません。画面を更新してください。';alert.className='notice error'}
+    return;
+  }
   initUI();
   if(!firebaseConfig?.apiKey||!firebaseConfig?.projectId||!firebaseConfig?.appId){
     show('setupPanel');$('setupTitle').textContent='Firebaseの初期設定が必要です';$('setupDesc').textContent='プロジェクト接続設定がまだ登録されていません。管理者がFirebaseを作成し、firebase-config.mjsを設定してください。';$('setupBody').replaceChildren();return;
@@ -306,7 +400,9 @@ async function start(){
 // Install the app shell without caching private Firebase data.
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
-    navigator.serviceWorker.register('/sw.js').catch(error=>console.warn('PWA registration failed',error));
+    navigator.serviceWorker.register('/sw.js',{updateViaCache:'none'})
+      .then(registration=>registration.update())
+      .catch(error=>console.warn('PWA registration failed',error));
   });
 }
 void start();
