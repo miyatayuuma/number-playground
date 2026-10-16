@@ -1,21 +1,24 @@
 import {initializeApp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-app.js';
 import {getAuth,GoogleAuthProvider,signInWithPopup,signInWithRedirect,getRedirectResult,setPersistence,browserLocalPersistence,onAuthStateChanged,signOut} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js';
-import {getFirestore,doc,collection,getDoc,setDoc,deleteDoc,onSnapshot,Timestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
-import {firebaseConfig} from './firebase-config.mjs?build=20261016-reflect-v9';
-import {mountBookCommunity} from './book-community.mjs?build=20261016-reflect-v9';
-import {mountRecommendations} from './recommendations.mjs?build=20261016-reflect-v9';
-import {mountFamilyActivity} from './activity.mjs?build=20261016-reflect-v9';
-import {STATUSES,filteredBooks,readPeriodLabel,readPeriodGrouping,readingModeLabel} from './domain.mjs?build=20261016-reflect-v9';
+import {getFirestore,doc,collection,getDoc,setDoc,deleteDoc,onSnapshot,Timestamp,serverTimestamp,runTransaction} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
+import {firebaseConfig} from './firebase-config.mjs?build=20261016-invite-v10';
+import {newInviteToken,parseInviteHash,oneTimeInviteUrl} from './invite-links.mjs?build=20261016-invite-v10';
+import {shelfThumbnailUrl} from './cover-thumbnails.mjs?build=20261016-invite-v10';
+import {mountBookCommunity} from './book-community.mjs?build=20261016-invite-v10';
+import {mountRecommendations} from './recommendations.mjs?build=20261016-invite-v10';
+import {mountFamilyActivity} from './activity.mjs?build=20261016-invite-v10';
+import {STATUSES,filteredBooks,readPeriodLabel,readPeriodGrouping,readingModeLabel} from './domain.mjs?build=20261016-invite-v10';
 
-const APP_BUILD='20261016-reflect-v9';
+const APP_BUILD='20261016-invite-v10';
 const $=id=>{const element=document.getElementById(id);if(!element)throw new Error('APP_DOM_MISMATCH: missing #'+id);return element};
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const safeCover=url=>/^(https:\/\/|data:image\/(jpeg|png|webp);base64,)/i.test(String(url||''))?String(url):'';
 const SHOW=['loading','loginPanel','setupPanel','shelfPanel'];
-let auth,db,user=null,fid='',role='',household=null,books=[],series=[],members=[],invites=[];
+let auth,db,user=null,fid='',role='',household=null,books=[],series=[],members=[],invites=[],openInvites=[],lastInviteLink='';
 let unsubs=[],view='shelf',generation=0;
 let closeCommunity=null,closeRecommendations=null,closeActivity=null;
 const inviteFromUrl=new URLSearchParams(location.search).get('family')||'';
+const openInviteFromUrl=parseInviteHash(location.hash);
 
 function show(id){SHOW.forEach(x=>$(x).hidden=x!==id)}
 function notice(m,error=false){$('message').hidden=!m;$('message').textContent=m||'';$('message').className='notice'+(error?' error':'')}
@@ -63,7 +66,7 @@ function updateShelfHeading(){
   $('shelfName').textContent=name;
   document.title=household?'よんでね | '+name:'よんでね';
 }
-function closeListeners(){closeActivity?.();closeActivity=null;closeRecommendations?.();closeRecommendations=null;closeCommunity?.();closeCommunity=null;unsubs.forEach(u=>u());unsubs=[];fid='';books=[];series=[];members=[];invites=[];household=null;role='';updateShelfHeading()}
+function closeListeners(){closeActivity?.();closeActivity=null;closeRecommendations?.();closeRecommendations=null;closeCommunity?.();closeCommunity=null;unsubs.forEach(u=>u());unsubs=[];fid='';books=[];series=[];members=[];invites=[];openInvites=[];lastInviteLink='';household=null;role='';updateShelfHeading()}
 function familyDoc(...a){return doc(db,'families',fid,...a)}
 function familyCollection(...a){return collection(db,'families',fid,...a)}
 async function login(){
@@ -83,6 +86,7 @@ async function signedIn(u){
   try{
     const profile=await getDoc(doc(db,'users',u.uid));if(seq!==generation)return;
     if(profile.exists()&&profile.data().familyId){await enterFamily(profile.data().familyId,seq)}
+    else if(openInviteFromUrl){await joinOpenInvite(openInviteFromUrl,seq)}
     else if(inviteFromUrl&&/^[A-Za-z0-9]{8,60}$/.test(inviteFromUrl)){await joinInvite(inviteFromUrl,seq)}
     else showFirstSetup();
   }catch(e){if(seq===generation)statusError(e)}
@@ -93,6 +97,37 @@ function showFirstSetup(){
   $('setupDesc').textContent='この本棚は家族専用です。管理者から招待URLを受け取って開いてください。';
   $('setupBody').replaceChildren();
 }
+async function joinOpenInvite({familyId,token},seq){
+  show('setupPanel');$('setupTitle').textContent='家族の本棚に参加';
+  $('setupDesc').textContent='1回限りの招待を確認しています…';$('setupBody').replaceChildren();
+  try{
+    if(!user.emailVerified)throw Error('確認済みのGoogleメールアドレスが必要です');
+    const invite=doc(db,'families',familyId,'openInvites',token);
+    const membership=doc(db,'families',familyId,'members',user.uid);
+    await runTransaction(db,async transaction=>{
+      const snapshot=await transaction.get(invite);
+      if(!snapshot.exists())throw Error('招待URLが見つからないか、取り消されています');
+      const row=snapshot.data();
+      if(row.claimedByUid===user.uid)return; // Existing claim: recover interrupted profile write.
+      if(row.claimedByUid)throw Error('この招待URLはすでに使用されています');
+      if(row.expiresAt.toMillis()<=Date.now())throw Error('招待URLの期限が切れています');
+      if(row.role!=='viewer')throw Error('招待の権限設定が正しくありません');
+      transaction.update(invite,{claimedByUid:user.uid,claimedAt:serverTimestamp()});
+      transaction.set(membership,{uid:user.uid,email:user.email,displayName:user.displayName||'',
+        role:'viewer',joinedAt:serverTimestamp(),inviteToken:token});
+    });
+    if(seq!==generation)return;
+    await setDoc(doc(db,'users',user.uid),{familyId});
+    if(seq!==generation)return;
+    history.replaceState(null,'',location.pathname);
+    await enterFamily(familyId,++generation);
+  }catch(error){
+    if(seq!==generation)return;
+    $('setupDesc').textContent='招待による参加を完了できませんでした。';
+    statusError(error);
+  }
+}
+
 async function joinInvite(id,seq){
   show('setupPanel');$('setupTitle').textContent='家族の本棚に参加';
   $('setupDesc').textContent='招待を確認しています…';$('setupBody').replaceChildren();
@@ -130,7 +165,10 @@ async function enterFamily(id,seq){
   unsubs.push(onSnapshot(familyCollection('books'),snap=>{books=snap.docs.map(d=>d.data());render()},statusError));
   unsubs.push(onSnapshot(familyCollection('series'),snap=>{series=snap.docs.map(d=>d.data());render()},statusError));
   unsubs.push(onSnapshot(familyCollection('members'),snap=>{members=snap.docs.map(d=>d.data());render()},statusError));
-  if(role==='owner')unsubs.push(onSnapshot(familyCollection('invites'),snap=>{invites=snap.docs.map(d=>d.data());render()},statusError));
+  if(role==='owner'){
+    unsubs.push(onSnapshot(familyCollection('invites'),snap=>{invites=snap.docs.map(d=>d.data());render()},statusError));
+    unsubs.push(onSnapshot(familyCollection('openInvites'),snap=>{openInvites=snap.docs.map(d=>({id:d.id,...d.data()}));render()},statusError));
+  }
   render();
 }
 function render(){
@@ -201,7 +239,14 @@ function bookGrid(data){
     const btn=document.createElement('button');btn.className='book';btn.onclick=()=>openBookInfo(b);
     const cover=document.createElement('div');cover.className='cover';cover.textContent=b.title;
     const url=safeCover(b.coverUrl);
-    if(url){const img=document.createElement('img');img.loading='lazy';img.alt=b.title+'の表紙';img.src=url;img.onerror=()=>img.remove();cover.append(img)}
+    if(url){
+      const img=document.createElement('img');img.loading='lazy';img.decoding='async';
+      img.alt=b.title+'の表紙';
+      const thumbnail=shelfThumbnailUrl(url);
+      img.src=thumbnail;
+      img.onerror=()=>{if(thumbnail!==url){img.onerror=()=>img.remove();img.src=url}else img.remove()};
+      cover.append(img);
+    }
     const tag=document.createElement('span');tag.className='flag '+b.status;tag.textContent=STATUSES[b.status]||'';cover.append(tag);
     const title=document.createElement('strong');title.textContent=b.title+(b.edition?' 〈'+b.edition+'〉':'');
     const author=document.createElement('span');author.className='sub';author.textContent=b.author||'作者未登録';
@@ -342,28 +387,49 @@ function renderFamily(){
   }
   if(role!=='owner')return;
   const inviteTitle=document.createElement('h3');inviteTitle.textContent='家族を招待';root.append(inviteTitle);
-  const p=document.createElement('p');p.className='muted';
-  p.textContent='招待先のGoogleメールアドレスを登録し、招待URLを送ってください。招待は14日間有効です。';
-  root.append(p);
-  const input=document.createElement('input');input.type='email';input.placeholder='family@gmail.com';
-  input.setAttribute('aria-label','招待するGoogleメールアドレス');
-  const btn=document.createElement('button');btn.className='primary';btn.textContent='招待を作成';
-  const ctr=document.createElement('div');ctr.className='familyActions';ctr.append(input,btn);root.append(ctr);
-  btn.onclick=async()=>{
-    const email=input.value.trim().toLowerCase();
-    if(!/^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(email))return notice('有効なメールアドレスを入力してください',true);
+  const hint=document.createElement('p');hint.className='muted';
+  hint.textContent='リンクを受け取った最初のGoogleログイン利用者1人だけが参加できます。有効期限は7日間です。URLは家族へ個別に共有してください。';
+  root.append(hint);
+  const create=document.createElement('button');create.className='primary';create.textContent='1回限りの招待URLを作成';
+  create.onclick=async()=>{
+    create.disabled=true;
     try{
-      await setDoc(familyDoc('invites',email),{email,role:'viewer',expiresAt:Timestamp.fromMillis(Date.now()+14*86400000)});
-      notice('招待を作成しました。以下のURLを家族に送ってください。');
-    }catch(e){statusError(e)}
+      const token=newInviteToken();
+      await setDoc(familyDoc('openInvites',token),{role:'viewer',createdAt:serverTimestamp(),
+        expiresAt:Timestamp.fromMillis(Date.now()+7*86400000),claimedByUid:'',claimedAt:null});
+      lastInviteLink=oneTimeInviteUrl(location.href,fid,token);
+      renderFamily();
+      notice('新しい招待URLを作成しました。信頼できる家族へ個別に送ってください。');
+    }catch(error){statusError(error)}finally{create.disabled=false}
   };
-  const link=new URL(location.href);link.search='';link.searchParams.set('family',fid);
-  const url=document.createElement('div');url.className='invite';
-  const shareTitle=document.createElement('strong');shareTitle.textContent='招待URL（家族へ共有）';
-  const address=document.createElement('div');address.className='link';address.textContent=link.toString();
-  const copy=document.createElement('button');copy.textContent='URLをコピー';
-  copy.onclick=async()=>{try{await navigator.clipboard.writeText(link.toString());notice('URLをコピーしました')}catch(e){statusError(e)}};
-  url.append(shareTitle,address,copy);root.append(url);
+  root.append(create);
+  if(lastInviteLink){
+    const share=document.createElement('div');share.className='invite';
+    const label=document.createElement('strong');label.textContent='新しく発行した招待URL';
+    const address=document.createElement('div');address.className='link';address.textContent=lastInviteLink;
+    const copy=document.createElement('button');copy.textContent='URLをコピー';
+    copy.onclick=async()=>{try{await navigator.clipboard.writeText(lastInviteLink);notice('URLをコピーしました')}catch(e){statusError(e)}};
+    share.append(label,address,copy);root.append(share);
+  }
+  for(const invite of openInvites){
+    const row=document.createElement('div');row.className='person';
+    const label=document.createElement('span');
+    label.textContent=(invite.claimedByUid?'使用済み':'未使用')+' · 有効期限 '+invite.expiresAt?.toDate?.()?.toLocaleDateString('ja-JP');
+    row.append(label);
+    if(!invite.claimedByUid){
+      const cancel=document.createElement('button');cancel.textContent='リンクを取り消す';
+      cancel.onclick=async()=>{try{
+        await deleteDoc(familyDoc('openInvites',invite.id));
+        if(lastInviteLink.includes(invite.id))lastInviteLink='';
+      }catch(error){statusError(error)}};
+      row.append(cancel);
+    }
+    root.append(row);
+  }
+  if(invites.length){
+    const old=document.createElement('p');old.className='muted tiny';
+    old.textContent='旧方式のメール招待（新規発行は終了）';root.append(old);
+  }
   for(const invite of invites){
     const row=document.createElement('div');row.className='person';
     const tx=document.createElement('span');
