@@ -1,13 +1,13 @@
 import {initializeApp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-app.js';
 import {getAuth,GoogleAuthProvider,signInWithPopup,signInWithRedirect,getRedirectResult,setPersistence,browserLocalPersistence,onAuthStateChanged,signOut} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js';
 import {getFirestore,doc,collection,getDoc,setDoc,deleteDoc,onSnapshot,Timestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
-import {firebaseConfig} from './firebase-config.mjs?build=20261016-high-v7';
-import {mountBookCommunity} from './book-community.mjs?build=20261016-high-v7';
-import {mountRecommendations} from './recommendations.mjs?build=20261016-high-v7';
-import {mountFamilyActivity} from './activity.mjs?build=20261016-high-v7';
-import {STATUSES,filteredBooks,readPeriodLabel,readPeriodGrouping,readingModeLabel} from './domain.mjs?build=20261016-high-v7';
+import {firebaseConfig} from './firebase-config.mjs?build=20261016-reflect-v9';
+import {mountBookCommunity} from './book-community.mjs?build=20261016-reflect-v9';
+import {mountRecommendations} from './recommendations.mjs?build=20261016-reflect-v9';
+import {mountFamilyActivity} from './activity.mjs?build=20261016-reflect-v9';
+import {STATUSES,filteredBooks,readPeriodLabel,readPeriodGrouping,readingModeLabel} from './domain.mjs?build=20261016-reflect-v9';
 
-const APP_BUILD='20261016-high-v7';
+const APP_BUILD='20261016-reflect-v9';
 const $=id=>{const element=document.getElementById(id);if(!element)throw new Error('APP_DOM_MISMATCH: missing #'+id);return element};
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const safeCover=url=>/^(https:\/\/|data:image\/(jpeg|png|webp);base64,)/i.test(String(url||''))?String(url):'';
