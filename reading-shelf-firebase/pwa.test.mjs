@@ -151,7 +151,7 @@ test('PWA build matches all local module edges and cannot silently run old domai
   assert.match(html,new RegExp('style\\.css\\?build='+build));
   assert.match(app,new RegExp("const APP_BUILD='"+build+"'"));
   assert.match(app,/document\.documentElement\.dataset\.appBuild!==APP_BUILD/);
-  for(const module of ['domain','book-community','recommendations','firebase-config','activity']){
+  for(const module of ['domain','book-community','recommendations','firebase-config','activity','invite-links','cover-thumbnails']){
     assert.ok(app.includes("'./"+module+".mjs?build="+build+"'"),'versioned import: '+module);
   }
   assert.ok(recs.includes("'./domain.mjs?build="+build+"'"));
@@ -211,4 +211,19 @@ test('v9 owner reflection and browser dictation modules have versioned import ed
   assert.match(speech,/recognizer\.lang='ja-JP'/);
   assert.match(speech,/session\?\.abort\(\)/);
   assert.doesNotMatch(app,/uploadBytes|MediaRecorder/);
+});
+
+test('invitation URLs are generated in a fragment and consumed by a transaction',()=>{
+  const app=text('app.mjs'),links=text('invite-links.mjs'),rules=text('firestore.rules');
+  assert.match(app,/runTransaction\(db,async transaction=>/);
+  assert.match(app,/transaction\.update\(invite,/);
+  assert.match(app,/transaction\.set\(membership,/);
+  assert.match(rules,/match \/openInvites\/\{token\}/);
+  assert.match(links,/crypto\.getRandomValues/);
+  assert.match(links,/url\.hash/);
+});
+test('shelf uses small CDN cover with fallback to original URL',()=>{
+  const app=text('app.mjs');
+  assert.match(app,/shelfThumbnailUrl\(url\)/);
+  assert.match(app,/img\.src=url/);
 });
