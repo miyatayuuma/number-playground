@@ -1,7 +1,7 @@
 # よんでね — 家族交流機能の実装仕様
 
 ## 段階
-- Phase 1: 3タブ「本棚／シリーズ／おすすめ」。家族設定はヘッダー。時期別表示は本棚内トグル。ソートは「読んだ順・タイトル・作者・出版年」の4種と順序反転。
+- Phase 1: 3タブ「本棚／シリーズ／おすすめ」。家族設定はヘッダー。時期別表示は本棚の表示フィルタに統合。並び順は「最近読んだ順／最初に読んだ順／タイトル／作者／出版年（新しい順・古い順）」を1つの選択欄で指定。
 - Phase 2: 書籍別のコメント・いいね・感想リクエスト・子どもの正式な感想表示。
 - Phase 3: おすすめ本の投稿・リンク・理由・編集・取り下げ・同タイトルの画面統合。
 
@@ -9,17 +9,17 @@
 Firebase project: `kodomo-reading-shelf-87f11`
 
 - `families/{familyId}/books/{bookId}` 正式な書誌・読了記録。ブラウザから書込不可。
-- `families/{familyId}/books/{bookId}/childReflections/{id}` 本人の言葉・保護者要約を区別した正式な感想。ブラウザから書込不可。
+- `families/{familyId}/books/{bookId}/childReflections/{id}` 本人の言葉・保護者要約を区別した正式な感想。管理者のみアプリから追記可能、既存記録の修正・削除は不可。管理者ChatGPTの非公開同期からも追記可能。
 - `families/{familyId}/books/{bookId}/comments/{id}` 家族コメント。作成者だけ本文編集・削除、管理者だけ非表示/復元。
 - `families/{familyId}/books/{bookId}/reactions/{uid}` いいね。本人につき本ごと最大1ドキュメント。
 - `families/{familyId}/books/{bookId}/requests/{uid}` 感想をききたい。本人につき本ごと最大1ドキュメント。子どもへの強制通知や未回答期限なし。
 - `families/{familyId}/recommendations/{id}` おすすめ投稿。家族が自由投稿し、本人のみ編集・取り下げ可能。画面では正規化書名でまとめる。書籍台帳に自動追加しない。
 
-書誌・読了情報・子どもの正式な感想だけ、管理者のChatGPT → 非公開GitHub → OIDCサービスアカウント → Admin SDK によって登録する。家族コメントとおすすめは Firebase Authentication による本人確認のもとアプリから直接Firestoreへ保存する。
+書誌・読了情報は管理者のChatGPT → 非公開GitHub → OIDCサービスアカウント → Admin SDK によって登録する。子どもの正式な感想はこの同期に加え、管理者アプリからも追記する。家族コメントとおすすめは Firebase Authentication による本人確認のもとアプリから直接Firestoreへ保存する。
 
 ## プライバシー・セキュリティ
 - Googleログイン済みの家族メンバーのみデータを閲覧・投稿。
-- 書籍・シリーズ・正式な感想は現行の全Webユーザーに書込禁止。管理者もブラウザでは編集不可。
+- 書籍・シリーズは全ブラウザユーザーに書込禁止。子どもの正式な感想は管理者のみ新規追記可能で、全ブラウザユーザーによる既存感想の更新・削除は禁止。
 - 投稿者本人の編集・削除のみ許可。管理者が他人の投稿本文を改ざんすることは不可。
 - 管理者のみ投稿を非表示・復元可能。非表示の一覧は管理者専用でクエリを分離。
 - リアクション・感想リクエストはUIDをドキュメントIDにし、なりすましをFirestore Rulesで拒否。
@@ -29,14 +29,14 @@ Firebase project: `kodomo-reading-shelf-87f11`
 
 ## 現行の制約
 - 同一タイトルのおすすめはUI表示上で1枚にまとめる。全角半角・スペース等は正規化するが、別表記・別翻訳の同一作品を厳密に同定するものではない。
-- 表紙の自動書誌補完、全文検索、音声メモ、アプリ外通知、全冊のコメント横断タイムラインは未実装。
+- おすすめ本はOpen Libraryの検索候補から任意で書誌を補完できるが、日本語書誌の品質は未検証。全文検索、録音ファイルの保存、アプリ外通知、全冊のコメント横断タイムラインは未実装。
 - まだ本番デプロイされたことを保証しない。現行Firebaseは手動管理者承認による同時デプロイが必要。
 
 ## 検証
 - `node --test domain.test.mjs pwa.test.mjs`
-- `node --check app.mjs book-community.mjs recommendations.mjs sw.js`（実行時は各ファイルへ分割）
+- `node --check` で app、book-community、recommendations、book-lookup、activity、owner-reflection、speech-dictation、sw の各モジュールを個別検査
 - Firestore Emulator: `firebase emulators:exec --only firestore --project demo-reading-shelf-rules "node --test firestore.rules.test.mjs"`
-- 本番公開後: Googleログイン、27冊の表示、シリーズ集計、コメント投稿、本人編集、他人の編集拒否、管理者非表示、リアクション、感想リクエスト、おすすめ投稿、PWA再起動を実機受け入れする。
+- 本番公開後: Googleログイン、本棚とシリーズ件数、コメント投稿、本人編集、他人の編集拒否、管理者非表示、リアクション、感想リクエスト、おすすめ投稿、管理者感想追記・一般家族からの追記拒否・音声文字入力・家族活動反映、PWA再起動を実機受け入れする。引き継ぎ上の件数は29冊・読了22冊・シリーズ10件（Firestore実測は未確認）。
 
 ## 一括デプロイ
 PR #37の対象ブランチでテストが通った後、権限のある管理者が既存Cloud Shellから実行する。
@@ -48,7 +48,7 @@ git switch -C feature/yondene-family-social --track origin/feature/yondene-famil
 firebase deploy --only hosting,firestore:rules --project kodomo-reading-shelf-87f11
 ```
 
-本番反映は、書誌27冊の再インポートとは無関係。Firebase Rulesが旧版のままでは新しい投稿は失敗する。既存の books/series を削除・変更しない。
+本番反映は、書誌データの再インポートとは無関係。Firebase Rulesが旧版のままでは新しい投稿は失敗する。既存の books/series を削除・変更しない。
 
 ## 2026-10-16 高優先度UXの追加（high-v7）
 
@@ -69,7 +69,7 @@ firebase deploy --only hosting,firestore:rules --project kodomo-reading-shelf-87
 **新機能追加後の投稿から記録を開始する。** 旧コメントを過去の新着として誤登録しない。
 
 ### 3. おすすめ本の任意の書誌検索
-Google Books 公開書誌のタイトル検索を、家族が「書誌を検索」を押したときだけ呼び出す。
+Open Library 公開書誌のタイトル検索を、家族が「書誌を検索」を押したときだけ呼び出す。
 候補を表示し、家族が該当する版を明示的に選ぶ。検索結果を自動で確定しない。
 採用した候補の著者・出版社・出版日・ISBN・参考表紙・外部出典URLをおすすめに追加保存する。
 **検索が利用できなくても通常投稿できる。** 有料APIキー、Cloud Functions、Firebase Storage、写真アップロードは不要。
@@ -78,8 +78,8 @@ APIの利用可否・ネットワーク・検索精度・各表紙の表示は�
 
 ### 本番反映条件
 - `hosting` **と `firestore:rules` の同時デプロイが必要**。新コレクションへのブラウザ書込権限を追加している。
-- 既存27冊のデータ移行・再登録は不要。
-- 自動CIがPASSしても、実機でコメント・おすすめ投稿・家族への反映・権限・Google Books APIを確認するまで完全受入とはしない。
+- 既存書籍のデータ移行・再登録は不要。
+- 自動CIがPASSしても、実機でコメント・おすすめ投稿・家族への反映・権限・Open Library 検索を確認するまで完全受入とはしない。
 - ブラウザ書籍編集は禁止したまま。
 
 ## 2026-10-16 管理者による子どもの感想記録

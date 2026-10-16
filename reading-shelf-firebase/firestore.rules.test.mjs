@@ -177,3 +177,48 @@ test('owner may add child reflection, other family members cannot',async()=>{
  await assertFails(updateDoc(doc(owner,...loc),{quote:'訂正'}));
  await assertFails(deleteDoc(doc(owner,...loc)));
 });
+
+
+test('owner child reflection and metadata-only activity are committed together',async()=>{
+  const owner=user('owner1','owner@gmail.com');
+  const reflection=doc(owner,...path('books','book1','childReflections','atomic-owner-reflection'));
+  const activity=doc(owner,...path('activity','reflection-atomic-owner-reflection'));
+  const batch=writeBatch(owner);
+  batch.set(reflection,{quote:'また読みたい',attribution:'parent-summary',observedAt:'2026年10月',
+    source:'owner-app',authorUid:'owner1',createdAt:serverTimestamp()});
+  batch.set(activity,{actorUid:'owner1',kind:'reflection',title:'赤毛のアン',bookId:'book1',
+    sourceId:'atomic-owner-reflection',hidden:false,createdAt:serverTimestamp()});
+  await assertSucceeds(batch.commit());
+  const record=await getDoc(reflection);
+  const feed=await getDoc(activity);
+  if(!record.exists()||!feed.exists())throw new Error('atomic owner reflection or activity missing');
+  if(feed.data().quote!==undefined)throw new Error('child quote must not be copied into activity');
+});
+
+test('other family members cannot forge child reflections or their activity in a batch',async()=>{
+  const member=user('relative2','relative2@gmail.com');
+  const owner=user('owner1','owner@gmail.com');
+  const reflectionPath=path('books','book1','childReflections','denied-family-reflection');
+  const activityPath=path('activity','reflection-denied-family-reflection');
+  const batch=writeBatch(member);
+  batch.set(doc(member,...reflectionPath),{quote:'なりすまし',attribution:'verbatim',observedAt:'',
+    source:'owner-app',authorUid:'relative2',createdAt:serverTimestamp()});
+  batch.set(doc(member,...activityPath),{actorUid:'relative2',kind:'reflection',title:'赤毛のアン',
+    bookId:'book1',sourceId:'denied-family-reflection',hidden:false,createdAt:serverTimestamp()});
+  await assertFails(batch.commit());
+  const record=await getDoc(doc(owner,...reflectionPath));
+  const feed=await getDoc(doc(owner,...activityPath));
+  if(record.exists()||feed.exists())throw new Error('rejected atomic write left an unauthorized record');
+});
+
+test('reflection schema rejects fabricated attribution and altered source',async()=>{
+  const owner=user('owner1','owner@gmail.com');
+  const base={quote:'確認できない発言',attribution:'verbatim',observedAt:'',source:'owner-app',
+    authorUid:'owner1',createdAt:serverTimestamp()};
+  await assertFails(setDoc(doc(owner,...path('books','book1','childReflections','invalid-attribution')),
+    {...base,attribution:'unspecified'}));
+  await assertFails(setDoc(doc(owner,...path('books','book1','childReflections','invalid-source')),
+    {...base,source:'family-comment'}));
+  await assertFails(setDoc(doc(owner,...path('books','book1','childReflections','wrong-owner')),
+    {...base,authorUid:'relative2'}));
+});

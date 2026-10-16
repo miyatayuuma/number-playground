@@ -28,6 +28,8 @@ jobs:
           node --check reading-shelf-firebase/recommendations.mjs
           node --check reading-shelf-firebase/book-lookup.mjs
           node --check reading-shelf-firebase/activity.mjs
+          node --check reading-shelf-firebase/owner-reflection.mjs
+          node --check reading-shelf-firebase/speech-dictation.mjs
           node --check reading-shelf-firebase/sw.js
   firestore-rules:
     runs-on: ubuntu-latest

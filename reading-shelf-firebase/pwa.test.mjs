@@ -196,3 +196,19 @@ test('formal child reflection composer is owner-only and separate from informal 
   assert.match(dictation,/SpeechRecognition/);
   assert.doesNotMatch(dictation,/MediaRecorder|uploadBytes/);
 });
+
+
+test('v9 owner reflection and browser dictation modules have versioned import edges',()=>{
+  const app=text('app.mjs'),community=text('book-community.mjs');
+  const reflection=text('owner-reflection.mjs'),speech=text('speech-dictation.mjs');
+  const build='20261016-reflect-v9';
+  assert.ok(community.includes("'./owner-reflection.mjs?build="+build+"'"));
+  assert.ok(reflection.includes("'./speech-dictation.mjs?build="+build+"'"));
+  assert.match(reflection,/writeBatch\(db\)/);
+  assert.match(reflection,/batch\.set\(reflection,/);
+  assert.match(reflection,/batch\.set\(activity,/);
+  assert.match(reflection,/await batch\.commit\(\)/);
+  assert.match(speech,/recognizer\.lang='ja-JP'/);
+  assert.match(speech,/session\?\.abort\(\)/);
+  assert.doesNotMatch(app,/uploadBytes|MediaRecorder/);
+});
