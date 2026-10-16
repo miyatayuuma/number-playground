@@ -1,5 +1,6 @@
 import {readFileSync} from 'node:fs';
 import test,{after} from 'node:test';
+import assert from 'node:assert/strict';
 import {initializeTestEnvironment,assertFails,assertSucceeds} from '@firebase/rules-unit-testing';
 import {doc,collection,getDoc,getDocs,setDoc,updateDoc,deleteDoc,Timestamp,serverTimestamp,query,where,orderBy,limit,writeBatch,runTransaction} from 'firebase/firestore';
 
@@ -248,7 +249,11 @@ test('one-time invitation can be used once, without writing books',async()=>{
  await assertSucceeds(claim(first,tokenA,'link-first','first@example.com'));
  await assertSucceeds(getDoc(doc(first,...path('books','book1'))));
  await assertSucceeds(setDoc(doc(first,'users','link-first'),{familyId:'familyOne'}));
- await assertFails(claim(second,tokenA,'link-second','second@example.com'));
+ await assert.rejects(claim(second,tokenA,'link-second','second@example.com'),/Unavailable/);
+ const rejected=writeBatch(second);
+ rejected.update(doc(second,...linkPath(tokenA)),{claimedByUid:'link-second',claimedAt:serverTimestamp()});
+ rejected.set(doc(second,...path('members','link-second')),memberData('link-second','second@example.com',tokenA));
+ await assertFails(rejected.commit());
  await assertFails(getDoc(doc(second,...path('books','book1'))));
 });
 test('single-document claim, forged membership, and escalation rejected',async()=>{
@@ -263,4 +268,19 @@ test('single-document claim, forged membership, and escalation rejected',async()
  await assertFails(claim(person,tokenB,'link-role','role@example.com','owner'));
  await assertFails(claim(person,tokenB,'link-role','role@example.com','editor'));
  await assertSucceeds(claim(person,tokenB,'link-role','role@example.com'));
+});
+
+test('revoked or already-expired invite cannot be redeemed',async()=>{
+ const admin=user('owner1','owner@gmail.com');
+ const visitor=user('link-revoked','revoked@example.com');
+ const token='CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC';
+ const reference=doc(admin,...linkPath(token));
+ await assertFails(setDoc(reference,{
+  role:'viewer',createdAt:serverTimestamp(),expiresAt:Timestamp.fromMillis(Date.now()-3600000),
+  claimedByUid:'',claimedAt:null}));
+ await assertSucceeds(setDoc(reference,{
+  role:'viewer',createdAt:serverTimestamp(),expiresAt:Timestamp.fromMillis(Date.now()+86400000),
+  claimedByUid:'',claimedAt:null}));
+ await assertSucceeds(deleteDoc(reference));
+ await assert.rejects(claim(visitor,token,'link-revoked','revoked@example.com'),/Unavailable/);
 });
