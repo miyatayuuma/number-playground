@@ -1,5 +1,5 @@
 import {addOwnerReflectionForm} from './owner-reflection.mjs?build=20261016-reflect-v9';
-import {collection,doc,onSnapshot,query,where,limit,setDoc,updateDoc,deleteDoc,getDoc,writeBatch,serverTimestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
+import {collection,doc,onSnapshot,query,where,orderBy,limit,setDoc,updateDoc,deleteDoc,getDoc,writeBatch,serverTimestamp} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
 
 const elem=(tag,className='',text='')=>{
   const node=document.createElement(tag);
@@ -81,7 +81,7 @@ export function mountBookCommunity({db,fid,book,user,owner,members,container,onE
     },e=>{if(!stopped)sayError(onError,e)});
     unsubs.push(unsubscribe);
   };
-  subscribe(query(reflections,limit(30)),list=>{
+  subscribe(query(reflections,orderBy('createdAt','desc'),limit(30)),list=>{
     reflectionItems.replaceChildren();
     if(!list.length){reflectionItems.append(elem('p','muted tiny','まだ記録されていません。子どもの感想は管理者が記録します。'));return}
     for(const entry of list.sort(newest)){
