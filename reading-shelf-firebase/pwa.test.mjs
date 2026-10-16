@@ -184,3 +184,15 @@ test('recommendation enrichment is explicit and optional',()=>{
   assert.ok(lookup.includes('https://openlibrary.org/search.json'));
   assert.match(rules,/metadataSource/);
 });
+
+test('formal child reflection composer is owner-only and separate from informal comments',()=>{
+  const community=text('book-community.mjs');
+  const form=text('owner-reflection.mjs');
+  const dictation=text('speech-dictation.mjs');
+  assert.match(community,/if\(owner\)/);
+  assert.match(community,/addOwnerReflectionForm/);
+  assert.match(form,/source:'owner-app'/);
+  assert.match(form,/attribution:kind\.value/);
+  assert.match(dictation,/SpeechRecognition/);
+  assert.doesNotMatch(dictation,/MediaRecorder|uploadBytes/);
+});
